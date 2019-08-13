@@ -32,8 +32,8 @@ Stand-alone version v003
 12/08/2019 v003 hart
     refractored code
     now correctly working with deadtime - 
-	as was explained by VVL all events that trigger detector produce deadtime, 
-	even events with PHA==1023. 
+    as was explained by VVL all events that trigger detector produce deadtime, 
+    even events with PHA==1023. 
 	Therefore from now on we will use total number of events from telemetry in order to estimate deadtime
     all hail the hypnotoad
 
@@ -117,12 +117,6 @@ gyro_file = stem + '_'+subvers+'_gyro_att.fits'
 module_names = ['02','04','08','10','20','40','80']
 colorz       = ['b','b','b','b','b','b','b']
 pdfname = stem + '.pdf'
-
-wdir = '/home/hart/Current_projects/ART-XC/data/'
-L0 = wdir
-L1 = ''
-module_names = ['02']
-
 
 with PdfPages(pdfname) as pdf: 
     
