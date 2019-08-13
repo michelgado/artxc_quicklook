@@ -50,6 +50,8 @@ import matplotlib.colors as mc
 import matplotlib.pyplot as plt
 import matplotlib.colors
 from matplotlib.patches import Circle
+from matplotlib.ticker import ScalarFormatter
+
 
 from astropy import units as u
 from astropy.coordinates import SkyCoord, Galactic
@@ -161,24 +163,9 @@ with PdfPages(pdfname) as pdf:
         delta_rat  = delta_procevt/delta_evt
         delta_rat  = delta_rat[delta_mask]
         delta_time = t_hk[1:][delta_mask]
-#        plt.figure()
-#        plt.plot(t_hk[1:][delta_mask], delta_rat, 'b.')
-
         hv_mask    = v_hk>-95.
         t_hk       = t_hk[hv_mask]
 
-
-#        for lowv_t in t_hk:
-#            plt.axvspan(lowv_t-5., lowv_t+5., color='r', alpha=0.3)
-        plt.show()
-
-
-        
-        
-
-    
-    
-    
         #Plot raw detector map
         rawbins = np.linspace(0,48,49)
         fig = plt.figure(figsize=(9,9))
@@ -208,13 +195,7 @@ with PdfPages(pdfname) as pdf:
         pdf.savefig() 
         plt.close()
 
-        #Plot lightcurve 
-#        print('Using only ',chanlow,'-',chanhigh,' channels')
-#        print('selected: ',len(evtimes), ' events')
         mean_rate = len(evtimes)/gti_total    
-#        print('Mean background countrate: ', np.round(mean_rate,2), 'cts/s')
-    
-        from matplotlib.ticker import ScalarFormatter
         timebin = 100.
         starttime, endtime = gti_start[0],gti_stop[-1]
         c_time = starttime
@@ -301,7 +282,7 @@ with PdfPages(pdfname) as pdf:
     time = time - time_offset
     timeints  = time[1:] - time[:-1]
     meantimes = (time[1:] + time[:-1])*0.5
-#    
+
     offsets = []
     angular_speeds = []
     good_t  = []
@@ -351,7 +332,6 @@ with PdfPages(pdfname) as pdf:
     ax.grid(lw=1.)
     cmap = plt.cm.rainbow
     norm = matplotlib.colors.Normalize(vmin=time[0]*0.8, vmax=time[-1]*1.2)
-##
     ax.coords[0].set_axislabel('Galactic Longitude')
     ax.coords[1].set_axislabel('Galactic Latitude')
 
