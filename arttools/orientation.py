@@ -2,11 +2,13 @@ from scipy.spatial.transform import Rotation, Slerp
 import numpy as np
 from math import pi, cos, sin
 
-qrot0 = Rotation([sin(135.*pi/360.), 0., 0., cos(135.*pi/360.)])
+#qrot0 = Rotation([sin(135.*pi/360.), 0., 0., cos(135.*pi/360.)])
+#qrot0 = Rotation([sin(45.*pi/360.), 0., 0., cos(45.*pi/360.)])
+qrot0 = Rotation([sin(-75*pi/360.), 0., 0., cos(-75*pi/360.)])
+#qrot0 = Rotation([sin(-255.*pi/360.), 0., 0., cos(-255.*pi/360.)])
 #qrot0 = Rotation([0., 0., 0., 1.])
 #qrot0 = Rotation([sin(195.*pi/360.), 0., 0., cos(195.*pi/360.)])
 
-"""
 ART_det_QUAT = {
         28 : Rotation([-0.0110150413845477,     -0.0013329854433192,     -0.0010840551373762,      0.9999378564878738]),
         22 : Rotation([-0.0097210046441978,     -0.0012050978602830,     -0.0010652583365244,      0.9999514563380221]),
@@ -18,7 +20,6 @@ ART_det_QUAT = {
                 }
 """
 
-"""
 ART_det_QUAT = {
         28 : Rotation([0.0110150413845477,     0.0013329854433192,     0.0010840551373762,      0.9999378564878738]),
         22 : Rotation([0.0097210046441978,     0.0012050978602830,     0.0010652583365244,      0.9999514563380221]),
@@ -29,6 +30,7 @@ ART_det_QUAT = {
         30 : Rotation([0.0108764670901360,     0.0012574641047721,     0.0010592143554341,      0.9999394978260493])
                 }
 
+"""
 
 """
 ART_det_QUAT = {
@@ -41,6 +43,7 @@ ART_det_QUAT = {
         30 : Rotation([0., 0., 0., 1.])
                 }
 
+"""
 
 def to_2pi_range(val): return val%(2.*pi)
 

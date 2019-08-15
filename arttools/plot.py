@@ -39,8 +39,8 @@ def xy_to_vec(x, y):
     """
     outvec = np.empty((x.size, 3), np.double)
     outvec[:, 0] = 1.
-    outvec[:, 1] = np.tan((x - 23.5)*dxya)
-    outvec[:, 2] = np.tan((y - 23.5)*dxya)
+    outvec[:, 2] = np.tan((x - 23.5)*dxya)
+    outvec[:, 1] = np.tan((y - 23.5)*dxya)
     return outvec 
 
 
@@ -50,6 +50,7 @@ def get_sky(urddata, URDN, attdata, xe, ye):
     #qj2000 = qj2000(urddata["TIME"])
     qall = qj2000*ART_det_QUAT[URDN]*qrot0
     #qall = qj2000*qrot0*ART_det_QUAT[URDN]
+    """
     phvec = qall.apply([1., 0., 0.])
     dec = np.arctan(phvec[:,2]/np.sqrt(phvec[:,0]**2. + phvec[:,1]**2.))*180./pi
     ra = (np.arctan2(phvec[:,1], phvec[:,0])%(2.*pi))*180./pi
@@ -69,9 +70,7 @@ def get_sky(urddata, URDN, attdata, xe, ye):
     dec = np.arctan(phvec[:,2]/np.sqrt(phvec[:,0]**2. + phvec[:,1]**2.))*180./pi
     ra = (np.arctan2(phvec[:,1], phvec[:,0])%(2.*pi))*180./pi
     plt.plot(ra, dec, zorder=4)
-
-
-
+    """
 
 
     photonvecs = urd_to_vec(urddata, 5)
