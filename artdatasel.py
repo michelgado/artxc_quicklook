@@ -15,10 +15,13 @@ TODO:
 
 Stand-alone version v001
 
-15/08/19 v001
+15/08/19 v001 hart
     first stand-alone version
     all hail the hypnotoad
 
+15/08/19 v001a hart
+    added UI
+    all hail the hypnotoad
 '''
 
 import os, shutil, argparse
@@ -150,7 +153,6 @@ def select_data_from_L0_STRICT_POINTING(stem, subvers, obsstart, obsstop, src_ra
     L1        = wdir + stem+'/L1/'
     stem_tail = '_urd.fits'
       
-    L0 = '/home/hart/Current_projects/ART-XC/data/'
     
     
     obsisostart, obsisostop = Time(obsstart.replace('.','-'), format='iso'),\
@@ -162,7 +164,7 @@ def select_data_from_L0_STRICT_POINTING(stem, subvers, obsstart, obsstop, src_ra
     predicted_obsonboardstart = (obsisostart.mjd - MJDREF)*86400
     predicted_obsonboardstop  = (obsisostop.mjd - MJDREF)*86400
     
-    gyro_path = L0 + 'srg_20190812_174113_000_gyro_att.fits'
+    gyro_path = L1 + stem+'_'+subvers+'_gyro_att.fits'
     attfile = fits.open(gyro_path)
     time   = np.array(attfile[1].data['TIME'])
     obs_time_mask = np.bitwise_and(time>=predicted_obsonboardstart,\
@@ -264,12 +266,27 @@ def select_data_from_L0_STRICT_POINTING(stem, subvers, obsstart, obsstop, src_ra
         run(RUN_GTIFILTER.format(infile=tmpname,outfile=tmpname))
         RUN_GTIMERGE="export HEADASPROMPT=/dev/null;ftadjustgti infile='{infile}[GTI]' outfile={outfile} maxgap={maxgap}"
         run(RUN_GTIMERGE.format(maxgap=str(GTI_TOLERANCE), infile=tmpname, outfile=clfile))
-         RUN_HKFILTER="export HEADASPROMPT=/dev/null;fcopy infile='{infile}[HK][TIME.ge.{start}&&TIME.le.{stop}]' outfile='!{outfile}'"
+        RUN_HKFILTER="export HEADASPROMPT=/dev/null;fcopy infile='{infile}[HK][TIME.ge.{start}&&TIME.le.{stop}]' outfile='!{outfile}'"
         run(RUN_HKFILTER.format(infile=clfile,start=obsonboardstart-100., stop=obsonboardstop+100.,outfile=clfile))
         run(REMOVE_TMP_FILE.format(tmpfile=tmpname))
 
 
-select_data_from_L0_STRICT_POINTING('srg_20190812_174113', '000', '2019.08.11 22:28:00', '2019.08.12 13:20:00', 266.62232999, -29.02376000, '11910014001', modules='1111111')
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--stem", help="ART-XC stem")
+parser.add_argument("--version", help="data version", default='000')
+parser.add_argument("--obsstart", help="Observation start time, as in PZ")
+parser.add_argument("--obsstop", help="Observation end time, as in PZ")
+parser.add_argument("--ra", help="Source RA")
+parser.add_argument("--dec", help="Source DEC")
+parser.add_argument("--obsid", help="ObsID")
+parser.add_argument("--modules", help="Which modules to use 1-use,0-do not use, default=1111111", default='1111111')
+args = parser.parse_args()
+    
+
+
+
+select_data_from_L0_STRICT_POINTING(stem, subversion, obsstart, obsstop, float(ra), float(dec), obsid, modules)
 
 
 
