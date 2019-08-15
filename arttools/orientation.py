@@ -28,8 +28,28 @@ ART_det_QUAT = {
                 }
 
 
+"""
+ART_det_QUAT = {
+        28 : Rotation([0., 0., 0., 1.]),
+        22 : Rotation([0., 0., 0., 1.]),
+        23 : Rotation([0., 0., 0., 1.]), 
+        24 : Rotation([0., 0., 0., 1.]), 
+        25 : Rotation([0., 0., 0., 1.]), 
+        26 : Rotation([0., 0., 0., 1.]),
+        30 : Rotation([0., 0., 0., 1.])
+                }
+"""
+
 
 def to_2pi_range(val): return val%(2.*pi)
+
+
+def get_gyro_quat(gyrodata):
+    quat = Rotation(np.array([gyrodata["QORT_%d" % i] for i in [1,2,3,0]]).T)
+    q0 = Rotation([0, 0, 0, 1]) #gyro axis initial rotattion in J2000 system
+    qfin = q0*quat
+    return qfin
+
 
 
 def extract_raw_gyro(gyrodata, qadd=Rotation([sin(-15.*pi/360.), 0., 0., cos(-15.*pi/360.)])):
@@ -40,9 +60,7 @@ def extract_raw_gyro(gyrodata, qadd=Rotation([sin(-15.*pi/360.), 0., 0., cos(-15
     currently in gyro fits file quaternion scalar component is stored after the vector component [V, s] (V = {xp, yp, zp}*sin(\alpha/2)) , while most of 
     standard subroutines expect the quaternion in form [s, V] (for example scipy.spatial.transform.Rotation)
     """
-    quat = Rotation(np.array([gyrodata["QORT_%d" % i] for i in [1,2,3,0]]).T)
-    q0 = Rotation([0, 0, 0, 1]) #gyro axis initial rotattion in J2000 system
-    qfin = q0*quat*qadd
+    qfin = get_gyro_quat(gyrodata)*qadd
 
     # telescope optical axis is x axis in this coordinate system
     opticaxis = qfin.apply([1, 0, 0])
@@ -50,8 +68,6 @@ def extract_raw_gyro(gyrodata, qadd=Rotation([sin(-15.*pi/360.), 0., 0., cos(-15
     #ra and dec in radians
     dec = np.arctan(opticaxis[:,2]/np.sqrt(opticaxis[:,1]**2 + opticaxis[:,0]**2)) 
     ra = np.arctan2(opticaxis[:,1], opticaxis[:,0])%(2.*pi)
-
-    opticplanenorth = qfin.apply([0, 1, 0])
 
     yzprojection = np.cross(opticaxis, [0., 0., 1.])
 
