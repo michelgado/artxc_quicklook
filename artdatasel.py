@@ -286,7 +286,7 @@ args = parser.parse_args()
 
 
 
-select_data_from_L0_STRICT_POINTING(args.stem, args.subversion, args.obsstart, args.obsstop, float(args.ra), float(args.dec), args.obsid, args.modules)
+select_data_from_L0_STRICT_POINTING(args.stem, args.version, args.obsstart, args.obsstop, float(args.ra), float(args.dec), args.obsid, args.modules)
 
 
 
