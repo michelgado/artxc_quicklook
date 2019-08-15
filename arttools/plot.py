@@ -3,7 +3,7 @@ from scipy.spatial.transform import Rotation, Slerp
 import numpy as np
 from astropy.visualization import MinMaxInterval, SqrtStretch, ImageNormalize, LogStretch
 from astropy.wcs import WCS
-from .orientation import extract_raw_gyro, qort0, ART_det_QUAT
+from .orientation import extract_raw_gyro, qrot0, ART_det_QUAT
 from math import pi, cos, sin
 import copy
 
@@ -23,7 +23,7 @@ def logstretch(img):
 
 
 def get_sky(urddata, URDN, attdata, xe, ye):
-    qinit = qrot0*ART_det_QUAT[URDN]
+    qinit = ART_det_QUAT[URDN]*qrot0
     ra, dec, roll = extract_raw_gyro(attdata, qinit)
     ra, dec, roll = ra[0], dec[0], roll[0]
     locwcs = copy.copy(detwcs)
