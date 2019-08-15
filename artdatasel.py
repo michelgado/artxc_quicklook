@@ -275,18 +275,18 @@ def select_data_from_L0_STRICT_POINTING(stem, subvers, obsstart, obsstop, src_ra
 parser = argparse.ArgumentParser()
 parser.add_argument("--stem", help="ART-XC stem")
 parser.add_argument("--version", help="data version", default='000')
+parser.add_argument("--obsid", help="ObsID")
 parser.add_argument("--obsstart", help="Observation start time, as in PZ")
 parser.add_argument("--obsstop", help="Observation end time, as in PZ")
 parser.add_argument("--ra", help="Source RA")
 parser.add_argument("--dec", help="Source DEC")
-parser.add_argument("--obsid", help="ObsID")
 parser.add_argument("--modules", help="Which modules to use 1-use,0-do not use, default=1111111", default='1111111')
 args = parser.parse_args()
     
 
 
 
-select_data_from_L0_STRICT_POINTING(stem, subversion, obsstart, obsstop, float(ra), float(dec), obsid, modules)
+select_data_from_L0_STRICT_POINTING(args.stem, args.subversion, args.obsstart, args.obsstop, float(args.ra), float(args.dec), args.obsid, args.modules)
 
 
 
