@@ -261,7 +261,7 @@ def select_data_from_L0_STRICT_POINTING(stem, subvers, obsstart, obsstop, src_ra
             run(REMOVE_TMP_FILE.format(tmpfile=tmpname))
         except:
             pass
-        outfile.writeto(tmpname, clobber=True)
+        outfile.writeto(tmpname, overwrite=True)
         RUN_GTIFILTER="export HEADASPROMPT=/dev/null;fcopy infile='{infile}[gtifilter()]' outfile='!{outfile}'"
         run(RUN_GTIFILTER.format(infile=tmpname,outfile=tmpname))
         RUN_GTIMERGE="export HEADASPROMPT=/dev/null;ftadjustgti infile='{infile}[GTI]' outfile={outfile} maxgap={maxgap}"
