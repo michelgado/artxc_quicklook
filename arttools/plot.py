@@ -7,7 +7,7 @@ from .orientation import extract_raw_gyro, qrot0, ART_det_QUAT, get_gyro_quat
 from math import pi, cos, sin
 import copy
 
-dxya = 45./3600./180.*pi
+dxya = np.arctan(0.595/2693.) #45./3600./180.*pi
 
 detwcs = WCS(naxis=2)
 detwcs.wcs.cdelt = np.array([45., 45.])/3600.
