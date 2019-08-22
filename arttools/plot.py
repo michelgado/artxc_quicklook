@@ -30,11 +30,14 @@ def get_photons_vectors(urddata, URDN, attdata, subscale=1):
     phvec = qall.apply(photonvecs)
     return phvec
 
-def get_photons_sky_coord(urddata, URDN, attdata, subscale=1):
-    phvec = get_photons_vectors(urddata, URDN, attdata, subscale)
+def vec_to_pol(phvec):
     dec = np.arctan(phvec[:,2]/np.sqrt(phvec[:,0]**2. + phvec[:,1]**2.))*180./pi
     ra = (np.arctan2(phvec[:,1], phvec[:,0])%(2.*pi))*180./pi
     return ra, dec
+    
+def get_photons_sky_coord(urddata, URDN, attdata, subscale=1):
+    phvec = get_photons_vectors(urddata, URDN, attdata, subscale)
+    return vec_to_pol(phvec)
 
 def get_sky_image(urddata, URDN, attdata, xe, ye, subscale=1):
     qj2000 = Slerp(attdata["TIME"], get_gyro_quat(attdata))
@@ -48,23 +51,42 @@ def get_sky_image(urddata, URDN, attdata, xe, ye, subscale=1):
     
     return np.histogram2d(dec, ra, [ye, xe])[0]
 
-"""
-def mk_expomap(vignmap, attfile, gti, energy = 8.5):
-    for i in range(gti):
+def mktimegrid(gti):
+    ts = np.arange(gti[0], gti[1] + 0.9, 1.)
+    ts[-1] = gti[1]
+    tc = (ts[1:] + ts[:-1])/2.
+    dt = ts[1:] - ts[:-1]
+    return tc, dt
 
-    
+def make_expomap(vignmap, attdata, gti, urdn, wcs, energy = 8.5):
+    """
+    to do:
+    limits - in lon direction not more then 2pi/3 range
+    """
+    qj2000 = Slerp(attdata["TIME"], get_gyro_quat(attdata))
 
     eidx = np.searchsorted(vignmap["Vign_EA"].data["E"], energy)
-    xoffset, yoffset = vignmap["Coord"]["X"], vignmax["Coord"]["Y"]
-    vecs = offset_to_vec(xoffset, yoffset)
-    quat = get_gyro_quat(attdata)
-    arrq = quat.as_quat()
-    atthist = 
-"""
+    xoffset, yoffset = np.meshgrid(vignmap["Coord"].data["X"], vignmap["Coord"].data["Y"])
+    vignvec = offset_to_vec(np.ravel(xoffset), np.ravel(yoffset))
+    effarea = np.ravel(vignmap["Vign_EA"].data["EFFAREA"][eidx])
 
+    tc, dt = zip(*[mktimegrid(gt) for gt in gti])
+    tc = np.concatenate(tc)
+    dt = np.concatenate(dt)
 
+    qlist = qj2000(tc)
 
+    def make_wcs_image(quat, i, size):
+        print("%d out of %d" % (i, size))
+        qall = quat*qrot0*ART_det_QUAT[urdn]
+        r, d = vec_to_pol(qall.apply(vignvec))
+        x, y = wcs.all_world2pix(np.array([r, d]).T, 1).T
+        return np.histogram2d(x, y, 
+            [np.arange(int(wcs.wcs.crpix[0]*2) + 1), np.arange(int(wcs.wcs.crpix[1]*2) + 1)], 
+            weights=effarea)[0].T
 
+    img = sum(make_wcs_image(qlist[i], i, tc.size)*dt[i] for i in range(tc.size))
+    return img
 
 if __name__ == "__main__":
     pass
