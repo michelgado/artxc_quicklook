@@ -9,6 +9,11 @@ def PHA_to_PI(PHA, strip, Temp, caldb):
             (caldb["c0_1"][strip] + caldb["c1_1"][strip]*PHA + caldb["c2_1"][strip]*PHA*PHA)*Temp
     return energy
 
+def random_uniform(PHA, strip, Temp, caldb):
+    e1 = PHA_to_PI(PHA - 0.5, strip, Temp, caldb)
+    e2 = PHA_to_PI(PHA + 0.5, strip, Temp, caldb)
+    return np.random.uniform(e1, e2)
+
 def filter_edge_strips(events):
     return np.all((events["RAW_X"] > 0, events["RAW_X"] < 47, events["RAW_Y"] > 0, events["RAW_Y"] < 47), axis=0)
 
@@ -35,6 +40,7 @@ def get_events_energy(eventlist, hkdata, caldb):
     4. estimate weighted energy of the photon using "independent" energy estimation in the top and bottom strips.
     whoala, you got your energy dude
     """
+    print("total events", eventlist.size)
 
     eventlist = eventlist[filter_edge_strips(eventlist)] 
 
@@ -50,32 +56,47 @@ def get_events_energy(eventlist, hkdata, caldb):
     rawx[2, :] = rawx[2, :] + 1
     sigmab = botcal["fwhm_1"][rawx]*T + botcal["fwhm_0"][rawx]
     PHAB = np.array([eventlist["PHA_BOT_SUB1"], eventlist["PHA_BOT"], eventlist["PHA_BOT_ADD1"]])
-    energb = PHA_to_PI(PHAB, rawx, T, botcal)
+    energb = random_uniform(PHAB, rawx, T, botcal) #PHA_to_PI(PHAB, rawx, T, botcal)
     maskb = energb > botcal["THRESHOLD"][rawx]
+    masklf = np.sum(maskb.T == np.array([1, 0, 1], np.bool)
+    print("left and right over, central zero", np.sum(maskb.T == np.array([1, 0, 1], np.bool)))
+    print("tot size", maskb.shape[1])
+    print("bot dist", np.unique(maskb.sum(axis=0), return_counts=True))
 
     rawy = np.tile(eventlist["RAW_Y"], (3, 1))
     rawy[0, :] = rawy[0, :] - 1
     rawy[2, :] = rawy[2, :] + 1
-    sigmat = botcal["fwhm_1"][rawx]*T + botcal["fwhm_0"][rawy]
+    sigmat = topcal["fwhm_1"][rawx]*T + topcal["fwhm_0"][rawy]
     PHAT = np.array([eventlist["PHA_TOP_SUB1"], eventlist["PHA_TOP"], eventlist["PHA_TOP_ADD1"]])
-    energt = PHA_to_PI(PHAT, rawy, T, topcal)
+    energt = random_uniform(PHAT, rawy, T, topcal) #PHA_to_PI(PHAT, rawy, T, topcal)
     maskt = energt > topcal["THRESHOLD"][rawy]
+    print("top dist", np.unique(maskt.sum(axis=0), return_counts=True))
 
     """
     drop all below threashold
     """
     atleastone = np.logical_and(np.any(maskb, axis=0), np.any(maskt, axis=0))
-    print("drop", atleastone.size - atleastone.sum(), " from ", atleastone.size)
-    print(atleastone.shape)
-    print(energb.shape, rawx.shape, maskb.shape)
+    atleastone = np.logical_and(atleastone, masklf)
+    print("drop by threshold", atleastone.size - atleastone.sum(), " from ", atleastone.size)
     energb, energt, sigmab, sigmat, rawx, rawy, maskb, maskt = (arr[:, atleastone] for arr in [energb, energt, sigmab, sigmat, rawx, rawy, maskb, maskt])
+    xc = np.sum(energb*maskb*rawx, axis=0)/np.sum(maskb*energb, axis=0)
+    yc = np.sum(energt*maskt*rawy, axis=0)/np.sum(maskb*energb, axis=0)
+    centralzone = ((xc - 23.5)**2. + (yc - 23.5)**2.) < 24.**2.
+    print("drop by shadow", centralzone.size - centralzone.sum())
+    energb, energt, sigmab, sigmat, rawx, rawy, maskb, maskt = (arr[:, centralzone] for arr in [energb, energt, sigmab, sigmat, rawx, rawy, maskb, maskt])
+
 
     ebot = np.sum(energb*maskb, axis=0)
-    sigmabotsq = np.sum(energb*sigmab**maskb/ebot, axis=0)**2.
-
+    sigmabotsq = np.sum(sigmab**2.*maskb, axis=0)
     etop = np.sum(energt*maskt, axis=0)
-    sigmatopsq = np.sum(energt*sigmat**maskt/etop, axis=0)**2.
-
+    sigmatopsq = np.sum(sigmat**2.*maskt, axis=0)
     emean = (ebot/sigmabotsq + etop/sigmatopsq)/(1./sigmatopsq + 1./sigmabotsq)
+
+    """
+    urd 28 additional correction
+    """
+    #emean = -0.2504 + 1.0082*emean - 6.10E-5*emean**2.
+
+
     return atleastone, emean
 
