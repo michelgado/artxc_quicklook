@@ -24,3 +24,9 @@ def offset_to_vec(x, y):
     outvec[:, 1] = x
     outvec[:, 2] = -y
     return outvec
+
+def weight_coordinate(PI, rawcoord, mask):
+    return np.sum(PI*mask*rawcoord, axis=0)/np.sum(PI*mask, axis=0)
+
+def weight_2D_coordinate(PIb, PIt, rawx, rawy, maskb, maskt):
+    return weight_coordinate(PIb, rawx, maskb), weight_coordinate(PIt, rawy, maskt)
