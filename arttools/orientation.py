@@ -22,6 +22,14 @@ def get_gyro_quat(gyrodata):
     qfin = q0*quat
     return qfin
 
+def filter_gyrodata(gyrodata):
+    return gyrodata[nonzero_quaternions(np.array([gyrodata["QORT_%d" % i] for i in [1,2,3,0]]).T)]
+
+def nonzero_quaternions(quat):
+    mask = np.sum(quat**2, axis=1) > 0
+    print(mask.size - mask.sum())
+
+
 def extract_raw_gyro(gyrodata, qadd=Rotation([sin(-15.*pi/360.), 0., 0., cos(-15.*pi/360.)])):
     """
     unpacks row gyro fits file in to RA, DEC and roll angle (of the telescope coordinate system) in J2000 coordinates.
@@ -30,6 +38,7 @@ def extract_raw_gyro(gyrodata, qadd=Rotation([sin(-15.*pi/360.), 0., 0., cos(-15
     currently in gyro fits file quaternion scalar component is stored after the vector component [V, s] (V = {xp, yp, zp}*sin(\alpha/2)) , while most of 
     standard subroutines expect the quaternion in form [s, V] (for example scipy.spatial.transform.Rotation)
     """
+    gyrodata = gyrodata[nonzero_quaternions(np.array([gyrodata["QORT_%d" % i] for i in [1,2,3,0]]).T)]
     qfin = get_gyro_quat(gyrodata)*qadd
 
     # telescope optical axis is x axis in this coordinate system

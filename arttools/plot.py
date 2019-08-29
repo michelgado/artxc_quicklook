@@ -3,7 +3,7 @@ from scipy.spatial.transform import Rotation, Slerp
 import numpy as np
 from astropy.visualization import MinMaxInterval, SqrtStretch, ImageNormalize, LogStretch
 from astropy.wcs import WCS
-from .orientation import extract_raw_gyro, qrot0, ART_det_QUAT, get_gyro_quat
+from .orientation import extract_raw_gyro, qrot0, ART_det_QUAT, get_gyro_quat, filter_gyrodata
 from ._det_spatial import raw_xy_to_vec, offset_to_vec
 from math import pi, cos, sin
 import copy
@@ -22,6 +22,7 @@ def urd_to_vec(urddata, subscale=1):
     return raw_xy_to_vec(x, y)
 
 def get_photons_vectors(urddata, URDN, attdata, subscale=1):
+    #attdata = filter_gyrodata(attdata)
     qj2000 = Slerp(attdata["TIME"], get_gyro_quat(attdata))
     qj2000 = qj2000(np.repeat(urddata["TIME"], subscale*subscale))
     qall = qj2000*qrot0*ART_det_QUAT[URDN]
@@ -40,6 +41,7 @@ def get_photons_sky_coord(urddata, URDN, attdata, subscale=1):
     return vec_to_pol(phvec)
 
 def get_sky_image(urddata, URDN, attdata, xe, ye, subscale=1):
+    attdata = filter_gyrodata(attdata)
     qj2000 = Slerp(attdata["TIME"], get_gyro_quat(attdata))
     qj2000 = qj2000(np.repeat(urddata["TIME"], subscale*subscale))
     qall = qj2000*qrot0*ART_det_QUAT[URDN]
