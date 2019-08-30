@@ -35,20 +35,25 @@ if __name__ == "__main__":
     s, e = np.searchsorted(urdfile["EVENTS"].data["TIME"], 
             attdata["TIME"][[0, -1]])
 
-    urddata = urdfile["EVENTS"].data[s:e - 1]
+    urddata = urdfile["EVENTS"].data[s:e]
     RA, DEC = get_photons_sky_coord(urddata, 
             urdfile["EVENTS"].header["URDN"], 
             attdata)
     mask, ENERGY, xc, yc = get_events_energy(urddata,
             urdfile["HK"].data, caldbfile)
-    newdata = np.array(urddata[mask])
-    newdata = np.lib.recfunctions.append_fields(newdata, 
-        ["RA", "DEC", "ENERGY"],
-        [RA[mask], DEC[mask], ENERGY])
+    print(mask.size)
+    print(mask.sum())
+    print(urddata.size)
+    print(ENERGY.size)
+    newurdtable = fits.BinTableHDU.from_columns(fits.ColDefs(
+        [fits.Column(name=cd.name, array=cd.array[s:e][mask], format=cd.format, unit=cd.unit) \
+                for cd in urddata.columns] + 
+        [fits.Column(name="ENERGY", array=ENERGY, format="1D", unit="keV"), 
+         fits.Column(name="RA", array=RA[mask], format="1D", unit="deg"), 
+         fits.Column(name="DEC", array=DEC[mask], format="1D", unit="deg")]))
+    newurdtable.name = "EVENTS"
 
-    newhdu = fits.TableHDU(newdata)
-    newhdu.header.update(urdfile["EVENTS"].header)
-    lhdu = fits.HDUList([urdfile["PRIMARY"], newhdu, urdfile["HK"], urdfile["GTI"]])
-    lhdu.writeto(os.path.join(outdir, os.path.basename(urdfname)), overwrite=True)
+    urdfile["EVENTS"] = newurdtable
+    urdfile.writeto(os.path.join(outdir, os.path.basename(urdfname)), overwrite=True)
 
 
