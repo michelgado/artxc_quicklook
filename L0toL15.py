@@ -4,12 +4,53 @@ import sys
 import os
 import numpy as np
 from math import pi
+import pandas
 
 from arttools.energy import get_events_energy
 from arttools.plot import get_photons_sky_coord
 
 parser = argparse.ArgumentParser(description="process L0 data to L1 format")
 parser.add_argument("stem", help="part of the L0 files name, which are euqal to them")
+
+ARTCALDBPATH = os.environ["ARTCALDB"]
+indexfname = "artxc_index.fits"
+#caldbindex = pandas.DataFrame(fits.getdata(indexfname, "CIF"))
+
+URDTOTEL = {28: "T1", 
+            22: "T2",
+            23: "T3",
+            24: "T4",
+            25: "T5",
+            26: "T6", 
+            30: "T7"}
+
+
+def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=indexfname):
+    """
+    Get entry from CALDB index file
+    v000/hart/250719 very dirty, unprotected paths!
+    v001/hart/070819 refractored
+    """
+  
+    #Try to open file
+    print(CALDB_path)
+    print(indexfile)
+    print(caldb_entry_type)
+    print(telescope)
+    indexfile_path = CALDB_path + indexfile
+    try:
+        caldbindx   = fits.open(indexfile_path)
+        caldbdata   = caldbindx[1].data
+        for entry in caldbdata:
+            print(entry["CAL_CNAME"], caldb_entry_type, entry["INSTRUME"], telescope)
+            if entry['CAL_CNAME'] == caldb_entry_type and entry['INSTRUME']==telescope:
+                return_path = CALDB_path +entry['CAL_DIR'] +entry['CAL_FILE']
+                return return_path
+        return None
+
+    except:
+        print ('No index file here:' + indexfile_path)
+        return None
 
 if __name__ == "__main__":
     if len(sys.argv) != 4 or "-h" in sys.argv:
@@ -19,19 +60,27 @@ if __name__ == "__main__":
     fname = sys.argv[1]
     stem = fname.rsplit(".")[0]
     outdir = sys.argv[2]
+    attfname = sys.argv[3]
     if os.path.abspath(outdir) == os.path.abspath(os.path.dirname(stem)):
         raise ValueError("The L0 files will be overwriten")
 
-    caldbfilename = sys.argv[3]
     if not os.path.exists(outdir):
         os.mkdir(outdir)
 
-    attfile = fits.open(stem + "_gyro.fits")
+    attfile = fits.open(attfname)
     attdata = attfile["ORIENTATION"].data[10:]
-    caldbfile = fits.open(caldbfilename)
-
     urdfname = fname 
     urdfile = fits.open(urdfname)
+
+    """
+    queryenergycalib = {"TEL": URDTOTEL[urdfile[1].header["URDN"], 
+                        "CAL_NAME": "TCOEF"}
+    caldbfilename = caldbindex.query([
+    """
+    print(get_caldb("TCOEF", URDTOTEL[urdfile[1].header["URDN"]]))
+    caldbfile = fits.open(get_caldb("TCOEF", URDTOTEL[urdfile[1].header["URDN"]]))
+
+
     s, e = np.searchsorted(urdfile["EVENTS"].data["TIME"], 
             attdata["TIME"][[0, -1]])
 
