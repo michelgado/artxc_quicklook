@@ -30,3 +30,20 @@ def weight_coordinate(PI, rawcoord, mask):
 
 def weight_2D_coordinate(PIb, PIt, rawx, rawy, maskb, maskt):
     return weight_coordinate(PIb, rawx, maskb), weight_coordinate(PIt, rawy, maskt)
+
+def get_shadowed_pix_mask(rawx, rawy, det_spat_mask):
+    """
+    provide mask for eventlist, which excludes events, ocured in the part of the detector covered by the 
+    colimator
+    """
+    return det_spat_mask[rawx, rawy] #equivalent to [det_spat_mask[i, j] for i, j in zip(rawx, rawy)]
+
+
+def get_shadowed_pix_mask_for_urddata(urddata, det_spat_mask):
+    """
+    provide mask for eventlist, which excludes events, ocured in the part of the detector covered by the 
+    colimator
+    """
+    return get_shadowed_pix_mask(urddata["RAW_X"], urddata["RAW_Y"], det_spat_mask) #equivalent to [det_spat_mask[i, j] for i, j in zip(rawx, rawy)]
+
+

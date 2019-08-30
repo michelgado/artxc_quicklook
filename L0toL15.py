@@ -6,6 +6,7 @@ import numpy as np
 from math import pi
 import pandas
 
+from arttools._det_spatial import get_shadowed_pix_mask_for_urddata
 from arttools.energy import get_events_energy
 from arttools.plot import get_photons_sky_coord
 
@@ -33,10 +34,6 @@ def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=in
     """
   
     #Try to open file
-    print(CALDB_path)
-    print(indexfile)
-    print(caldb_entry_type)
-    print(telescope)
     indexfile_path = CALDB_path + indexfile
     try:
         caldbindx   = fits.open(indexfile_path)
@@ -71,6 +68,7 @@ if __name__ == "__main__":
     attdata = attfile["ORIENTATION"].data[10:]
     urdfname = fname 
     urdfile = fits.open(urdfname)
+    urddata = urdfile["EVENTS"].data
 
     """
     queryenergycalib = {"TEL": URDTOTEL[urdfile[1].header["URDN"], 
@@ -79,27 +77,32 @@ if __name__ == "__main__":
     """
     print(get_caldb("TCOEF", URDTOTEL[urdfile[1].header["URDN"]]))
     caldbfile = fits.open(get_caldb("TCOEF", URDTOTEL[urdfile[1].header["URDN"]]))
+    masktime = (urddata["TIME"] > attdata["TIME"][0]) & (urddata["TIME"] < attdata["TIME"][-1])
+    mask = np.copy(masktime)
+    urddata = urddata[masktime]
+
+    shadow = np.logical_not(fits.getdata(get_caldb("OOFPIX", URDTOTEL[urdfile[1].header["URDN"]])))
+    maskshadow = get_shadowed_pix_mask_for_urddata(urddata, shadow)
+    urddata = urddata[maskshadow]
+    mask[mask] = maskshadow
 
 
-    s, e = np.searchsorted(urdfile["EVENTS"].data["TIME"], 
-            attdata["TIME"][[0, -1]])
-
-    urddata = urdfile["EVENTS"].data[s:e]
     RA, DEC = get_photons_sky_coord(urddata, 
-            urdfile["EVENTS"].header["URDN"], 
-            attdata)
-    mask, ENERGY, xc, yc = get_events_energy(urddata,
-            urdfile["HK"].data, caldbfile)
+                    urdfile["EVENTS"].header["URDN"], 
+                    attdata)
+    maskenergy, ENERGY, xc, yc = get_events_energy(urddata,
+                                    urdfile["HK"].data, caldbfile)
+    mask[mask] = maskenergy
     print(mask.size)
     print(mask.sum())
     print(urddata.size)
     print(ENERGY.size)
     newurdtable = fits.BinTableHDU.from_columns(fits.ColDefs(
-        [fits.Column(name=cd.name, array=cd.array[s:e][mask], format=cd.format, unit=cd.unit) \
+        [fits.Column(name=cd.name, array=cd.array[mask], format=cd.format, unit=cd.unit) \
                 for cd in urddata.columns] + 
         [fits.Column(name="ENERGY", array=ENERGY, format="1D", unit="keV"), 
-         fits.Column(name="RA", array=RA[mask], format="1D", unit="deg"), 
-         fits.Column(name="DEC", array=DEC[mask], format="1D", unit="deg")]))
+         fits.Column(name="RA", array=RA[maskenergy], format="1D", unit="deg"), 
+         fits.Column(name="DEC", array=DEC[maskenergy], format="1D", unit="deg")]))
     newurdtable.name = "EVENTS"
 
     urdfile["EVENTS"] = newurdtable
