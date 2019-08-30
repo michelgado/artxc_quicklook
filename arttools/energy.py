@@ -26,6 +26,11 @@ def mkeventindex(strip):
     mask = (coord >= 0) & (coord < 48)
     coord[np.logical_not(mask)] = -1
     return coord, mask
+
+
+def apply_inner_mask(outmask, inmask):
+    outmask[outmask] = inmask
+
     
 
 def get_events_energy(eventlist, hkdata, caldb):
@@ -82,7 +87,7 @@ def get_events_energy(eventlist, hkdata, caldb):
     drop all below threashold
     """
     atleastone = np.logical_and(np.any(maskb, axis=0), np.any(maskt, axis=0))
-    m0[np.arange(m0.size)[m0][np.logical_not(atleastone)]] = False
+    m0[m0] = atleastone
     print("drop by threshold", atleastone.size - atleastone.sum(), " from ", atleastone.size)
     energb, energt, sigmab, sigmat, rawx, rawy, maskb, maskt = (arr[:, atleastone] for arr in [energb, energt, sigmab, sigmat, rawx, rawy, maskb, maskt])
     xc = np.sum(energb*maskb*rawx, axis=0)/np.sum(maskb*energb, axis=0)
@@ -93,7 +98,7 @@ def get_events_energy(eventlist, hkdata, caldb):
     #centralzone = ((xc - 23.5)**2. + (yc - 23.5)**2.) < 25.**2.
     #centralzone = ((rawx[1] - 23.5)**2. + (rawy[1] - 23.5)**2.) < 25.**2.
     centralzone = np.ones(xc.size, np.bool)
-    m0[np.arange(m0.size)[m0][np.logical_not(centralzone)]] = False
+    m0[m0] = centralzone
     #m0[np.arange(m0.size)[m0][np.logical_not(centralzone)]] = False
     bfirst = botcal[rawx[:,0]]
     xc, yc = xc[centralzone], yc[centralzone]
