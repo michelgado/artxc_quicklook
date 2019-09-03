@@ -7,6 +7,7 @@ from .orientation import extract_raw_gyro, qrot0, ART_det_QUAT, \
         get_gyro_quat, filter_gyrodata, vec_to_pol
 from ._det_spatial import raw_xy_to_vec, offset_to_vec, urd_to_vec
 from math import pi, cos, sin
+from multiprocessing import Pool, cpu_count
 import copy
 
 
@@ -34,35 +35,36 @@ def mktimegrid(gti):
     dt = ts[1:] - ts[:-1]
     return tc, dt
 
-def make_expomap(vignmap, attdata, gti, urdn, wcs, energy = 8.5):
+def make_vec_to_sky_hist_fun(vecs, effarea, locwcs, xsize, ysize):
+    def hist_vec_to_sky(quat, weight):
+        vec_icrs = quat.apply(vecs)
+        r, d = vec_to_pol(vec)
+        x, y = locwcs.all_world2pix(np.array([r, d]).T, 1).T
+        return np.histogram(x, y, [np.arange(xsize), np.arange(ysize)])[0].T
+    return hist_vec_to_sky
+
+def vignmap(vignmapfile, locwcs, xsize, ysize, qval, exptime, energy=6.):
     """
-    to do:
-    limits - in lon direction not more then 2pi/3 range
+    to do: implement mpi reduce
     """
-    qj2000 = Slerp(attdata["TIME"], get_gyro_quat(attdata))
 
-    eidx = np.searchsorted(vignmap["Vign_EA"].data["E"], energy)
-    xoffset, yoffset = np.meshgrid(vignmap["Coord"].data["X"], vignmap["Coord"].data["Y"])
-    vignvec = offset_to_vec(np.ravel(xoffset), np.ravel(yoffset))
-    effarea = np.ravel(vignmap["Vign_EA"].data["EFFAREA"][eidx])
-
-    tc, dt = zip(*[mktimegrid(gt) for gt in gti])
-    tc = np.concatenate(tc)
-    dt = np.concatenate(dt)
-
-    qlist = qj2000(tc)
-
-    def make_wcs_image(quat, i, size):
-        print("%d out of %d" % (i, size))
-        qall = quat*qrot0*ART_det_QUAT[urdn]
-        r, d = vec_to_pol(qall.apply(vignvec))
-        x, y = wcs.all_world2pix(np.array([r, d]).T, 1).T
-        return np.histogram2d(x, y, 
-            [np.arange(int(wcs.wcs.crpix[0]*2) + 1), np.arange(int(wcs.wcs.crpix[1]*2) + 1)], 
-            weights=effarea)[0].T
-
-    img = sum(make_wcs_image(qlist[i], i, tc.size)*dt[i] for i in range(tc.size))
-    return img
+    """
+    you should be very cautiont about the memory usage here, 
+    we expect, that array is stored in c order - 
+    effarea[i, j](in 2d representation) = effarea[i*ysize + j]
+    """
+    effarea = np.ravel(vignmapfile["Vign_EA"].data["EFFAREA"][
+            np.searchsorted(vignmapfile["Vign_EA"].data["E"], energy)])
+    #xoffset = np.repeat(vignmapfile["Coord"].data["X"])
+    """
+    xoffset, yoffset = np.meshgrid(vignmapfile["Coord"].data["X"], vignmapfile["Coord"].data["Y"])
+    vecs = offset_to_vec(xoffset, yoffset)
+    worker = make_vec_to_sky_hist_fun(vecs, locwcs, xsize, ysize)
+    hist = sum(worker(q, exp*effarea(vecs[i%size1d, i//size1d, :], locwcs, xsize, ysize)*\
+            effarea[i%size1d, i//size1d]*for i in range(size2d))
+    return hist
+    """
+    
 
 if __name__ == "__main__":
     pass

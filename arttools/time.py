@@ -46,17 +46,24 @@ def hist_orientation(attdata, gti, v0=None):
     dalpha = np.arccos(vec[1:, :]*vec[:-1, :])
     droll = (roll[1:] - roll[:-1])
 
-    maskstable = (dalpha < DELTASKY) & (droll < DELTAROLL)
-    qvalstable = qval[masktable]
-    print("stable vs moving", np.sum(dt[maskstable]), np.sum(dt[np.logical_not(
+    maskmoving = (dalpha < DELTASKY) & (droll < DELTAROLL)
+    qvalstable = qval[maskmoving]
+    print("stable vs moving", np.sum(dt[maskmoving]), np.sum(dt[np.logical_not(masktable)]))
 
-    oruniq, uidx, count = hist_quat(qval)
+    oruniq, uidx, invidx = hist_quat(qval)
+    exptime = np.zeros(uidx.size, np.double)
+    np.add.at(exptime, invidx, dt[maskmoving])
 
+    maskstable = np.logical_not(maskmoving)
 
-    orhist = np.empty((attdata.size, 3), np.int)
-    orhist[:, 0] = np.asarray((dec + pi/2.)/deltasky, np.int)
-    orhist[:, 1] = np.asarray(cos(dec)*ra/deltasky, np.int)
-    orhist[:, 2] = np.asarray(roll/deltaroll, np.int)
+    ts = attdata["TIME"][:-1][maskstable]
+    size = np.maximum(dalpha[maskstable]/DELTASKY, droll[maskstable]/DELTAROLL)
+    dt = (attdata["TIME"][1:][maskstable] - ts)/size
+    ar = np.arange(size.sum()) - np.repeat(np.cumsum([0,] + list(size[:-1])), size) + 0.5
+    tnew = np.repeat(ts, size) + ar*dt
+    # alternarive solution: tnew = np.concatenate([t0 + (np.arange(s) + 0.5)*dtloc for t0, s, dtloc in zip(ts, size, dt)])
 
-    oruniq, idx, count = np.unique(orhist, return_index=True, return_counts=True, axis=0)
-    return attdata[idx], count
+    exptime = np.concatenate(exptime, dt)
+    qval = np.concatenate(qvalstable, quatint(tnew))
+    return exptime, qval
+

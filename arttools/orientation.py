@@ -1,6 +1,7 @@
 from scipy.spatial.transform import Rotation, Slerp
 import numpy as np
 from math import pi, cos, sin
+from ._det_spatial import urd_to_vec
 
 qrot0 = Rotation([sin(15*pi/360.), 0., 0., cos(15*pi/360.)])
 

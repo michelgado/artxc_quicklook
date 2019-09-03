@@ -8,8 +8,7 @@ import pandas
 
 from arttools._det_spatial import get_shadowed_pix_mask_for_urddata
 from arttools.energy import get_events_energy
-from arttools.plot import get_photons_sky_coord
-from arttools.orientation import extract_raw_gyro
+from arttools.orientation import extract_raw_gyro, get_photons_sky_coord
 
 parser = argparse.ArgumentParser(description="process L0 data to L1 format")
 parser.add_argument("stem", help="part of the L0 files name, which are euqal to them")

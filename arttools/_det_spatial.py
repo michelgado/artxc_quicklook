@@ -19,10 +19,10 @@ def raw_xy_to_vec(x, y):
     return outvec
 
 def offset_to_vec(x, y):
-    outvec = np.empty((x.size, 3), np.double)
-    outvec[:, 0] = F
-    outvec[:, 1] = x
-    outvec[:, 2] = -y
+    outvec = np.empty(x.shape + (3,), np.double)
+    outvec[..., 0] = F
+    outvec[..., 1] = x
+    outvec[..., 2] = -y
     return outvec
 
 def urd_to_vec(urddata, subscale=1):
