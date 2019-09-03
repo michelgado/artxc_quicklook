@@ -3,8 +3,9 @@ from scipy.spatial.transform import Rotation, Slerp
 import numpy as np
 from astropy.visualization import MinMaxInterval, SqrtStretch, ImageNormalize, LogStretch
 from astropy.wcs import WCS
-from .orientation import extract_raw_gyro, qrot0, ART_det_QUAT, get_gyro_quat, filter_gyrodata
-from ._det_spatial import raw_xy_to_vec, offset_to_vec
+from .orientation import extract_raw_gyro, qrot0, ART_det_QUAT, \
+        get_gyro_quat, filter_gyrodata, vec_to_pol
+from ._det_spatial import raw_xy_to_vec, offset_to_vec, urd_to_vec
 from math import pi, cos, sin
 import copy
 
@@ -12,33 +13,6 @@ import copy
 def get_rawxy_hist(data):
     img = np.histogram2d(data['RAW_X'], data['RAW_Y'], [np.arange(49) - 0.5,]*2)[0]
     return img
-
-def urd_to_vec(urddata, subscale=1):
-    sscale = (np.arange(subscale) - (subscale - 1)/2.)/subscale
-    x = np.repeat(urddata["RAW_X"], subscale*subscale) + \
-            np.tile(np.tile(sscale, subscale), urddata.size)
-    y = np.repeat(urddata["RAW_Y"], subscale*subscale) + \
-            np.tile(np.repeat(sscale, subscale), urddata.size)
-    return raw_xy_to_vec(x, y)
-
-def get_photons_vectors(urddata, URDN, attdata, subscale=1):
-    #attdata = filter_gyrodata(attdata)
-    qj2000 = Slerp(attdata["TIME"], get_gyro_quat(attdata))
-    qj2000 = qj2000(np.repeat(urddata["TIME"], subscale*subscale))
-    qall = qj2000*qrot0*ART_det_QUAT[URDN]
-
-    photonvecs = urd_to_vec(urddata, subscale)
-    phvec = qall.apply(photonvecs)
-    return phvec
-
-def vec_to_pol(phvec):
-    dec = np.arctan(phvec[:,2]/np.sqrt(phvec[:,0]**2. + phvec[:,1]**2.))*180./pi
-    ra = (np.arctan2(phvec[:,1], phvec[:,0])%(2.*pi))*180./pi
-    return ra, dec
-    
-def get_photons_sky_coord(urddata, URDN, attdata, subscale=1):
-    phvec = get_photons_vectors(urddata, URDN, attdata, subscale)
-    return vec_to_pol(phvec)
 
 def get_sky_image(urddata, URDN, attdata, xe, ye, subscale=1):
     attdata = filter_gyrodata(attdata)

@@ -25,6 +25,14 @@ def offset_to_vec(x, y):
     outvec[:, 2] = -y
     return outvec
 
+def urd_to_vec(urddata, subscale=1):
+    sscale = (np.arange(subscale) - (subscale - 1)/2.)/subscale
+    x = np.repeat(urddata["RAW_X"], subscale*subscale) + \
+            np.tile(np.tile(sscale, subscale), urddata.size)
+    y = np.repeat(urddata["RAW_Y"], subscale*subscale) + \
+            np.tile(np.repeat(sscale, subscale), urddata.size)
+    return raw_xy_to_vec(x, y)
+
 def weight_coordinate(PI, rawcoord, mask):
     return np.sum(PI*mask*rawcoord, axis=0)/np.sum(PI*mask, axis=0)
 

@@ -9,6 +9,7 @@ import pandas
 from arttools._det_spatial import get_shadowed_pix_mask_for_urddata
 from arttools.energy import get_events_energy
 from arttools.plot import get_photons_sky_coord
+from arttools.orientation import extract_raw_gyro
 
 parser = argparse.ArgumentParser(description="process L0 data to L1 format")
 parser.add_argument("stem", help="part of the L0 files name, which are euqal to them")
@@ -86,7 +87,6 @@ if __name__ == "__main__":
     urddata = urddata[maskshadow]
     mask[mask] = maskshadow
 
-
     RA, DEC = get_photons_sky_coord(urddata, 
                     urdfile["EVENTS"].header["URDN"], 
                     attdata)
@@ -103,9 +103,10 @@ if __name__ == "__main__":
         [fits.Column(name="ENERGY", array=ENERGY, format="1D", unit="keV"), 
          fits.Column(name="RA", array=RA[maskenergy], format="1D", unit="deg"), 
          fits.Column(name="DEC", array=DEC[maskenergy], format="1D", unit="deg")]))
+    newurdtable.header.update(urdfile['EVENTS'].header)
     newurdtable.name = "EVENTS"
-
-    urdfile["EVENTS"] = newurdtable
-    urdfile.writeto(os.path.join(outdir, os.path.basename(urdfname)), overwrite=True)
-
-
+    newfile = fits.HDUList([urdfile[0], newurdtable, urdfile[2], urdfile[3]])
+    #newurdtable.header.update(urdfile[1].header)
+    #urdfile["EVENTS"] = newurdtable
+    #urdfile.writeto(os.path.join(outdir, os.path.basename(urdfname)), overwrite=True)
+    newfile.writeto(os.path.join(outdir, os.path.basename(urdfname)), overwrite=True)
