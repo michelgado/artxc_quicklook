@@ -94,25 +94,17 @@ if __name__ == "__main__":
     maskenergy, ENERGY, xc, yc = get_events_energy(urddata,
                                     urdfile["HK"].data, caldbfile)
     mask[mask] = maskenergy
-    print(mask.size)
-    print(mask.sum())
-    print(urddata.size)
-    print(ENERGY.size)
-    print(maskenergy.sum())
-    print(type(ENERGY), ENERGY.dtype, RA.dtype, DEC.dtype)
-    newurdtable = fits.BinTableHDU.from_columns(fits.ColDefs(
-        [fits.Column(name=cd.name, array=cd.array[mask], format=cd.format, unit=cd.unit) \
+    newurdtable = fits.BinTableHDU.from_columns(
+            [fits.Column(name=cd.name, array=np.copy(cd.array[mask]), format=cd.format, unit=cd.unit) \
                 for cd in urddata.columns] + 
-        [fits.Column(name="ENERGY", array=ENERGY, format="1D", unit="keV"), 
-         fits.Column(name="RA", array=RA[maskenergy], format="1D", unit="deg"), 
-         fits.Column(name="DEC", array=DEC[maskenergy], format="1D", unit="deg")]))
-    newurdtable.header.update(urdfile['EVENTS'].header)
-    newurdtable.header["NAXIS2"] = ENERGY.size
-    #hdulist = [type(hdu)(data = Table(hdu.data), header=hdu.header) for hdu in urdfile]
-    #hdulist[1] = newurdtable
-    newfile = fits.HDUList([urdfile[0], urdfile[2], urdfile[3], newurdtable])
-    print(newfile)
-    #newurdtable.header.update(urdfile[1].header)
-    #urdfile["EVENTS"] = newurdtable
-    #urdfile.writeto(os.path.join(outdir, os.path.basename(urdfname)), overwrite=True)
+            [fits.Column(name="ENERGY", array=ENERGY, format="1D", unit="keV"),
+             fits.Column(name="RA", array=np.copy(RA[maskenergy]), format="1D", unit="deg"),  
+             fits.Column(name="DEC", array=np.copy(DEC[maskenergy]), format="1D", unit="deg")])
+
+    h = copy.copy(urdfile["EVENTS"].header)
+    newurdtable.name = "EVENTS"
+    h.pop("NAXIS2")
+    hdulist = [type(hdu)(data = Table(hdu.data), header=hdu.header) for hdu in urdfile]
+    hdulist[1] = newurdtable
+    newfile = fits.HDUList([urdfile[0], newurdtable, urdfile[2], urdfile[3]])
     newfile.writeto(os.path.join(outdir, os.path.basename(urdfname)), overwrite=True)
