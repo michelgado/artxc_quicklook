@@ -1,10 +1,12 @@
 from astropy.io import fits
+from astropy.table import Table
 import argparse
 import sys
 import os
 import numpy as np
 from math import pi
 import pandas
+import copy
 
 from arttools._det_spatial import get_shadowed_pix_mask_for_urddata
 from arttools.energy import get_events_energy
@@ -96,6 +98,8 @@ if __name__ == "__main__":
     print(mask.sum())
     print(urddata.size)
     print(ENERGY.size)
+    print(maskenergy.sum())
+    print(type(ENERGY), ENERGY.dtype, RA.dtype, DEC.dtype)
     newurdtable = fits.BinTableHDU.from_columns(fits.ColDefs(
         [fits.Column(name=cd.name, array=cd.array[mask], format=cd.format, unit=cd.unit) \
                 for cd in urddata.columns] + 
@@ -103,8 +107,11 @@ if __name__ == "__main__":
          fits.Column(name="RA", array=RA[maskenergy], format="1D", unit="deg"), 
          fits.Column(name="DEC", array=DEC[maskenergy], format="1D", unit="deg")]))
     newurdtable.header.update(urdfile['EVENTS'].header)
-    newurdtable.name = "EVENTS"
-    newfile = fits.HDUList([urdfile[0], newurdtable, urdfile[2], urdfile[3]])
+    newurdtable.header["NAXIS2"] = ENERGY.size
+    #hdulist = [type(hdu)(data = Table(hdu.data), header=hdu.header) for hdu in urdfile]
+    #hdulist[1] = newurdtable
+    newfile = fits.HDUList([urdfile[0], urdfile[2], urdfile[3], newurdtable])
+    print(newfile)
     #newurdtable.header.update(urdfile[1].header)
     #urdfile["EVENTS"] = newurdtable
     #urdfile.writeto(os.path.join(outdir, os.path.basename(urdfname)), overwrite=True)
