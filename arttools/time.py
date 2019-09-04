@@ -1,7 +1,8 @@
 import numpy as np
-from .orientation import get_gyro_quat_as_arr, vec_to_pol, quat_to_pol_and_roll, extract_raw_gyro
+from .orientation import get_gyro_quat_as_arr, vec_to_pol, \
+        quat_to_pol_and_roll, extract_raw_gyro, get_gyro_quat, pol_to_vec
 from math import pi
-from scipy.spatial.transforms import Rotation, Slerp
+from scipy.spatial.transform import Rotation, Slerp
 
 DELTASKY = 5./3600./180.*pi
 """
@@ -32,51 +33,83 @@ def hist_quat(quat):
 
     orhist = np.empty((ra.size, 3), np.int)
     orhist[:, 0] = np.asarray((dec + pi/2.)/DELTASKY, np.int)
-    orhist[:, 1] = np.asarray(cos(dec)*ra/DELTASKY, np.int)
+    orhist[:, 1] = np.asarray(np.cos(dec)*ra/DELTASKY, np.int)
     orhist[:, 2] = np.asarray(roll/DELTAROLL, np.int)
     return np.unique(orhist, return_index=True, return_inverse=True, axis=0)
+
+def make_ingti_times(time, gti):
+    idx = np.searchsorted(time, gti)
+    tnew = np.empty(np.sum(idx[:,1] - idx[:,0]) + 2*idx.shape[0], np.double)
+    cidx = np.empty(idx.shape[0] + 1, np.int)
+    cidx[1:] = np.cumsum(idx[:,1] - idx[:,0] + 2)
+    cidx[0] = 0
+    for i in range(idx.shape[0]):
+        tnew[cidx[i]+1: cidx[i+1]-1] = time[idx[i,0]:idx[i,1]]
+        tnew[cidx[i]] = gti[i, 0]
+        tnew[cidx[i + 1] - 1] = gti[i, 1]
+    maskgaps = np.ones(tnew.size - 1, np.bool)
+    maskgaps[cidx[1:-1] - 1] = False
+    return tnew, maskgaps
 
 def hist_orientation(attdata, gti, v0=None):
     quatint = Slerp(attdata["TIME"], get_gyro_quat(attdata))
 
-    idx = np.searchsorted(attdata["TIME"], gti)
-    tnew = np.empty(np.sum(idx[:,1] - idx[:,0]) + 2*idx.shape[0])
-    cidx = np.empty(idx.shape[0] + 1, np.int)
-    cidx[1:] = np.cumsum(idx[:,1] - idx[:,0] + 2)
-    for i in range(idx.shape[0]):
-        tnew[cidx[i]+1: cidx[i+1]-1] = attdata["TIME"][idx[i,0]:idx[i:1]]
-        tnew[cidx[i]] = gti[i, 0]
-        tnew[cidx[i + 1] - 1] = gti[i, 1]
-    ts = [np.array([gti[i, 0] + list(attdata["TIME"][idx[i, 0]:idx[i:1]]) + gti[i, 1]]) for i in range(gti.shape[0])]
-    te = np.concatenate(ts)
-    dt = np.concatenate([t[1:] - t[:-1] for t in ts])
-    ts = np.concatenate([(t[1:] + t[:-1])/2. for t in ts])
+    tnew, maskgaps = make_ingti_times(attdata["TIME"], gti)
+    ts = ((tnew[1:] + tnew[:-1])/2.)[maskgaps]
+    dt = (tnew[1:] - tnew[:-1])[maskgaps]
     qval = quatint(ts)
 
-    ra, dec, roll = quat_to_pol_and_roll(quatint(te))
-    ra, dec, roll = extract_raw_gyro(attdata)
-    vec = vec_to_pol(dec, ra)
-    dalpha = np.arccos(vec[1:, :]*vec[:-1, :])
-    droll = (roll[1:] - roll[:-1])
+    ra, dec, roll = quat_to_pol_and_roll(quatint(tnew))
+
+    """
+    import matplotlib.pyplot as plt
+    plt.scatter(ra, dec)
+    plt.show()
+    """
+    """
+    to do:
+    formally, this subroutine should not know that optic axis is [1, 0, 0],
+    need to fix this
+    vec = qval.apply([1., 0, 0])
+    """
+    vec = pol_to_vec(ra, dec)
+    vecprod = np.sum(vec[1:, :]*vec[:-1, :], axis=1)
+    """
+    this ugly thing appears due to the numerical precision
+    """
+    vecprod[vecprod > 1.] = 1.
+    dalpha = np.arccos(vecprod)[maskgaps]
+    cs = np.cos(roll)
+    ss = np.sin(roll)
+    vecprod = np.minimum(ss[1:]*ss[:-1] + cs[1:]*cs[:-1], 1.)
+    droll = np.arccos(vecprod)[maskgaps]
 
     maskmoving = (dalpha < DELTASKY) & (droll < DELTAROLL)
     qvalstable = qval[maskmoving]
-    print("stable vs moving", np.sum(dt[maskmoving]), np.sum(dt[np.logical_not(masktable)]))
+    print("stable vs moving", np.sum(dt[maskmoving]), np.sum(dt[np.logical_not(maskmoving)]))
 
-    oruniq, uidx, invidx = hist_quat(qval)
+    oruniq, uidx, invidx = hist_quat(qval[maskmoving])
     exptime = np.zeros(uidx.size, np.double)
     np.add.at(exptime, invidx, dt[maskmoving])
 
     maskstable = np.logical_not(maskmoving)
 
-    ts = attdata["TIME"][:-1][maskstable]
-    size = np.maximum(dalpha[maskstable]/DELTASKY, droll[maskstable]/DELTAROLL)
-    dt = (attdata["TIME"][1:][maskstable] - ts)/size
+    tsn = (ts - dt/2.)[maskstable]
+    size = np.maximum(dalpha[maskstable]/DELTASKY, droll[maskstable]/DELTAROLL).astype(np.int)
+    print("check most", droll[maskstable][np.argmax(size)]/DELTAROLL, dalpha[maskstable][np.argmax(size)], dt[maskstable][np.argmax(size)], size[np.argmax(size)])
+    print(size.sum())
+    print(size.max())
+    print(dt.max())
+    print(droll.max())
+    print(dalpha.max())
+    print(ts.size)
+    print(size)
+    dt = np.repeat(dt[maskstable]/size, size)
     ar = np.arange(size.sum()) - np.repeat(np.cumsum([0,] + list(size[:-1])), size) + 0.5
-    tnew = np.repeat(ts, size) + ar*dt
+    tnew = np.repeat(tsn, size) + ar*dt
     # alternarive solution: tnew = np.concatenate([t0 + (np.arange(s) + 0.5)*dtloc for t0, s, dtloc in zip(ts, size, dt)])
 
-    exptime = np.concatenate(exptime, dt)
-    qval = np.concatenate(qvalstable, quatint(tnew))
+    exptime = np.concatenate([exptime, dt])
+    qval = quatint(np.concatenate([ts, tnew]))
     return exptime, qval
 

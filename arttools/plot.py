@@ -6,7 +6,10 @@ from astropy.wcs import WCS
 from .orientation import extract_raw_gyro, qrot0, ART_det_QUAT, \
         get_gyro_quat, filter_gyrodata, vec_to_pol
 from ._det_spatial import raw_xy_to_vec, offset_to_vec, urd_to_vec
+from .time import hist_orientation
+from astropy.io import fits
 from math import pi, cos, sin
+import sigproc
 from multiprocessing import Pool, cpu_count
 import copy
 
@@ -38,12 +41,13 @@ def mktimegrid(gti):
 def make_vec_to_sky_hist_fun(vecs, effarea, locwcs, xsize, ysize):
     def hist_vec_to_sky(quat, weight):
         vec_icrs = quat.apply(vecs)
-        r, d = vec_to_pol(vec)
+        r, d = vec_to_pol(vec_icrs)
         x, y = locwcs.all_world2pix(np.array([r, d]).T, 1).T
-        return np.histogram(x, y, [np.arange(xsize), np.arange(ysize)])[0].T
+        locweight = weight*effarea
+        return np.histogram2d(x, y, [np.arange(xsize), np.arange(ysize)], weights=locweight)[0].T
     return hist_vec_to_sky
 
-def vignmap(vignmapfile, locwcs, xsize, ysize, qval, exptime, energy=6.):
+def make_vignmap_for_quat(locwcs, xsize, ysize, qval, exptime, vignmapfilename, energy=6.):
     """
     to do: implement mpi reduce
     """
@@ -53,18 +57,45 @@ def vignmap(vignmapfile, locwcs, xsize, ysize, qval, exptime, energy=6.):
     we expect, that array is stored in c order - 
     effarea[i, j](in 2d representation) = effarea[i*ysize + j]
     """
+    vignmapfile = fits.open(vignmapfilename)
     effarea = np.ravel(vignmapfile["Vign_EA"].data["EFFAREA"][
             np.searchsorted(vignmapfile["Vign_EA"].data["E"], energy)])
-    #xoffset = np.repeat(vignmapfile["Coord"].data["X"])
-    """
-    xoffset, yoffset = np.meshgrid(vignmapfile["Coord"].data["X"], vignmapfile["Coord"].data["Y"])
+    size = vignmapfile["Coord"].data.size
+    xoffset = np.repeat(vignmapfile["Coord"].data["X"], size)
+    yoffset = np.tile(vignmapfile["Coord"].data["Y"], size)
     vecs = offset_to_vec(xoffset, yoffset)
-    worker = make_vec_to_sky_hist_fun(vecs, locwcs, xsize, ysize)
-    hist = sum(worker(q, exp*effarea(vecs[i%size1d, i//size1d, :], locwcs, xsize, ysize)*\
-            effarea[i%size1d, i//size1d]*for i in range(size2d))
+    worker = make_vec_to_sky_hist_fun(vecs, effarea, locwcs, xsize, ysize)
+    #def make_hist(args): return sum(worker(args[0], args[1]) for q, exp in zip(qval, exptime))
+    #pool = Pool(6)
+    #hist = sum(pool.map(make_hist, [(qval[i::36], exptime[i::36]) for  i in range(36)]))
+    hist = sum(worker(q, exp) for q, exp in zip(qval, exptime))
     return hist
+
+def make_vignmap_mp(args):
+    return make_vignmap_for_quat(*args)
+
+def make_expmap_for_urd(urdfile, attfile, locwcs, agti=None):
+    gti = np.array([urdfile["GTI"].data["START"], urdfile["GTI"].data["STOP"]]).T
+    gtiatt = np.array([attfile["ORIENTATION"].data["TIME"][[0, -1]]])
+    if not agti is None: gtiatt = sigproc.overall_gti(gtiatt, agti)
+    gti = sigproc.overall_gti(gtiatt, gti)
+    exptime, qval = hist_orientation(attfile["ORIENTATION"].data, gti)
+    qval = qval*qrot0*ART_det_QUAT[urdfile["EVENTS"].header["URDN"]]
     """
-    
+    to do: implement vignmap in caldb
+    """
+    #vignfile = fits.open("/home/andrey/auxiliary/artxc_quicklook/arttools/art-xc_vignea.fits")
+    vignfilename = "/home/andrey/auxiliary/artxc_quicklook/arttools/art-xc_vignea.fits"
+    xsize = int(locwcs.wcs.crpix[0]*2) + 2
+    ysize = int(locwcs.wcs.crpix[0]*2) + 2
+    pool = Pool(4)
+    emaps = pool.map(make_vignmap_mp, [(locwcs, xsize, ysize, qval[i::16], exptime[i::16], vignfilename) for i in range(16)])
+    emap = np.sum(emaps, axis=0)
+    #emap = make_vignmap_for_quat(locwcs, xsize, ysize, qval, exptime, vignfilename)
+    print(emap.shape)
+    return emap
+
+
 
 if __name__ == "__main__":
     pass
