@@ -25,6 +25,9 @@ def offset_to_vec(x, y):
     outvec[..., 2] = -y
     return outvec
 
+def vec_to_offset(vec):
+    return vec[...,1]*F/vec[...,0], -vec[...,2]*F/vec[...,0]
+
 def urd_to_vec(urddata, subscale=1):
     sscale = (np.arange(subscale) - (subscale - 1)/2.)/subscale
     x = np.repeat(urddata["RAW_X"], subscale*subscale) + \
@@ -41,7 +44,7 @@ def weight_2D_coordinate(PIb, PIt, rawx, rawy, maskb, maskt):
 
 def get_shadowed_pix_mask(rawx, rawy, det_spat_mask):
     """
-    provide mask for eventlist, which excludes events, ocured in the part of the detector covered by the 
+    provide mask for eventlist, which excludes events, ocured in the part of the detector covered by the
     colimator
     """
     return det_spat_mask[rawx, rawy] #equivalent to [det_spat_mask[i, j] for i, j in zip(rawx, rawy)]
@@ -49,7 +52,7 @@ def get_shadowed_pix_mask(rawx, rawy, det_spat_mask):
 
 def get_shadowed_pix_mask_for_urddata(urddata, det_spat_mask):
     """
-    provide mask for eventlist, which excludes events, ocured in the part of the detector covered by the 
+    provide mask for eventlist, which excludes events, ocured in the part of the detector covered by the
     colimator
     """
     return get_shadowed_pix_mask(urddata["RAW_X"], urddata["RAW_Y"], det_spat_mask) #equivalent to [det_spat_mask[i, j] for i, j in zip(rawx, rawy)]
