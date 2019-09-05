@@ -6,7 +6,7 @@ from ._det_spatial import urd_to_vec
 qrot0 = Rotation([sin(15*pi/360.), 0., 0., cos(15*pi/360.)])
 
 ART_det_QUAT = {
-            28 : Rotation([-0.0253822607926940,      -0.0013460478969772,     -0.0010308083508865,      0.9996763808484496]), 
+            28 : Rotation([-0.0253822607926940,      -0.0013460478969772,     -0.0010308083508865,      0.9996763808484496]),
             22 : Rotation([-0.0278942419232757,      -0.0012308887991602,     -0.0009912718735396,      0.9996096305860415]),
             23 : Rotation([-0.0218437922616629,      -0.0013321831701231,     -0.0010327175254869,      0.9997599749550605]),
             24 : Rotation([-0.0236571226930715,      -0.0012197597513018,     -0.0009268017282141,      0.9997189573928217]),
@@ -41,13 +41,13 @@ def vec_to_pol(phvec):
     ra = (np.arctan2(phvec[:,1], phvec[:,0])%(2.*pi))*180./pi
     return ra, dec
 
-def pol_to_vec(theta, phi):
+def pol_to_vec(phi, theta):
     vec = np.empty((theta.size, 3), np.double)
     vec[:, 0] = np.cos(theta)*np.cos(phi)
     vec[:, 1] = np.cos(theta)*np.sin(phi)
     vec[:, 2] = np.sin(theta)
     return vec
-    
+
 def get_photons_sky_coord(urddata, URDN, attdata, subscale=1):
     phvec = get_photons_vectors(urddata, URDN, attdata, subscale)
     return vec_to_pol(phvec)
@@ -77,19 +77,19 @@ def quat_to_pol_and_roll(qfin, opaxis=[1, 0, 0], north=[0, 0, 1]):
     north for detectors
     """
     opticaxis = qfin.apply(opaxis)
-    dec = np.arctan(opticaxis[:,2]/np.sqrt(opticaxis[:,1]**2 + opticaxis[:,0]**2)) 
+    dec = np.arctan(opticaxis[:,2]/np.sqrt(opticaxis[:,1]**2 + opticaxis[:,0]**2))
     ra = np.arctan2(opticaxis[:,1], opticaxis[:,0])%(2.*pi)
 
     yzprojection = np.cross(opticaxis, north)
     vort = np.cross(north, opaxis)
 
-    rollangle = np.arctan2(np.sum(yzprojection*qfin.apply(vort), axis=1), 
+    rollangle = np.arctan2(np.sum(yzprojection*qfin.apply(vort), axis=1),
                            np.sum(yzprojection*qfin.apply(north), axis=1))
     return ra, dec, rollangle
 
 def extract_raw_gyro(gyrodata, qadd=qrot0):
     """
-    unpacks row gyro fits file in to RA, DEC and roll angle (of the telescope coordinate system) 
+    unpacks row gyro fits file in to RA, DEC and roll angle (of the telescope coordinate system)
     in J2000 coordinates.
     """
     qfin = get_gyro_quat(gyrodata)*qadd

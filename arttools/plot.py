@@ -5,14 +5,16 @@ from astropy.visualization import MinMaxInterval, SqrtStretch, ImageNormalize, L
 from astropy.wcs import WCS
 from .orientation import extract_raw_gyro, qrot0, ART_det_QUAT, \
         get_gyro_quat, filter_gyrodata, vec_to_pol, pol_to_vec
-from ._det_spatial import raw_xy_to_vec, offset_to_vec, urd_to_vec, vec_to_offset
+from ._det_spatial import raw_xy_to_vec, offset_to_vec, urd_to_vec, vec_to_offset_pairs
 from .time import hist_orientation
 from astropy.io import fits
 from math import pi, cos, sin
 import sigproc
 from multiprocessing import Pool, cpu_count
 import copy
+import time
 from scipy.interpolate import RegularGridInterpolator
+import  matplotlib.pyplot as plt
 
 
 def get_rawxy_hist(data):
@@ -29,7 +31,6 @@ def get_sky_image(urddata, URDN, attdata, xe, ye, subscale=1):
     phvec = qall.apply(photonvecs)
     dec = np.arctan(phvec[:,2]/np.sqrt(phvec[:,0]**2. + phvec[:,1]**2.))*180./pi
     ra = (np.arctan2(phvec[:,1], phvec[:,0])%(2.*pi))*180./pi
-
     return np.histogram2d(dec, ra, [ye, xe])[0]
 
 def mktimegrid(gti):
@@ -48,16 +49,11 @@ def make_vec_to_sky_hist_fun(vecs, effarea, locwcs, xsize, ysize):
         return np.histogram2d(x, y, [np.arange(xsize), np.arange(ysize)], weights=locweight)[0].T
     return hist_vec_to_sky
 
-
-def make_inverce_vign(locwcs, vignmap, xy, qval, exp, hist):
-    r, d = locwcs.all_pix2world(xy, 1).T
-    vecsky = pol_to_vec(r, d)
+def make_inverce_vign(vecsky, qval, exp, vignmap, hist):
     vecdet = qval.apply(vecsky, inverse=True)
-    x, y = vec_to_offset(vecdet)
-    mask = np.all([x > -14.22, x < 14.22, y > -14.22, y < 14.22], axis=0)
-    x, y = x[mask], y[mask]
-    hist[mask] += vignmap(np.array([x, y]).T)*exp
-
+    xy = vec_to_offset_pairs(vecdet)
+    idx = np.where(np.all([xy[:,0] > -14.2, xy[:,0] < 14.2, xy[:,1] > -14.2, xy[:,1] < 14.2], axis=0))[0]
+    hist[idx] += vignmap(xy[idx])*exp
 
 def make_vignmap_for_quat2(locwcs, xsize, ysize, qval, exptime, vignmapfilename, energy=6.):
     vignmapfile = fits.open(vignmapfilename)
@@ -66,13 +62,30 @@ def make_vignmap_for_quat2(locwcs, xsize, ysize, qval, exptime, vignmapfilename,
     rg = RegularGridInterpolator([vignmapfile["Coord"].data["X"],
                                   vignmapfile["Coord"].data["Y"]],
                                  effarea/effarea.max(), bounds_error=False, fill_value=0.)
-    x = np.repeat(np.arange(xsize - 1) + 1., ysize)
-    y = np.tile(np.arange(ysize - 1) + 1., xsize)
-    hist = np.empty(x.size)
+    x = np.repeat(np.arange(xsize - 1) + 1., ysize - 1)
+    y = np.tile(np.arange(ysize - 1) + 1., xsize - 1)
+    hist = np.zeros(x.size, np.double)
     xy = np.array([x, y]).T
+    r, d = locwcs.all_pix2world(xy, 1).T
+    #maskclose = qval.apply([1, 0, 0])
+    """
+    plt.scatter(r, d)
+    plt.show()
+    """
+    vecsky = pol_to_vec(r/180.*pi, d/180.*pi)
+
+    i = 0
+    tstart = time.time()
     for q, e in zip(qval, exptime):
-        make_inverce_vign(locwcs, rg, xy, q, e, hist)
-    return hist.reshape((xsize, ysize))
+        i += 1
+        make_inverce_vign(vecsky, q, e, rg, hist)
+        if i == 100:
+            tc = time.time()
+            print("time per 100 computations", tc - tstart)
+            tstart = tc
+            i = 0
+
+    return hist.reshape((xsize - 1, ysize - 1), order="F")
 
 
 def make_vignmap_for_quat(locwcs, xsize, ysize, qval, exptime, vignmapfilename, energy=6.):
@@ -98,9 +111,6 @@ def make_vignmap_for_quat(locwcs, xsize, ysize, qval, exptime, vignmapfilename, 
     vmap = rg(np.array([x, y]).T)
     vecs = offset_to_vec(x, y)
     worker = make_vec_to_sky_hist_fun(vecs, vmap, locwcs, xsize, ysize)
-    #def make_hist(args): return sum(worker(args[0], args[1]) for q, exp in zip(qval, exptime))
-    #pool = Pool(6)
-    #hist = sum(pool.map(make_hist, [(qval[i::36], exptime[i::36]) for  i in range(36)]))
     hist = sum(worker(q, exp) for q, exp in zip(qval, exptime))
     return hist
 
@@ -120,14 +130,15 @@ def make_expmap_for_urd(urdfile, attfile, locwcs, agti=None):
     #vignfile = fits.open("/home/andrey/auxiliary/artxc_quicklook/arttools/art-xc_vignea.fits")
     vignfilename = "/srg/a1/work/andrey/art-xc_vignea.fits"
     xsize = int(locwcs.wcs.crpix[0]*2) + 2
-    ysize = int(locwcs.wcs.crpix[0]*2) + 2
-    pool = Pool(16)
+    ysize = int(locwcs.wcs.crpix[1]*2) + 2
+    pool = Pool(24)
+
     emaps = pool.map(make_vignmap_mp, [(locwcs, xsize, ysize, qval[i::50], exptime[i::50], vignfilename) for i in range(50)])
     emap = np.sum(emaps, axis=0)
+    #plt.imshow(emap, interpolation="nearest")
+    #plt.show()
     #emap = make_vignmap_for_quat(locwcs, xsize, ysize, qval, exptime, vignfilename)
-    print(emap.shape)
     return emap
-
 
 
 if __name__ == "__main__":

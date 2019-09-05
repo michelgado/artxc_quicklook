@@ -28,6 +28,10 @@ def offset_to_vec(x, y):
 def vec_to_offset(vec):
     return vec[...,1]*F/vec[...,0], -vec[...,2]*F/vec[...,0]
 
+def vec_to_offset_pairs(vec):
+    return (vec[...,[1,2]]/vec[...,0][..., np.newaxis])*[F, -F]
+
+
 def urd_to_vec(urddata, subscale=1):
     sscale = (np.arange(subscale) - (subscale - 1)/2.)/subscale
     x = np.repeat(urddata["RAW_X"], subscale*subscale) + \

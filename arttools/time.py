@@ -7,20 +7,20 @@ from scipy.spatial.transform import Rotation, Slerp
 DELTASKY = 5./3600./180.*pi
 """
 optica axis is shifted 11' away of the sattelite x axis, therefore we need some more fine resolution
-5'' binning at the edge of the detector, is rotation take place around its center is 2*pi/9/24 
+5'' binning at the edge of the detector, is rotation take place around its center is 2*pi/9/24
 (hint: pix size 45'', 5''=45''/9)
 """
-DELTAROLL = 2.*pi/24./18. 
+DELTAROLL = 2.*pi/24./18.
 
 
 def merge_consecutive_kvea_gtis(urdfile):
     pass
 
 def fill_att_gaps(attdata):
-    pass 
+    pass
 
 def angular_speed(attdata):
-    ra, dec, 
+    ra, dec,
     quat = get_gyro_quat_as_arr(attdata)
     dqrota = np.sum(quat[:, 1:]*quat[:, :-1], axis=1)
 
@@ -86,30 +86,18 @@ def hist_orientation(attdata, gti, v0=None):
 
     maskmoving = (dalpha < DELTASKY) & (droll < DELTAROLL)
     qvalstable = qval[maskmoving]
-    print("stable vs moving", np.sum(dt[maskmoving]), np.sum(dt[np.logical_not(maskmoving)]))
-
-    oruniq, uidx, invidx = hist_quat(qval[maskmoving])
-    exptime = np.zeros(uidx.size, np.double)
-    np.add.at(exptime, invidx, dt[maskmoving])
-
     maskstable = np.logical_not(maskmoving)
-
-    tsn = (ts - dt/2.)[maskstable]
+    tsm = (ts - dt/2.)[maskstable]
     size = np.maximum(dalpha[maskstable]/DELTASKY, droll[maskstable]/DELTAROLL).astype(np.int)
-    print("check most", droll[maskstable][np.argmax(size)]/DELTAROLL, dalpha[maskstable][np.argmax(size)], dt[maskstable][np.argmax(size)], size[np.argmax(size)])
-    print(size.sum())
-    print(size.max())
-    print(dt.max())
-    print(droll.max())
-    print(dalpha.max())
-    print(ts.size)
-    print(size)
-    dt = np.repeat(dt[maskstable]/size, size)
+    dtm = np.repeat(dt[maskstable]/size, size)
     ar = np.arange(size.sum()) - np.repeat(np.cumsum([0,] + list(size[:-1])), size) + 0.5
-    tnew = np.repeat(tsn, size) + ar*dt
-    # alternarive solution: tnew = np.concatenate([t0 + (np.arange(s) + 0.5)*dtloc for t0, s, dtloc in zip(ts, size, dt)])
+    tnew = np.repeat(tsm, size) + ar*dtm
+    dtn = np.concatenate([dt[maskmoving], dtm])
+    qval = quatint(np.concatenate([ts[maskmoving], tnew]))
 
-    exptime = np.concatenate([exptime, dt])
-    qval = quatint(np.concatenate([ts, tnew]))
-    return exptime, qval
+    oruniq, uidx, invidx = hist_quat(qval)
+    exptime = np.zeros(uidx.size, np.double)
+    np.add.at(exptime, invidx, dtn)
+
+    return exptime, qval[uidx]
 
