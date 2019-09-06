@@ -44,7 +44,7 @@ def make_vec_to_sky_hist_fun(vecs, effarea, locwcs, xsize, ysize):
     def hist_vec_to_sky(quat, weight):
         vec_icrs = quat.apply(vecs)
         r, d = vec_to_pol(vec_icrs)
-        x, y = locwcs.all_world2pix(np.array([r, d]).T, 1).T
+        x, y = np.round(locwcs.all_world2pix(np.array([r, d]).T, 1)).T
         locweight = weight*effarea
         return np.histogram2d(x, y, [np.arange(xsize), np.arange(ysize)], weights=locweight)[0].T
     return hist_vec_to_sky
@@ -55,6 +55,31 @@ def make_inverce_vign(vecsky, qval, exp, vignmap, hist):
     idx = np.where(np.all([xy[:,0] > -14.2, xy[:,0] < 14.2, xy[:,1] > -14.2, xy[:,1] < 14.2], axis=0))[0]
     hist[idx] += vignmap(xy[idx])*exp
 
+class VignInt(object):
+    def __init__(self, vecsky, qval, exptime, rg):
+        self.vecsky = vecsky
+        self.qval = qval
+        self.exptime = exptime
+        self.rg = rg
+        self.iter_dimension = self.iter_along_time
+
+    def __call__(self, i):
+        return self.iter_dimension(i)
+
+    def iter_along_time(self, i):
+        vecdet = self.qval.apply(self.vecsky[i], inverse=True)
+        xy = vec_to_offset_pairs(vecdet)
+        mask = np.all([xy[:,0] > -14.2, xy[:,0] < 14.2, xy[:,1] > -14.2, xy[:,1] < 14.2], axis=0)
+        return np.sum(self.exptime[mask]*self.rg(xy[mask]))
+
+    def iter_along_coordinate(self, i):
+        vecdet = self.qval[i].apply(self.vecsky, inverse=True)
+        xy = vec_to_offset_pairs(vecdet)
+        mask = np.all([xy[:,0] > -14.2, xy[:,0] < 14.2, xy[:,1] > -14.2, xy[:,1] < 14.2], axis=0)
+        return np.sum(self.exptime[mask]*self.rg(xy[mask]))
+
+
+
 def make_vignmap_for_quat2(locwcs, xsize, ysize, qval, exptime, vignmapfilename, energy=6.):
     vignmapfile = fits.open(vignmapfilename)
     effarea = vignmapfile["Vign_EA"].data["EFFAREA"][
@@ -62,30 +87,16 @@ def make_vignmap_for_quat2(locwcs, xsize, ysize, qval, exptime, vignmapfilename,
     rg = RegularGridInterpolator([vignmapfile["Coord"].data["X"],
                                   vignmapfile["Coord"].data["Y"]],
                                  effarea/effarea.max(), bounds_error=False, fill_value=0.)
-    x = np.repeat(np.arange(xsize - 1) + 1., ysize - 1)
-    y = np.tile(np.arange(ysize - 1) + 1., xsize - 1)
+    x = np.repeat(np.arange(ysize) + 1., xsize)
+    y = np.tile(np.arange(xsize) + 1., ysize)
+    print(x.size, y.size)
     hist = np.zeros(x.size, np.double)
     xy = np.array([x, y]).T
     r, d = locwcs.all_pix2world(xy, 1).T
-    #maskclose = qval.apply([1, 0, 0])
-    """
-    plt.scatter(r, d)
-    plt.show()
-    """
     vecsky = pol_to_vec(r/180.*pi, d/180.*pi)
-
-    i = 0
-    tstart = time.time()
-    for q, e in zip(qval, exptime):
-        i += 1
-        make_inverce_vign(vecsky, q, e, rg, hist)
-        if i == 100:
-            tc = time.time()
-            print("time per 100 computations", tc - tstart)
-            tstart = tc
-            i = 0
-
-    return hist.reshape((xsize - 1, ysize - 1), order="F")
+    pool = Pool(24)
+    hist[:] = pool.map(VignInt(vecsky, qval, exptime, rg), range(x.size))
+    return hist.reshape((ysize, xsize)).T
 
 
 def make_vignmap_for_quat(locwcs, xsize, ysize, qval, exptime, vignmapfilename, energy=6.):
@@ -104,7 +115,7 @@ def make_vignmap_for_quat(locwcs, xsize, ysize, qval, exptime, vignmapfilename, 
     rg = RegularGridInterpolator([vignmapfile["Coord"].data["X"],
                                   vignmapfile["Coord"].data["Y"]],
                                  effarea/effarea.max())
-    x = np.arange(-128, 129)*27.37/257
+    x = (np.arange(-230, 230) + 0.5)*0.0595
     y = np.copy(x)
     x = np.repeat(x, y.size)
     y = np.tile(y, y.size)
@@ -112,12 +123,17 @@ def make_vignmap_for_quat(locwcs, xsize, ysize, qval, exptime, vignmapfilename, 
     vecs = offset_to_vec(x, y)
     worker = make_vec_to_sky_hist_fun(vecs, vmap, locwcs, xsize, ysize)
     hist = sum(worker(q, exp) for q, exp in zip(qval, exptime))
-    return hist
+    return hist/10.
 
 def make_vignmap_mp(args):
-    return make_vignmap_for_quat2(*args)
+    return make_vignmap_for_quat(*args)
 
-def make_expmap_for_urd(urdfile, attfile, locwcs, agti=None):
+def make_expmap_in_wcspix(qval, wcs, rect):
+    x, y = np.arange(segment[0, 0], segment[0, 1]), np.arange(segment[1, 0], segment[1, 1])
+    x, y = np.repeat(x, y.size), np.tile(y, x.size)
+
+
+def make_expmap_for_urd(urdfile, attfile, locwcs, segment, agti=None):
     gti = np.array([urdfile["GTI"].data["START"], urdfile["GTI"].data["STOP"]]).T
     gtiatt = np.array([attfile["ORIENTATION"].data["TIME"][[0, -1]]])
     if not agti is None: gtiatt = sigproc.overall_gti(gtiatt, agti)
@@ -129,16 +145,13 @@ def make_expmap_for_urd(urdfile, attfile, locwcs, agti=None):
     """
     #vignfile = fits.open("/home/andrey/auxiliary/artxc_quicklook/arttools/art-xc_vignea.fits")
     vignfilename = "/srg/a1/work/andrey/art-xc_vignea.fits"
-    xsize = int(locwcs.wcs.crpix[0]*2) + 2
-    ysize = int(locwcs.wcs.crpix[1]*2) + 2
-    pool = Pool(24)
+    xsize = int(locwcs.wcs.crpix[1]*2 + 1)
+    ysize = int(locwcs.wcs.crpix[0]*2 + 1)
 
-    emaps = pool.map(make_vignmap_mp, [(locwcs, xsize, ysize, qval[i::50], exptime[i::50], vignfilename) for i in range(50)])
-    emap = np.sum(emaps, axis=0)
-    #plt.imshow(emap, interpolation="nearest")
-    #plt.show()
-    #emap = make_vignmap_for_quat(locwcs, xsize, ysize, qval, exptime, vignfilename)
-    return emap
+    #emap = make_vignmap_mp([locwcs, xsize, ysize, qval, exptime, vignfilename])
+    pool = Pool(24)
+    emaps = pool.map(make_vignmap_mp, [(locwcs, xsize, ysize, qval[i::51], exptime[i::50], vignfilename) for i in range(50)])
+    return sum(emaps)
 
 
 if __name__ == "__main__":
