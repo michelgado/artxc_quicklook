@@ -4,7 +4,7 @@ from .orientation import get_gyro_quat_as_arr, vec_to_pol, \
 from math import pi
 from scipy.spatial.transform import Rotation, Slerp
 
-DELTASKY = 5./3600./180.*pi
+DELTASKY = 15./3600./180.*pi #previously I set it to be 5''
 """
 optica axis is shifted 11' away of the sattelite x axis, therefore we need some more fine resolution
 5'' binning at the edge of the detector, is rotation take place around its center is 2*pi/9/24

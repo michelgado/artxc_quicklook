@@ -46,7 +46,7 @@ def make_vec_to_sky_hist_fun(vecs, effarea, locwcs, xsize, ysize):
         r, d = vec_to_pol(vec_icrs)
         x, y = np.round(locwcs.all_world2pix(np.array([r, d]).T, 1)).T
         locweight = weight*effarea
-        return np.histogram2d(x, y, [np.arange(xsize), np.arange(ysize)], weights=locweight)[0].T
+        return np.histogram2d(x, y, [np.arange(xsize + 1), np.arange(ysize + 1)], weights=locweight)[0].T
     return hist_vec_to_sky
 
 def make_inverce_vign(vecsky, qval, exp, vignmap, hist):
@@ -145,12 +145,12 @@ def make_expmap_for_urd(urdfile, attfile, locwcs, segment, agti=None):
     """
     #vignfile = fits.open("/home/andrey/auxiliary/artxc_quicklook/arttools/art-xc_vignea.fits")
     vignfilename = "/srg/a1/work/andrey/art-xc_vignea.fits"
-    xsize = int(locwcs.wcs.crpix[1]*2 + 1)
-    ysize = int(locwcs.wcs.crpix[0]*2 + 1)
+    xsize = int(locwcs.wcs.crpix[0]*2 - 1)
+    ysize = int(locwcs.wcs.crpix[1]*2 - 1)
 
     #emap = make_vignmap_mp([locwcs, xsize, ysize, qval, exptime, vignfilename])
     pool = Pool(24)
-    emaps = pool.map(make_vignmap_mp, [(locwcs, xsize, ysize, qval[i::51], exptime[i::50], vignfilename) for i in range(50)])
+    emaps = pool.map(make_vignmap_mp, [(locwcs, xsize, ysize, qval[i::50], exptime[i::50], vignfilename) for i in range(50)])
     return sum(emaps)
 
 
