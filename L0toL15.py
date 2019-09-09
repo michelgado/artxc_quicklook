@@ -19,12 +19,12 @@ ARTCALDBPATH = os.environ["ARTCALDB"]
 indexfname = "artxc_index.fits"
 #caldbindex = pandas.DataFrame(fits.getdata(indexfname, "CIF"))
 
-URDTOTEL = {28: "T1", 
+URDTOTEL = {28: "T1",
             22: "T2",
             23: "T3",
             24: "T4",
             25: "T5",
-            26: "T6", 
+            26: "T6",
             30: "T7"}
 
 
@@ -34,7 +34,7 @@ def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=in
     v000/hart/250719 very dirty, unprotected paths!
     v001/hart/070819 refractored
     """
-  
+
     #Try to open file
     indexfile_path = CALDB_path + indexfile
     try:
@@ -54,7 +54,7 @@ def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=in
 if __name__ == "__main__":
     if len(sys.argv) != 4 or "-h" in sys.argv:
         print("description run like that 'python3 L1toL15.py stem outdir'"\
-                ", where stem is srg_20190727_214739_000") 
+                ", where stem is srg_20190727_214739_000")
         raise ValueError("wrong arguments")
     fname = sys.argv[1]
     stem = fname.rsplit(".")[0]
@@ -68,12 +68,12 @@ if __name__ == "__main__":
 
     attfile = fits.open(attfname)
     attdata = attfile["ORIENTATION"].data[10:]
-    urdfname = fname 
+    urdfname = fname
     urdfile = fits.open(urdfname)
     urddata = urdfile["EVENTS"].data
 
     """
-    queryenergycalib = {"TEL": URDTOTEL[urdfile[1].header["URDN"], 
+    queryenergycalib = {"TEL": URDTOTEL[urdfile[1].header["URDN"],
                         "CAL_NAME": "TCOEF"}
     caldbfilename = caldbindex.query([
     """
@@ -88,18 +88,18 @@ if __name__ == "__main__":
     urddata = urddata[maskshadow]
     mask[mask] = maskshadow
 
-    RA, DEC = get_photons_sky_coord(urddata, 
-                    urdfile["EVENTS"].header["URDN"], 
+    RA, DEC = get_photons_sky_coord(urddata,
+                    urdfile["EVENTS"].header["URDN"],
                     attdata)
     maskenergy, ENERGY, xc, yc = get_events_energy(urddata,
                                     urdfile["HK"].data, caldbfile)
     mask[mask] = maskenergy
     newurdtable = fits.BinTableHDU.from_columns(
             [fits.Column(name=cd.name, array=np.copy(cd.array[mask]), format=cd.format, unit=cd.unit) \
-                for cd in urddata.columns] + 
+                for cd in urddata.columns] +
             [fits.Column(name="ENERGY", array=ENERGY, format="1D", unit="keV"),
-             fits.Column(name="RA", array=np.copy(RA[maskenergy]), format="1D", unit="deg"),  
-             fits.Column(name="DEC", array=np.copy(DEC[maskenergy]), format="1D", unit="deg")])
+             fits.Column(name="RA", array=np.copy(RA[maskenergy]*180./pi), format="1D", unit="deg"),
+             fits.Column(name="DEC", array=np.copy(DEC[maskenergy]*180./pi), format="1D", unit="deg")])
 
     h = copy.copy(urdfile["EVENTS"].header)
     newurdtable.name = "EVENTS"

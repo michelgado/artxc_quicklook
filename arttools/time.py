@@ -62,11 +62,6 @@ def hist_orientation(attdata, gti, v0=None):
     ra, dec, roll = quat_to_pol_and_roll(quatint(tnew))
 
     """
-    import matplotlib.pyplot as plt
-    plt.scatter(ra, dec)
-    plt.show()
-    """
-    """
     to do:
     formally, this subroutine should not know that optic axis is [1, 0, 0],
     need to fix this

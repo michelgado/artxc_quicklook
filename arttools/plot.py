@@ -44,9 +44,9 @@ def make_vec_to_sky_hist_fun(vecs, effarea, locwcs, xsize, ysize):
     def hist_vec_to_sky(quat, weight):
         vec_icrs = quat.apply(vecs)
         r, d = vec_to_pol(vec_icrs)
-        x, y = np.round(locwcs.all_world2pix(np.array([r, d]).T, 1)).T
+        x, y = np.round(locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1)).T
         locweight = weight*effarea
-        return np.histogram2d(x, y, [np.arange(xsize + 1), np.arange(ysize + 1)], weights=locweight)[0].T
+        return np.histogram2d(x, y, [np.arange(xsize + 1) - 0.5, np.arange(ysize + 1) - 0.5], weights=locweight)[0].T
     return hist_vec_to_sky
 
 def make_inverce_vign(vecsky, qval, exp, vignmap, hist):
@@ -93,7 +93,7 @@ def make_vignmap_for_quat2(locwcs, xsize, ysize, qval, exptime, vignmapfilename,
     hist = np.zeros(x.size, np.double)
     xy = np.array([x, y]).T
     r, d = locwcs.all_pix2world(xy, 1).T
-    vecsky = pol_to_vec(r/180.*pi, d/180.*pi)
+    vecsky = pol_to_vec(r, d)
     pool = Pool(24)
     hist[:] = pool.map(VignInt(vecsky, qval, exptime, rg), range(x.size))
     return hist.reshape((ysize, xsize)).T

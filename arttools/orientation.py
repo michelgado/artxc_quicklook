@@ -37,8 +37,8 @@ def get_photons_vectors(urddata, URDN, attdata, subscale=1):
     return phvec
 
 def vec_to_pol(phvec):
-    dec = np.arctan(phvec[:,2]/np.sqrt(phvec[:,0]**2. + phvec[:,1]**2.))*180./pi
-    ra = (np.arctan2(phvec[:,1], phvec[:,0])%(2.*pi))*180./pi
+    dec = np.arctan(phvec[:,2]/np.sqrt(phvec[:,0]**2. + phvec[:,1]**2.))
+    ra = (np.arctan2(phvec[:,1], phvec[:,0])%(2.*pi))
     return ra, dec
 
 def pol_to_vec(phi, theta):
@@ -94,5 +94,3 @@ def extract_raw_gyro(gyrodata, qadd=qrot0):
     """
     qfin = get_gyro_quat(gyrodata)*qadd
     return quat_to_pol_and_roll(qfin)
-
-
