@@ -46,7 +46,7 @@ def make_vec_to_sky_hist_fun(vecs, effarea, locwcs, xsize, ysize):
         r, d = vec_to_pol(vec_icrs)
         x, y = np.round(locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1)).T
         locweight = weight*effarea
-        return np.histogram2d(x, y, [np.arange(xsize + 1) - 0.5, np.arange(ysize + 1) - 0.5], weights=locweight)[0].T
+        return np.histogram2d(x, y, [np.arange(xsize + 1) + 0.5, np.arange(ysize + 1) + 0.5], weights=locweight)[0].T
     return hist_vec_to_sky
 
 def make_inverce_vign(vecsky, qval, exp, vignmap, hist):
