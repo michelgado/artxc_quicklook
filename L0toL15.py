@@ -91,15 +91,15 @@ if __name__ == "__main__":
     RA, DEC = get_photons_sky_coord(urddata,
                     urdfile["EVENTS"].header["URDN"],
                     attdata)
-    maskenergy, ENERGY, xc, yc = get_events_energy(urddata,
+    ENERGY, xc, yc, grades = get_events_energy(urddata,
                                     urdfile["HK"].data, caldbfile)
-    mask[mask] = maskenergy
     newurdtable = fits.BinTableHDU.from_columns(
             [fits.Column(name=cd.name, array=np.copy(cd.array[mask]), format=cd.format, unit=cd.unit) \
                 for cd in urddata.columns] +
             [fits.Column(name="ENERGY", array=ENERGY, format="1D", unit="keV"),
-             fits.Column(name="RA", array=np.copy(RA[maskenergy]*180./pi), format="1D", unit="deg"),
-             fits.Column(name="DEC", array=np.copy(DEC[maskenergy]*180./pi), format="1D", unit="deg")])
+             fits.Column(name="RA", array=np.copy(RA*180./pi), format="1D", unit="deg"),
+             fits.Column(name="DEC", array=np.copy(DEC*180./pi), format="1D", unit="deg"),
+             fits.Column(name="GRADE", array=grages, format="1J")])
 
     h = copy.copy(urdfile["EVENTS"].header)
     newurdtable.name = "EVENTS"

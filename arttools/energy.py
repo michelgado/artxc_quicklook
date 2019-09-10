@@ -1,6 +1,12 @@
 from scipy.interpolate import interp1d
 import numpy as np
 
+GRADESI = np.ones(64)*(-1)
+GRADESI[18] = 0 #single central events
+GRADESI[[50, 26, 22, 19, 54, 51, 30, 27]] = [1, 2, 3, 4, 5, 6, 7, 8] #double events
+GRADESI[[58, 62, 59, 23, 56, 31, 63]] = [9, 10, 11, 12, 13, 14, 15] #tripple events
+
+
 def PHA_to_PI(PHA, strip, Temp, caldb):
     """
     converts digital signals in strips in to pulse invariants with  formula c0_0 + c0_1*T + (c1_0 + c1_1*T)*PHA + (c2_0 + c2_1*T)*PHA*PHA
@@ -27,11 +33,12 @@ def mkeventindex(strip):
     coord[np.logical_not(mask)] = -1
     return coord, mask
 
+def bitmask_to_grade(bitmask):
+    maskint = np.packbits(bitmask, axis=0)
+    return GRADESI[maskint]
 
-def apply_inner_mask(outmask, inmask):
-    outmask[outmask] = inmask
 
-
+def grade_convention(mask):
 
 def get_events_energy(eventlist, hkdata, caldb):
     """
@@ -57,6 +64,9 @@ def get_events_energy(eventlist, hkdata, caldb):
     whoala, you got your energy dude
     """
     print("total events", eventlist.size)
+    emean = np.zeros(eventlist.size, np.double)
+    bitmask = np.zeros((8, emean.size), np.bool)
+
 
 
     m0 = filter_edge_strips(eventlist)
@@ -74,6 +84,7 @@ def get_events_energy(eventlist, hkdata, caldb):
     PHAB = np.array([eventlist["PHA_BOT_SUB1"], eventlist["PHA_BOT"], eventlist["PHA_BOT_ADD1"]])
     energb = random_uniform(PHAB, rawx, T, botcal) #PHA_to_PI(PHAB, rawx, T, botcal)
     maskb = np.logical_and(maskb, energb > botcal["THRESHOLD"][rawx])
+    bitmask[5:8, m0] = maskb
     print("bot dist", np.unique(maskb.sum(axis=0), return_counts=True))
 
     rawy, maskt = mkeventindex(eventlist["RAW_Y"])
@@ -81,6 +92,7 @@ def get_events_energy(eventlist, hkdata, caldb):
     PHAT = np.array([eventlist["PHA_TOP_SUB1"], eventlist["PHA_TOP"], eventlist["PHA_TOP_ADD1"]])
     energt = random_uniform(PHAT, rawy, T, topcal) #PHA_to_PI(PHAT, rawy, T, topcal)
     maskt = np.logical_and(maskt, energt > topcal["THRESHOLD"][rawy])
+    bitmask[2:5, m0] = maskt
     print("top dist", np.unique(maskt.sum(axis=0), return_counts=True))
 
     """
@@ -93,27 +105,15 @@ def get_events_energy(eventlist, hkdata, caldb):
     xc = np.sum(energb*maskb*rawx, axis=0)/np.sum(maskb*energb, axis=0)
     yc = np.sum(energt*maskt*rawy, axis=0)/np.sum(maskb*energb, axis=0)
 
-    #xc = rawx[1]
-    #yc = rawy[1]
-    #centralzone = ((xc - 23.5)**2. + (yc - 23.5)**2.) < 25.**2.
-    #centralzone = ((rawx[1] - 23.5)**2. + (rawy[1] - 23.5)**2.) < 25.**2.
-    centralzone = np.ones(xc.size, np.bool)
-    m0[m0] = centralzone
-    #m0[np.arange(m0.size)[m0][np.logical_not(centralzone)]] = False
-    bfirst = botcal[rawx[:,0]]
-    xc, yc = xc[centralzone], yc[centralzone]
-    energb, energt, sigmab, sigmat, rawx, rawy, maskb, maskt = (arr[:, centralzone] for arr in [energb, energt, sigmab, sigmat, rawx, rawy, maskb, maskt])
-
-
     ebot = np.sum(energb*maskb, axis=0)
     sigmabotsq = np.sum(sigmab**2.*maskb, axis=0)
     etop = np.sum(energt*maskt, axis=0)
     sigmatopsq = np.sum(sigmat**2.*maskt, axis=0)
-    emean = (ebot*sigmatopsq + etop*sigmabotsq)/(sigmatopsq + sigmabotsq)
+    emean[m0] = (ebot*sigmatopsq + etop*sigmabotsq)/(sigmatopsq + sigmabotsq)
     """
     urd 28 additional correction
     """
-    emean = -0.2504 + 1.0082*emean - 6.10E-5*emean**2.
-    return m0, emean, xc, yc
+    emean[m0] = -0.2504 + 1.0082*emean - 6.10E-5*emean**2.
+    return emean, xc, yc, bitmask_to_grade(bitmask)
 
 
