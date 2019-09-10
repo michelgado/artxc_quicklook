@@ -34,7 +34,7 @@ def mkeventindex(strip):
     return coord, mask
 
 def bitmask_to_grade(bitmask):
-    maskint = np.packbits(bitmask, axis=0)
+    maskint = np.packbits(bitmask, axis=0)[0]
     return GRADESI[maskint]
 
 
@@ -111,7 +111,7 @@ def get_events_energy(eventlist, hkdata, caldb):
     """
     urd 28 additional correction
     """
-    emean[m0] = -0.2504 + 1.0082*emean - 6.10E-5*emean**2.
+    emean[m0] = -0.2504 + 1.0082*emean[m0] - 6.10E-5*emean[m0]**2.
     return emean, xc, yc, bitmask_to_grade(bitmask)
 
 

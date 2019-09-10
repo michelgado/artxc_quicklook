@@ -36,14 +36,14 @@ def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=in
     """
 
     #Try to open file
-    indexfile_path = CALDB_path + indexfile
+    indexfile_path = os.path.join(CALDB_path, indexfile)
     try:
         caldbindx   = fits.open(indexfile_path)
         caldbdata   = caldbindx[1].data
         for entry in caldbdata:
             print(entry["CAL_CNAME"], caldb_entry_type, entry["INSTRUME"], telescope)
             if entry['CAL_CNAME'] == caldb_entry_type and entry['INSTRUME']==telescope:
-                return_path = CALDB_path +entry['CAL_DIR'] +entry['CAL_FILE']
+                return_path = os.path.join(CALDB_path, entry['CAL_DIR'], entry['CAL_FILE'])
                 return return_path
         return None
 
@@ -93,13 +93,14 @@ if __name__ == "__main__":
                     attdata)
     ENERGY, xc, yc, grades = get_events_energy(urddata,
                                     urdfile["HK"].data, caldbfile)
+    print(grades.shape)
     newurdtable = fits.BinTableHDU.from_columns(
             [fits.Column(name=cd.name, array=np.copy(cd.array[mask]), format=cd.format, unit=cd.unit) \
                 for cd in urddata.columns] +
             [fits.Column(name="ENERGY", array=ENERGY, format="1D", unit="keV"),
              fits.Column(name="RA", array=np.copy(RA*180./pi), format="1D", unit="deg"),
              fits.Column(name="DEC", array=np.copy(DEC*180./pi), format="1D", unit="deg"),
-             fits.Column(name="GRADE", array=grages, format="1J")])
+             fits.Column(name="GRADE", array=grades, format="I")])
 
     h = copy.copy(urdfile["EVENTS"].header)
     newurdtable.name = "EVENTS"
