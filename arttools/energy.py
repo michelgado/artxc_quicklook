@@ -31,12 +31,12 @@ def mkeventindex(strip):
 def apply_inner_mask(outmask, inmask):
     outmask[outmask] = inmask
 
-    
+
 
 def get_events_energy(eventlist, hkdata, caldb):
     """
-    from the captured event, which described with 6 16bit int numbers (left,right,central; top and bot digital amplitudes), 
-    and 6 double values for voltages and temperatures, using calibration data one have to restore the energy of the photon, 
+    from the captured event, which described with 6 16bit int numbers (left,right,central; top and bot digital amplitudes),
+    and 6 double values for voltages and temperatures, using calibration data one have to restore the energy of the photon,
     which resulted the triger and stored event
 
     The algorithm is caused by the design of the detector and was long tested in on-ground test with 29 urd,
@@ -48,10 +48,10 @@ def get_events_energy(eventlist, hkdata, caldb):
     1. with the stored in caldb threashold for the digital signal, define wether to consider
         a signal in particular strip to be caused by the energy release, or by the stochastick signal variation around ground level.
     2. for the strips, which passed previous test, estimate energy in keV, captured by particular strip and sum them
-    3. evaluate assumed dispersion of the signal in each strip 
+    3. evaluate assumed dispersion of the signal in each strip
         this step is performed with the help of two float values:
-        FWHM - noise level for the particular strip measured for T = 0 C 
-        and FWHM_T_deg - a linear coefficient, defining additional noise component 
+        FWHM - noise level for the particular strip measured for T = 0 C
+        and FWHM_T_deg - a linear coefficient, defining additional noise component
         FWHM(T) = FWHM + FWHM_T_def*T1
     4. estimate weighted energy of the photon using "independent" energy estimation in the top and bottom strips.
     whoala, you got your energy dude
@@ -59,11 +59,11 @@ def get_events_energy(eventlist, hkdata, caldb):
     print("total events", eventlist.size)
 
 
-    m0 = filter_edge_strips(eventlist) 
+    m0 = filter_edge_strips(eventlist)
     eventlist = eventlist[m0]
 
-    T = interp1d(hkdata["TIME"], hkdata["TD1"], 
-            bounds_error=False, kind="linear", 
+    T = interp1d(hkdata["TIME"], hkdata["TD1"],
+            bounds_error=False, kind="linear",
             fill_value=(hkdata["TD1"][0], hkdata["TD1"][-1]))(eventlist["TIME"])
 
     botcal = caldb["BOT"].data
@@ -92,7 +92,7 @@ def get_events_energy(eventlist, hkdata, caldb):
     energb, energt, sigmab, sigmat, rawx, rawy, maskb, maskt = (arr[:, atleastone] for arr in [energb, energt, sigmab, sigmat, rawx, rawy, maskb, maskt])
     xc = np.sum(energb*maskb*rawx, axis=0)/np.sum(maskb*energb, axis=0)
     yc = np.sum(energt*maskt*rawy, axis=0)/np.sum(maskb*energb, axis=0)
-    
+
     #xc = rawx[1]
     #yc = rawy[1]
     #centralzone = ((xc - 23.5)**2. + (yc - 23.5)**2.) < 25.**2.

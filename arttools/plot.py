@@ -6,10 +6,9 @@ from astropy.wcs import WCS
 from .orientation import extract_raw_gyro, qrot0, ART_det_QUAT, \
         get_gyro_quat, filter_gyrodata, vec_to_pol, pol_to_vec
 from ._det_spatial import raw_xy_to_vec, offset_to_vec, urd_to_vec, vec_to_offset_pairs
-from .time import hist_orientation
+from .time import hist_orientation, gti_intersection
 from astropy.io import fits
 from math import pi, cos, sin
-import sigproc
 from multiprocessing import Pool, cpu_count
 import copy
 import time
@@ -136,8 +135,8 @@ def make_expmap_in_wcspix(qval, wcs, rect):
 def make_expmap_for_urd(urdfile, attfile, locwcs, segment, agti=None):
     gti = np.array([urdfile["GTI"].data["START"], urdfile["GTI"].data["STOP"]]).T
     gtiatt = np.array([attfile["ORIENTATION"].data["TIME"][[0, -1]]])
-    if not agti is None: gtiatt = sigproc.overall_gti(gtiatt, agti)
-    gti = sigproc.overall_gti(gtiatt, gti)
+    if not agti is None: gtiatt = gti_intersection(gtiatt, agti)
+    gti = gti_intersection(gtiatt, gti)
     exptime, qval = hist_orientation(attfile["ORIENTATION"].data, gti)
     qval = qval*qrot0*ART_det_QUAT[urdfile["EVENTS"].header["URDN"]]
     """

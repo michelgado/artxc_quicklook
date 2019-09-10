@@ -12,6 +12,68 @@ optica axis is shifted 11' away of the sattelite x axis, therefore we need some 
 """
 DELTAROLL = 2.*pi/24./18.
 
+def check_gti_shape(gti):
+    if gti.ndim != 2 or gti.shape[1] != 2:
+        raise ValueError("gti is expected to be a numpy array of shape (n, 2), good luck next time")
+
+def filter_nonitersect(gti, gtifilt):
+    if gtifilt.size == 0 or gti.size == 0:
+        return np.empty((0, 2), np.double)
+    gti = gti[(gti[:, 0] < gtifilt[-1, 1]) & (gti[:, 1] > gtifilt[0, 0])]
+    gtis = np.searchsorted(gtifilt[:,1], gti[:,0])
+    mask = gti[:,1] > gtifilt[gtis, 0]
+    return gti[mask]
+
+def gti_union(gti):
+    """
+    we want to erase all casess when time intervals in gti are intersected
+
+    to do that we use a simple algorithm:
+
+    we want to find all start and end times for which all
+    start and end times of other gtis are greater or lesser....
+    such start and end times contain intersected gti intervals and will be start and end times of new gti
+
+    1. sort gtis by the start time in ascending order
+    1.1 find sorted index of raveled  sorted gtis where start times ar evend and end times are odd
+    1.2 check start times which have sorted index equal to their positional indexes
+    1.3 extract these times - they are start times for new gtis
+
+    2. repeat for end times
+
+    3. compbine obtained start and end times in new gti
+    """
+    gtiss = np.argsort(gti[:,0])
+    gtise = np.argsort(gti[:,1])
+
+    gtirs = np.ravel(gti[gtiss, :])
+    gtire = np.ravel(gti[gtise, :])
+    gtiidxs = np.argsort(gtirs)
+    gtiidxe = np.argsort(gtire)
+
+    newgti = np.array([
+        gti[gtiss[np.arange(0, gtiidxs.size, 2) == gtiidxs[0::2]], 0],
+        gti[gtise[np.arange(1, gtiidxe.size, 2) == gtiidxe[1::2]], 1]
+                ]).T
+
+    return newgti
+
+def gti_intersection(gti1, gti2):
+    check_gti_shape(gti1)
+    check_gti_shape(gti2)
+
+    gti1 = gti_union(gti1)
+    gti2 = gti_union(gti2)
+
+    gti1 = filter_nonitersect(gti1, gti2)
+    gti2 = filter_nonitersect(gti2, gti1)
+
+    tend = np.concatenate([gti1[intervals_in_gti(gti2, gti1[:,1]), 1], gti2[intervals_in_gti(gti1, gti2[:,1]), 1]])
+    tend = np.unique(tend)
+    ts = np.sort(np.concatenate([gti1[:,0], gti2[:,0]]))
+    gtinew = np.array([ts[np.searchsorted(ts, tend) - 1], tend]).T
+    return gtinew
+
 
 def merge_consecutive_kvea_gtis(urdfile):
     pass
