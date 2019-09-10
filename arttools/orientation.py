@@ -69,6 +69,7 @@ def get_gyro_quat_as_arr(gyrodata):
     return np.array([gyrodata["QORT_%d" % i] for i in [1,2,3,0]]).T
 
 def get_bokz_quat(quatdata):
+    pass
 
 
 def quat_to_pol_and_roll(qfin, opaxis=[1, 0, 0], north=[0, 0, 1]):

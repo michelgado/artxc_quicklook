@@ -38,8 +38,6 @@ def bitmask_to_grade(bitmask):
     return GRADESI[maskint]
 
 
-def grade_convention(mask):
-
 def get_events_energy(eventlist, hkdata, caldb):
     """
     from the captured event, which described with 6 16bit int numbers (left,right,central; top and bot digital amplitudes),
