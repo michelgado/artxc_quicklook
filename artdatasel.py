@@ -22,6 +22,8 @@ Stand-alone version v001
 15/08/19 v001a hart
     added UI
     all hail the hypnotoad
+19/08/19 v001b hart
+    all hail the hypnotoad    
 '''
 
 import os, shutil, argparse
@@ -133,7 +135,7 @@ def hk_gti(hk, VOLTAGE_LIMIT):
 
 
 
-def select_data_from_L0_STRICT_POINTING(stem, subvers, obsstart, obsstop, src_ra, src_dec, obsid, modules='1111111'):
+def select_data_from_L0_STRICT_POINTING(stem, subvers, obsstart, obsstop, src_ra, src_dec, obsid, gyrofile, modules='1111111'):
 
     #Attitude constants
     ANG_SPEED_TOLERANCE = 1. #arcsec/s    
@@ -160,9 +162,10 @@ def select_data_from_L0_STRICT_POINTING(stem, subvers, obsstart, obsstop, src_ra
     print ('Looking for data for obsid:',obsid)
     print ('starting at:',obsisostart)
     print ('  ending at:',obsisostop)
-    MJDREF  =            51543.875
-    predicted_obsonboardstart = (obsisostart.mjd - MJDREF)*86400
-    predicted_obsonboardstop  = (obsisostop.mjd - MJDREF)*86400
+    MJDREF      = 51543.875
+    mjdref_time = Time(MJDREF, format='mjd') 
+    predicted_obsonboardstart = (obsisostart - mjdref_time).sec
+    predicted_obsonboardstop  = (obsisostop - mjdref_time).sec
     
     gyro_path = L1 + stem+'_'+subvers+'_gyro_att.fits'
     attfile = fits.open(gyro_path)
@@ -220,6 +223,7 @@ def select_data_from_L0_STRICT_POINTING(stem, subvers, obsstart, obsstop, src_ra
         gti_total   = np.sum(gti_stop-gti_start)
         gti = np.array([gti_start,gti_stop]).T
         mjdref = float(evtlist['EVENTS'].header['MJDREF'])
+        mjdref_time = Time(mjdref, format='mjd')
         mjdstart, mjdstop = mjdref + gti_start[0]/86400 , mjdref + gti_stop[-1]/86400  
         isosta, isosto = Time(mjdstart, format='mjd').iso, Time(mjdstop, format='mjd').iso
         print ('events from:',isosta)
@@ -235,8 +239,9 @@ def select_data_from_L0_STRICT_POINTING(stem, subvers, obsstart, obsstop, src_ra
             print ('!end of observation is truncated!')
             overall_stop = isosto
             
-        obsonboardstart = (overall_start.mjd - mjdref)*86400
-        obsonboardstop  = (overall_stop.mjd - mjdref)*86400
+        obsonboardstart = (overall_start - mjdref_time).sec
+        obsonboardstop  = (overall_stop - mjdref_time).sec
+        
         print ('selected ',np.round(obsonboardstop-obsonboardstart),' s')
         obs_gti   = np.array([[obsonboardstart],[obsonboardstop]]).T
         gti = overall_gti(gti, obs_gti)
@@ -252,6 +257,214 @@ def select_data_from_L0_STRICT_POINTING(stem, subvers, obsstart, obsstop, src_ra
         evtlist[1].header['RA_OBJ'] = str(src_ra)
         evtlist[1].header['DEC_OBJ'] = str(src_dec)
         evtlist[1].header['ObsID'] = str(obsid)
+        evtlist[1].header['GYROFILE'] = str(gyrofile)
+        evtlist[1].header['OBSTYPE'] = 'POINTING'
+
+        outfile = fits.HDUList([evtlist[0],evtlist[1],evtlist[2], gtitable])
+        tmpname  = 'art'+obsid+'_urd'+module+'_tmp.fits'
+        clfile  = 'art'+obsid+telname+'_cl.fits'
+        REMOVE_TMP_FILE = 'rm {tmpfile}'
+        try:
+            run(REMOVE_TMP_FILE.format(tmpfile=clfile))
+            run(REMOVE_TMP_FILE.format(tmpfile=tmpname))
+        except:
+            pass
+        outfile.writeto(tmpname, overwrite=True)
+        RUN_GTIFILTER="export HEADASPROMPT=/dev/null;fcopy infile='{infile}[gtifilter()]' outfile='!{outfile}'"
+        run(RUN_GTIFILTER.format(infile=tmpname,outfile=tmpname))
+        RUN_GTIMERGE="export HEADASPROMPT=/dev/null;ftadjustgti infile='{infile}[GTI]' outfile={outfile} maxgap={maxgap}"
+        run(RUN_GTIMERGE.format(maxgap=str(GTI_TOLERANCE), infile=tmpname, outfile=clfile))
+        RUN_HKFILTER="export HEADASPROMPT=/dev/null;fcopy infile='{infile}[HK][TIME.ge.{start}&&TIME.le.{stop}]' outfile='!{outfile}'"
+        run(RUN_HKFILTER.format(infile=clfile,start=obsonboardstart-100., stop=obsonboardstop+100.,outfile=clfile))
+        run(REMOVE_TMP_FILE.format(tmpfile=tmpname))
+
+
+def select_data_from_L0_STRICT_SCAN(stem, subvers, obsstart, obsstop, src_ra, src_dec, obsid,gyrofile, modules='1111111'):
+
+    #Attitude constants
+#    ANG_SPEED_TOLERANCE = 240. #arcsec/s    
+    #During pointing angular speed of GYROS should not exceed ANG_SPEED_TOLERANCE 
+#    POINTING_TOLERANCE  = 60.*30. #arcsec
+    #During the pointing GYROS axis should have an offset
+    #from source position that is smaller than POINTING_TOLERANCE
+    #Hk constants
+    VOLTAGE_LIMIT = -95. #V
+    #Voltage at detector should be less than VOLTAGE_LIMIT
+    
+    GTI_TOLERANCE = 0.02 #s
+    #GTIs with gap less than 0.02 s will be merged
+    
+    wdir      = '/srg/a1/work/oper/data/2019/'
+    L0        = wdir + stem+'/L0/'
+    L1        = wdir + stem+'/L1/'
+    stem_tail = '_urd.fits'
+      
+    
+    
+    obsisostart, obsisostop = Time(obsstart.replace('.','-'), format='iso'),\
+                              Time(obsstop.replace('.','-'), format='iso')
+    print ('Looking for data for obsid:',obsid)
+    print ('starting at:',obsisostart)
+    print ('  ending at:',obsisostop)
+    MJDREF      = 51543.875
+    mjdref_time = Time(MJDREF, format='mjd') 
+    predicted_obsonboardstart = (obsisostart - mjdref_time).sec
+    predicted_obsonboardstop  = (obsisostop - mjdref_time).sec
+    
+    module_names     = ['02','04','08','10','20','40','80']
+    telescope_names  = ['_t1','_t2','_t3','_t4','_t5','_t6','_t7']    
+    selected_modules = []
+    for (idx, module_name) in zip(modules, module_names):
+        if idx=='1':
+            selected_modules.append(module_name)
+    for module,telname in zip(selected_modules,telescope_names):
+        evtlist_path = L0 + stem +'_'+subvers+'.'+ module + stem_tail
+        print ("Opened URD"+module+" eventlist:",evtlist_path)
+        evtlist = fits.open(evtlist_path)
+        #   read GTI 
+        gti_start   = np.array(evtlist['GTI'].data['START'])
+        gti_stop    = np.array(evtlist['GTI'].data['STOP'])
+        gti_total   = np.sum(gti_stop-gti_start)
+        gti = np.array([gti_start,gti_stop]).T
+        mjdref = float(evtlist['EVENTS'].header['MJDREF'])
+        mjdref_time = Time(mjdref, format='mjd')
+        mjdstart, mjdstop = mjdref + gti_start[0]/86400 , mjdref + gti_stop[-1]/86400  
+        isosta, isosto = Time(mjdstart, format='mjd').iso, Time(mjdstop, format='mjd').iso
+        print ('events from:',isosta)
+        print ('      up to:',isosto)
+        print('Total observation length',int(np.round(gti_total,0)),' s')
+        overall_start, overall_stop = obsisostart, obsisostop
+        if isosta<=obsisostart and isosto>=obsisostop:
+            print ('!all observation is inside the data!')
+        elif isosta>obsisostart:
+            print ('!beginning of observation is truncated!')
+            overall_start = isosta
+        elif isosto<obsisostop:
+            print ('!end of observation is truncated!')
+            overall_stop = isosto
+            
+        obsonboardstart = (overall_start - mjdref_time).sec
+        obsonboardstop  = (overall_stop - mjdref_time).sec
+        
+        print ('selected ',np.round(obsonboardstop-obsonboardstart),' s')
+        obs_gti   = np.array([[obsonboardstart],[obsonboardstop]]).T
+        gti = overall_gti(gti, obs_gti)
+        v_gti =  hk_gti(evtlist['HK'].data, VOLTAGE_LIMIT)
+        total_gti = merge_gti_intersections(overall_gti(gti, v_gti)).T
+
+        c1 = fits.Column(name='START', array=total_gti[0], format='1D', unit='sec')
+        c2 = fits.Column(name='STOP', array=total_gti[1], format='1D', unit='sec')
+        gtitable = fits.BinTableHDU().from_columns([c1, c2])
+        gtitable.name = 'GTI'
+        gtitable.header = evtlist['GTI'].header
+        evtlist[1].header['RA_OBJ'] = str(src_ra)
+        evtlist[1].header['DEC_OBJ'] = str(src_dec)
+        evtlist[1].header['ObsID'] = str(obsid)
+        evtlist[1].header['GYROFILE'] = str(gyrofile)
+        evtlist[1].header['OBSTYPE'] = 'SCAN'
+
+        outfile = fits.HDUList([evtlist[0],evtlist[1],evtlist[2], gtitable])
+        tmpname  = 'art'+obsid+'_urd'+module+'_tmp.fits'
+        clfile  = 'art'+obsid+telname+'_cl.fits'
+        REMOVE_TMP_FILE = 'rm {tmpfile}'
+        try:
+            run(REMOVE_TMP_FILE.format(tmpfile=clfile))
+            run(REMOVE_TMP_FILE.format(tmpfile=tmpname))
+        except:
+            pass
+        outfile.writeto(tmpname, overwrite=True)
+        RUN_GTIFILTER="export HEADASPROMPT=/dev/null;fcopy infile='{infile}[gtifilter()]' outfile='!{outfile}'"
+        run(RUN_GTIFILTER.format(infile=tmpname,outfile=tmpname))
+        RUN_GTIMERGE="export HEADASPROMPT=/dev/null;ftadjustgti infile='{infile}[GTI]' outfile={outfile} maxgap={maxgap}"
+        run(RUN_GTIMERGE.format(maxgap=str(GTI_TOLERANCE), infile=tmpname, outfile=clfile))
+        RUN_HKFILTER="export HEADASPROMPT=/dev/null;fcopy infile='{infile}[HK][TIME.ge.{start}&&TIME.le.{stop}]' outfile='!{outfile}'"
+        run(RUN_HKFILTER.format(infile=clfile,start=obsonboardstart-100., stop=obsonboardstop+100.,outfile=clfile))
+        run(REMOVE_TMP_FILE.format(tmpfile=tmpname))
+
+def select_data_from_L0_STRICT_SLEW(stem, subvers, obsstart, obsstop, src_ra, src_dec, obsid,gyrofile, modules='1111111'):
+
+    #Attitude constants
+#    ANG_SPEED_TOLERANCE = 240. #arcsec/s    
+    #During pointing angular speed of GYROS should not exceed ANG_SPEED_TOLERANCE 
+#    POINTING_TOLERANCE  = 60.*30. #arcsec
+    #During the pointing GYROS axis should have an offset
+    #from source position that is smaller than POINTING_TOLERANCE
+    #Hk constants
+    VOLTAGE_LIMIT = -95. #V
+    #Voltage at detector should be less than VOLTAGE_LIMIT
+    
+    GTI_TOLERANCE = 0.02 #s
+    #GTIs with gap less than 0.02 s will be merged
+    
+    wdir      = '/srg/a1/work/oper/data/2019/'
+    L0        = wdir + stem+'/L0/'
+    L1        = wdir + stem+'/L1/'
+    stem_tail = '_urd.fits'
+      
+    
+    
+    obsisostart, obsisostop = Time(obsstart.replace('.','-'), format='iso'),\
+                              Time(obsstop.replace('.','-'), format='iso')
+    print ('Looking for data for obsid:',obsid)
+    print ('starting at:',obsisostart)
+    print ('  ending at:',obsisostop)
+    MJDREF      = 51543.875
+    mjdref_time = Time(MJDREF, format='mjd') 
+    predicted_obsonboardstart = (obsisostart - mjdref_time).sec
+    predicted_obsonboardstop  = (obsisostop - mjdref_time).sec
+    
+    module_names     = ['02','04','08','10','20','40','80']
+    telescope_names  = ['_t1','_t2','_t3','_t4','_t5','_t6','_t7']    
+    selected_modules = []
+    for (idx, module_name) in zip(modules, module_names):
+        if idx=='1':
+            selected_modules.append(module_name)
+    for module,telname in zip(selected_modules,telescope_names):
+        evtlist_path = L0 + stem +'_'+subvers+'.'+ module + stem_tail
+        print ("Opened URD"+module+" eventlist:",evtlist_path)
+        evtlist = fits.open(evtlist_path)
+        #   read GTI 
+        gti_start   = np.array(evtlist['GTI'].data['START'])
+        gti_stop    = np.array(evtlist['GTI'].data['STOP'])
+        gti_total   = np.sum(gti_stop-gti_start)
+        gti = np.array([gti_start,gti_stop]).T
+        mjdref = float(evtlist['EVENTS'].header['MJDREF'])
+        mjdref_time = Time(mjdref, format='mjd')
+        mjdstart, mjdstop = mjdref + gti_start[0]/86400 , mjdref + gti_stop[-1]/86400  
+        isosta, isosto = Time(mjdstart, format='mjd').iso, Time(mjdstop, format='mjd').iso
+        print ('events from:',isosta)
+        print ('      up to:',isosto)
+        print('Total observation length',int(np.round(gti_total,0)),' s')
+        overall_start, overall_stop = obsisostart, obsisostop
+        if isosta<=obsisostart and isosto>=obsisostop:
+            print ('!all observation is inside the data!')
+        elif isosta>obsisostart:
+            print ('!beginning of observation is truncated!')
+            overall_start = isosta
+        elif isosto<obsisostop:
+            print ('!end of observation is truncated!')
+            overall_stop = isosto
+            
+        obsonboardstart = (overall_start - mjdref_time).sec
+        obsonboardstop  = (overall_stop - mjdref_time).sec
+        
+        print ('selected ',np.round(obsonboardstop-obsonboardstart),' s')
+        obs_gti   = np.array([[obsonboardstart],[obsonboardstop]]).T
+        gti = overall_gti(gti, obs_gti)
+        v_gti =  hk_gti(evtlist['HK'].data, VOLTAGE_LIMIT)
+        total_gti = merge_gti_intersections(overall_gti(gti, v_gti)).T
+
+        c1 = fits.Column(name='START', array=total_gti[0], format='1D', unit='sec')
+        c2 = fits.Column(name='STOP', array=total_gti[1], format='1D', unit='sec')
+        gtitable = fits.BinTableHDU().from_columns([c1, c2])
+        gtitable.name = 'GTI'
+        gtitable.header = evtlist['GTI'].header
+        evtlist[1].header['RA_OBJ'] = str(src_ra)
+        evtlist[1].header['DEC_OBJ'] = str(src_dec)
+        evtlist[1].header['ObsID'] = str(obsid)
+        evtlist[1].header['GYROFILE'] = str(gyrofile)
+        evtlist[1].header['OBSTYPE'] = 'SLEW'
+
         outfile = fits.HDUList([evtlist[0],evtlist[1],evtlist[2], gtitable])
         tmpname  = 'art'+obsid+'_urd'+module+'_tmp.fits'
         clfile  = 'art'+obsid+telname+'_cl.fits'
@@ -272,6 +485,7 @@ def select_data_from_L0_STRICT_POINTING(stem, subvers, obsstart, obsstop, src_ra
 
 
 
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--stem", help="ART-XC stem")
 parser.add_argument("--version", help="data version", default='000')
@@ -281,12 +495,16 @@ parser.add_argument("--obsstop", help="Observation end time, as in PZ")
 parser.add_argument("--ra", help="Source RA")
 parser.add_argument("--dec", help="Source DEC")
 parser.add_argument("--modules", help="Which modules to use 1-use,0-do not use, default=1111111", default='1111111')
+parser.add_argument("--obstype", help="Either POINTING or SCAN", default='no',choices=['POINTING', 'SCAN','SLEW'])
+parser.add_argument("--gyropath", help="Path to gyrofile", default='no')
+
+
 args = parser.parse_args()
     
 
-
-
-select_data_from_L0_STRICT_POINTING(args.stem, args.version, args.obsstart, args.obsstop, float(args.ra), float(args.dec), args.obsid, args.modules)
-
-
-
+if args.obstype == 'POINTING':
+    select_data_from_L0_STRICT_POINTING(args.stem, args.version, args.obsstart, args.obsstop, float(args.ra), float(args.dec), args.obsid, args.gyropath, args.modules)
+if args.obstype == 'SCAN':
+    select_data_from_L0_STRICT_SCAN(args.stem, args.version, args.obsstart, args.obsstop, float(args.ra), float(args.dec), args.obsid, args.gyropath, args.modules)
+if args.obstype == 'SLEW':
+    select_data_from_L0_STRICT_SLEW(args.stem, args.version, args.obsstart, args.obsstop, float(args.ra), float(args.dec), args.obsid, args.gyropath, args.modules)
