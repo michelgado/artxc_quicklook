@@ -66,7 +66,6 @@ def get_events_energy(eventlist, hkdata, caldb):
     bitmask = np.zeros((8, emean.size), np.bool)
 
 
-
     m0 = filter_edge_strips(eventlist)
     eventlist = eventlist[m0]
 
@@ -100,8 +99,10 @@ def get_events_energy(eventlist, hkdata, caldb):
     m0[m0] = atleastone
     print("drop by threshold", atleastone.size - atleastone.sum(), " from ", atleastone.size)
     energb, energt, sigmab, sigmat, rawx, rawy, maskb, maskt = (arr[:, atleastone] for arr in [energb, energt, sigmab, sigmat, rawx, rawy, maskb, maskt])
-    xc = np.sum(energb*maskb*rawx, axis=0)/np.sum(maskb*energb, axis=0)
-    yc = np.sum(energt*maskt*rawy, axis=0)/np.sum(maskb*energb, axis=0)
+    #xc = np.sum(energb*maskb*rawx, axis=0)/np.sum(maskb*energb, axis=0)
+    #yc = np.sum(energt*maskt*rawy, axis=0)/np.sum(maskb*energb, axis=0)
+    xc = rawx[1,:]
+    yc = rawy[1,:]
 
     ebot = np.sum(energb*maskb, axis=0)
     sigmabotsq = np.sum(sigmab**2.*maskb, axis=0)
