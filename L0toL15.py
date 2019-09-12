@@ -72,12 +72,6 @@ if __name__ == "__main__":
     urdfile = fits.open(urdfname)
     urddata = urdfile["EVENTS"].data
 
-    """
-    queryenergycalib = {"TEL": URDTOTEL[urdfile[1].header["URDN"],
-                        "CAL_NAME": "TCOEF"}
-    caldbfilename = caldbindex.query([
-    """
-    print(get_caldb("TCOEF", URDTOTEL[urdfile[1].header["URDN"]]))
     caldbfile = fits.open(get_caldb("TCOEF", URDTOTEL[urdfile[1].header["URDN"]]))
     masktime = (urddata["TIME"] > attdata["TIME"][0]) & (urddata["TIME"] < attdata["TIME"][-1])
     mask = np.copy(masktime)
@@ -93,7 +87,7 @@ if __name__ == "__main__":
                     attdata)
     ENERGY, xc, yc, grades = get_events_energy(urddata,
                                     urdfile["HK"].data, caldbfile)
-    print(grades.shape)
+
     h = copy.copy(urdfile["EVENTS"].header)
     h.pop("NAXIS2")
 
@@ -106,7 +100,5 @@ if __name__ == "__main__":
              fits.Column(name="GRADE", array=grades, format="I")], header=h)
 
     newurdtable.name = "EVENTS"
-    hdulist = [type(hdu)(data = Table(hdu.data), header=hdu.header) for hdu in urdfile]
-    hdulist[1] = newurdtable
     newfile = fits.HDUList([urdfile[0], newurdtable, urdfile[2], urdfile[3]])
     newfile.writeto(os.path.join(outdir, os.path.basename(urdfname)), overwrite=True)

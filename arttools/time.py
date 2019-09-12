@@ -16,6 +16,9 @@ def check_gti_shape(gti):
     if gti.ndim != 2 or gti.shape[1] != 2:
         raise ValueError("gti is expected to be a numpy array of shape (n, 2), good luck next time")
 
+def intervals_in_gti(gti, tlist):
+    return np.searchsorted(gti[:, 0], tlist) - 1 == np.searchsorted(gti[:, 1], tlist)
+
 def filter_nonitersect(gti, gtifilt):
     if gtifilt.size == 0 or gti.size == 0:
         return np.empty((0, 2), np.double)
@@ -55,7 +58,6 @@ def gti_union(gti):
         gti[gtiss[np.arange(0, gtiidxs.size, 2) == gtiidxs[0::2]], 0],
         gti[gtise[np.arange(1, gtiidxe.size, 2) == gtiidxe[1::2]], 1]
                 ]).T
-
     return newgti
 
 def gti_intersection(gti1, gti2):
@@ -74,7 +76,6 @@ def gti_intersection(gti1, gti2):
     gtinew = np.array([ts[np.searchsorted(ts, tend) - 1], tend]).T
     return gtinew
 
-
 def merge_consecutive_kvea_gtis(urdfile):
     pass
 
@@ -82,9 +83,9 @@ def fill_att_gaps(attdata):
     pass
 
 def angular_speed(attdata):
-    ra, dec,
     quat = get_gyro_quat_as_arr(attdata)
     dqrota = np.sum(quat[:, 1:]*quat[:, :-1], axis=1)
+    return dqrota
 
 def mkgtimask(time, gti):
     mask = np.zeros(time.size, np.bool)
@@ -144,17 +145,19 @@ def hist_orientation(attdata, gti, v0=None):
     maskmoving = (dalpha < DELTASKY) & (droll < DELTAROLL)
     qvalstable = qval[maskmoving]
     maskstable = np.logical_not(maskmoving)
-    tsm = (ts - dt/2.)[maskstable]
-    size = np.maximum(dalpha[maskstable]/DELTASKY, droll[maskstable]/DELTAROLL).astype(np.int)
-    dtm = np.repeat(dt[maskstable]/size, size)
-    ar = np.arange(size.sum()) - np.repeat(np.cumsum([0,] + list(size[:-1])), size) + 0.5
-    tnew = np.repeat(tsm, size) + ar*dtm
-    dtn = np.concatenate([dt[maskmoving], dtm])
-    qval = quatint(np.concatenate([ts[maskmoving], tnew]))
+    if np.any(maskstable):
+        tsm = (ts - dt/2.)[maskstable]
+        size = np.maximum(dalpha[maskstable]/DELTASKY, droll[maskstable]/DELTAROLL).astype(np.int)
+        dtm = np.repeat(dt[maskstable]/size, size)
+        ar = np.arange(size.sum()) - np.repeat(np.cumsum([0,] + list(size[:-1])), size) + 0.5
+        tnew = np.repeat(tsm, size) + ar*dtm
+        dtn = np.concatenate([dt[maskmoving], dtm])
+        qval = quatint(np.concatenate([ts[maskmoving], tnew]))
+    else:
+        dtn = dt
 
     oruniq, uidx, invidx = hist_quat(qval)
     exptime = np.zeros(uidx.size, np.double)
     np.add.at(exptime, invidx, dtn)
 
     return exptime, qval[uidx]
-

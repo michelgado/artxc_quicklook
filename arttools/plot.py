@@ -15,7 +15,6 @@ import time
 from scipy.interpolate import RegularGridInterpolator
 import  matplotlib.pyplot as plt
 
-
 def get_rawxy_hist(data):
     img = np.histogram2d(data['RAW_X'], data['RAW_Y'], [np.arange(49) - 0.5,]*2)[0]
     return img
@@ -32,19 +31,14 @@ def get_sky_image(urddata, URDN, attdata, xe, ye, subscale=1):
     ra = (np.arctan2(phvec[:,1], phvec[:,0])%(2.*pi))*180./pi
     return np.histogram2d(dec, ra, [ye, xe])[0]
 
-def mktimegrid(gti):
-    ts = np.arange(gti[0], gti[1] + 0.9, 1.)
-    ts[-1] = gti[1]
-    tc = (ts[1:] + ts[:-1])/2.
-    dt = ts[1:] - ts[:-1]
-    return tc, dt
-
 def make_vec_to_sky_hist_fun(vecs, effarea, locwcs, xsize, ysize):
     def hist_vec_to_sky(quat, weight):
         vec_icrs = quat.apply(vecs)
         r, d = vec_to_pol(vec_icrs)
         x, y = np.round(locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1)).T
         locweight = weight*effarea
+        plt.scatter(x, y, c=locweight)
+        plt.show()
         return np.histogram2d(x, y, [np.arange(xsize + 1) + 0.5, np.arange(ysize + 1) + 0.5], weights=locweight)[0].T
     return hist_vec_to_sky
 
@@ -151,6 +145,7 @@ def make_expmap_for_urd(urdfile, attfile, locwcs, segment, agti=None):
     pool = Pool(24)
     emaps = pool.map(make_vignmap_mp, [(locwcs, xsize, ysize, qval[i::50], exptime[i::50], vignfilename) for i in range(50)])
     return sum(emaps)
+
 
 
 if __name__ == "__main__":

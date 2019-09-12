@@ -31,7 +31,6 @@ def vec_to_offset(vec):
 def vec_to_offset_pairs(vec):
     return (vec[...,[1,2]]/vec[...,0][..., np.newaxis])*[F, -F]
 
-
 def urd_to_vec(urddata, subscale=1):
     sscale = (np.arange(subscale) - (subscale - 1)/2.)/subscale
     x = np.repeat(urddata["RAW_X"], subscale*subscale) + \
@@ -52,7 +51,6 @@ def get_shadowed_pix_mask(rawx, rawy, det_spat_mask):
     colimator
     """
     return det_spat_mask[rawx, rawy] #equivalent to [det_spat_mask[i, j] for i, j in zip(rawx, rawy)]
-
 
 def get_shadowed_pix_mask_for_urddata(urddata, det_spat_mask):
     """
