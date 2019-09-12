@@ -105,7 +105,7 @@ if __name__ == "__main__":
     h = copy.copy(urdfile["EVENTS"].header)
     newurdtable.name = "EVENTS"
     h.pop("NAXIS2")
-    newurdtable.header.urddata(h)
+    newurdtable.header.update(h)
     hdulist = [type(hdu)(data = Table(hdu.data), header=hdu.header) for hdu in urdfile]
     hdulist[1] = newurdtable
     newfile = fits.HDUList([urdfile[0], newurdtable, urdfile[2], urdfile[3]])
