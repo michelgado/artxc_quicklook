@@ -94,18 +94,18 @@ if __name__ == "__main__":
     ENERGY, xc, yc, grades = get_events_energy(urddata,
                                     urdfile["HK"].data, caldbfile)
     print(grades.shape)
+    h = copy.copy(urdfile["EVENTS"].header)
+    h.pop("NAXIS2")
+
     newurdtable = fits.BinTableHDU.from_columns(
             [fits.Column(name=cd.name, array=np.copy(cd.array[mask]), format=cd.format, unit=cd.unit) \
                 for cd in urddata.columns] +
             [fits.Column(name="ENERGY", array=ENERGY, format="1D", unit="keV"),
              fits.Column(name="RA", array=np.copy(RA*180./pi), format="1D", unit="deg"),
              fits.Column(name="DEC", array=np.copy(DEC*180./pi), format="1D", unit="deg"),
-             fits.Column(name="GRADE", array=grades, format="I")])
+             fits.Column(name="GRADE", array=grades, format="I")], header=h)
 
-    h = copy.copy(urdfile["EVENTS"].header)
     newurdtable.name = "EVENTS"
-    h.pop("NAXIS2")
-    newurdtable.header.update(h)
     hdulist = [type(hdu)(data = Table(hdu.data), header=hdu.header) for hdu in urdfile]
     hdulist[1] = newurdtable
     newfile = fits.HDUList([urdfile[0], newurdtable, urdfile[2], urdfile[3]])
