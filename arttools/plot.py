@@ -37,8 +37,6 @@ def make_vec_to_sky_hist_fun(vecs, effarea, locwcs, xsize, ysize):
         r, d = vec_to_pol(vec_icrs)
         x, y = np.round(locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1)).T
         locweight = weight*effarea
-        plt.scatter(x, y, c=locweight)
-        plt.show()
         return np.histogram2d(x, y, [np.arange(xsize + 1) + 0.5, np.arange(ysize + 1) + 0.5], weights=locweight)[0].T
     return hist_vec_to_sky
 
@@ -71,8 +69,6 @@ class VignInt(object):
         mask = np.all([xy[:,0] > -14.2, xy[:,0] < 14.2, xy[:,1] > -14.2, xy[:,1] < 14.2], axis=0)
         return np.sum(self.exptime[mask]*self.rg(xy[mask]))
 
-
-
 def make_vignmap_for_quat2(locwcs, xsize, ysize, qval, exptime, vignmapfilename, energy=6.):
     vignmapfile = fits.open(vignmapfilename)
     effarea = vignmapfile["Vign_EA"].data["EFFAREA"][
@@ -90,7 +86,6 @@ def make_vignmap_for_quat2(locwcs, xsize, ysize, qval, exptime, vignmapfilename,
     pool = Pool(24)
     hist[:] = pool.map(VignInt(vecsky, qval, exptime, rg), range(x.size))
     return hist.reshape((ysize, xsize)).T
-
 
 def make_vignmap_for_quat(locwcs, xsize, ysize, qval, exptime, vignmapfilename, energy=6.):
     """
@@ -136,16 +131,13 @@ def make_expmap_for_urd(urdfile, attfile, locwcs, segment, agti=None):
     """
     to do: implement vignmap in caldb
     """
-    #vignfile = fits.open("/home/andrey/auxiliary/artxc_quicklook/arttools/art-xc_vignea.fits")
     vignfilename = "/srg/a1/work/andrey/art-xc_vignea.fits"
     xsize = int(locwcs.wcs.crpix[0]*2 - 1)
     ysize = int(locwcs.wcs.crpix[1]*2 - 1)
 
-    #emap = make_vignmap_mp([locwcs, xsize, ysize, qval, exptime, vignfilename])
     pool = Pool(24)
     emaps = pool.map(make_vignmap_mp, [(locwcs, xsize, ysize, qval[i::50], exptime[i::50], vignfilename) for i in range(50)])
     return sum(emaps)
-
 
 
 if __name__ == "__main__":

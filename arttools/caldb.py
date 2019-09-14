@@ -26,7 +26,7 @@ def get_cif(cal_cname, instrume):
 
 def get_relevat_file(cal_cname, instrume, date=datetime.datetime(2030, 10, 10)):
     caltable = get_cif(cal_cname, instrume)
-    didx = caltable.index.get_loc(date)
+    didx = caltable.index.get_loc(date, method="ffil")
     fpath = os.path.join(ARTCALDBPATH, row["CAL_DIR"], row["CAL_FILE"])
     return fpath
 

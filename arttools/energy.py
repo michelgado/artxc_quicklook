@@ -1,11 +1,10 @@
 from scipy.interpolate import interp1d
 import numpy as np
 
-GRADESI = np.ones(64)*(-1)
+GRADESI = np.ones(256)*(-1)
 GRADESI[18] = 0 #single central events
 GRADESI[[50, 26, 22, 19, 54, 51, 30, 27]] = [1, 2, 3, 4, 5, 6, 7, 8] #double events
 GRADESI[[58, 62, 59, 23, 56, 31, 63]] = [9, 10, 11, 12, 13, 14, 15] #tripple events
-
 
 def PHA_to_PI(PHA, strip, Temp, caldb):
     """
@@ -19,7 +18,6 @@ def random_uniform(PHA, strip, Temp, caldb):
     e1 = PHA_to_PI(PHA, strip, Temp, caldb)
     e2 = PHA_to_PI(PHA + 1., strip, Temp, caldb)
     return np.random.uniform(e1, e2)
-    #return PHA_to_PI(np.random.uniform(0., 1., PHA.shape) + PHA, strip, Temp, caldb)
 
 def filter_edge_strips(events):
     return np.all((events["RAW_X"] > 0, events["RAW_X"] < 47, events["RAW_Y"] > 0, events["RAW_Y"] < 47), axis=0)
@@ -36,7 +34,6 @@ def mkeventindex(strip):
 def bitmask_to_grade(bitmask):
     maskint = np.packbits(bitmask, axis=0)[0]
     return GRADESI[maskint]
-
 
 def get_events_energy(eventlist, hkdata, caldb):
     """
@@ -64,10 +61,9 @@ def get_events_energy(eventlist, hkdata, caldb):
     print("total events", eventlist.size)
     emean = np.zeros(eventlist.size, np.double)
     bitmask = np.zeros((8, emean.size), np.bool)
-
-
-    m0 = filter_edge_strips(eventlist)
-    eventlist = eventlist[m0]
+    #mark bitmask last bit for edge strips
+    bitmask[0, :] = np.any([eventlist["RAW_X"] == 0, eventlist["RAW_X"] == 47,
+                            eventlist["RAW_Y"] == 0, eventlist["RAW_Y"] == 47], axis=0)
 
     T = interp1d(hkdata["TIME"], hkdata["TD1"],
             bounds_error=False, kind="linear",
@@ -79,9 +75,9 @@ def get_events_energy(eventlist, hkdata, caldb):
     rawx, maskb = mkeventindex(eventlist["RAW_X"])
     sigmab = botcal["fwhm_1"][rawx]*T + botcal["fwhm_0"][rawx]
     PHAB = np.array([eventlist["PHA_BOT_SUB1"], eventlist["PHA_BOT"], eventlist["PHA_BOT_ADD1"]])
-    energb = random_uniform(PHAB, rawx, T, botcal) #PHA_to_PI(PHAB, rawx, T, botcal)
+    energb = random_uniform(PHAB, rawx, T, botcal)
     maskb = np.logical_and(maskb, energb > botcal["THRESHOLD"][rawx])
-    bitmask[5:8, m0] = maskb
+    bitmask[5:8, :] = maskb
     print("bot dist", np.unique(maskb.sum(axis=0), return_counts=True))
 
     rawy, maskt = mkeventindex(eventlist["RAW_Y"])
@@ -89,30 +85,24 @@ def get_events_energy(eventlist, hkdata, caldb):
     PHAT = np.array([eventlist["PHA_TOP_SUB1"], eventlist["PHA_TOP"], eventlist["PHA_TOP_ADD1"]])
     energt = random_uniform(PHAT, rawy, T, topcal) #PHA_to_PI(PHAT, rawy, T, topcal)
     maskt = np.logical_and(maskt, energt > topcal["THRESHOLD"][rawy])
-    bitmask[2:5, m0] = maskt
+    bitmask[2:5, :] = maskt
     print("top dist", np.unique(maskt.sum(axis=0), return_counts=True))
 
     """
     drop all below threashold
     """
-    atleastone = np.logical_and(np.any(maskb, axis=0), np.any(maskt, axis=0))
-    m0[m0] = atleastone
+    atleastone = np.any(bitmask[2:,:], axis=0)
     print("drop by threshold", atleastone.size - atleastone.sum(), " from ", atleastone.size)
-    energb, energt, sigmab, sigmat, rawx, rawy, maskb, maskt = (arr[:, atleastone] for arr in [energb, energt, sigmab, sigmat, rawx, rawy, maskb, maskt])
-    #xc = np.sum(energb*maskb*rawx, axis=0)/np.sum(maskb*energb, axis=0)
-    #yc = np.sum(energt*maskt*rawy, axis=0)/np.sum(maskb*energb, axis=0)
-    xc = rawx[1,:]
-    yc = rawy[1,:]
 
     ebot = np.sum(energb*maskb, axis=0)
     sigmabotsq = np.sum(sigmab**2.*maskb, axis=0)
     etop = np.sum(energt*maskt, axis=0)
     sigmatopsq = np.sum(sigmat**2.*maskt, axis=0)
-    emean[m0] = (ebot*sigmatopsq + etop*sigmabotsq)/(sigmatopsq + sigmabotsq)
+    emean[atleastone] = ((ebot*sigmatopsq + etop*sigmabotsq)/(sigmatopsq + sigmabotsq))[atleastone]
     """
     urd 28 additional correction
     """
-    emean[m0] = -0.2504 + 1.0082*emean[m0] - 6.10E-5*emean[m0]**2.
+    xc = eventlist["RAW_X"]
+    yc = eventlist["RAW_Y"]
+    emean = -0.2504 + 1.0082*emean - 6.10E-5*emean**2.
     return emean, xc, yc, bitmask_to_grade(bitmask)
-
-

@@ -10,7 +10,7 @@ import copy
 
 from arttools._det_spatial import get_shadowed_pix_mask_for_urddata
 from arttools.energy import get_events_energy
-from arttools.orientation import extract_raw_gyro, get_photons_sky_coord
+from arttools.orientation import extract_raw_gyro, get_photons_sky_coord, nonzero_quaternions, get_gyro_quat_as_arr
 
 parser = argparse.ArgumentParser(description="process L0 data to L1 format")
 parser.add_argument("stem", help="part of the L0 files name, which are euqal to them")
@@ -67,7 +67,8 @@ if __name__ == "__main__":
         os.mkdir(outdir)
 
     attfile = fits.open(attfname)
-    attdata = attfile["ORIENTATION"].data[10:]
+    attdata = np.copy(attfile["ORIENTATION"].data)
+    attdata = attdata[nonzero_quaternions(get_gyro_quat_as_arr(attdata))]
     urdfname = fname
     urdfile = fits.open(urdfname)
     urddata = urdfile["EVENTS"].data

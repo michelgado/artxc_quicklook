@@ -17,21 +17,19 @@ ART_det_QUAT = {
 
 def to_2pi_range(val): return val%(2.*pi)
 
-
-def get_photons_vectors(urddata, URDN, attdata, subscale=1):
-    #attdata = filter_gyrodata(attdata)
-    print("any unsorted times", np.any(attdata["TIME"][1:] <= attdata["TIME"][:-1]))
+def clear_att(attdata):
     attdata = attdata[np.argsort(attdata["TIME"])]
-    print("after sorting", np.any(attdata["TIME"][1:] <= attdata["TIME"][:-1]))
     if np.any(attdata["TIME"][1:] <= attdata["TIME"][:-1]):
         idx = np.where(attdata["TIME"][1:] <= attdata["TIME"][:-1])[0]
-        print(attdata["TIME"][idx], attdata["TIME"][idx + 1])
         utime, idx = np.unique(attdata["TIME"], return_index=True)
         attdata = attdata[idx]
+    return attdata
+
+def get_photons_vectors(urddata, URDN, attdata, subscale=1):
+    attdata = clear_att(attdata)
     qj2000 = Slerp(attdata["TIME"], get_gyro_quat(attdata))
     qj2000 = qj2000(np.repeat(urddata["TIME"], subscale*subscale))
     qall = qj2000*qrot0*ART_det_QUAT[URDN]
-
     photonvecs = urd_to_vec(urddata, subscale)
     phvec = qall.apply(photonvecs)
     return phvec
@@ -70,7 +68,6 @@ def get_gyro_quat_as_arr(gyrodata):
 
 def get_bokz_quat(quatdata):
     pass
-
 
 def quat_to_pol_and_roll(qfin, opaxis=[1, 0, 0], north=[0, 0, 1]):
     """
