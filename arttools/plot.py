@@ -25,6 +25,12 @@ class NoDATA(Exception):
     pass
 
 def get_image(attname, urdname, locwcs, gti):
+    """
+    filter out events outsied of gti, tripple events, events with energy < 5 or > 11
+    estimates its coordinates, split each photon on 100  subphotons and spreaad uniformiliy in the pixel
+    return computed photons on the coordinates grid defined by locwcs
+
+    """
     if not os.path.exists(attname):
         raise NoDATA("no attitude file")
 
@@ -40,8 +46,6 @@ def get_image(attname, urdname, locwcs, gti):
     URDN = urdfile["EVENTS"].header["URDN"]
     caldbfile = get_energycal(urdfile)
     shadow = get_shadowmask(urdfile)
-    print(type(shadow))
-    print(shadow.shape)
 
     if not gti is None:
         idx = np.searchsorted(urddata['TIME'], gti)
@@ -55,17 +59,12 @@ def get_image(attname, urdname, locwcs, gti):
     urddata = urddata[masktime]
 
     maskshadow = get_shadowed_pix_mask_for_urddata(urddata, shadow)
-    print(type(maskshadow))
-    print(maskshadow.shape)
-    print(maskshadow.sum())
-    print(maskshadow.dtype)
-    print(urddata.size)
     urddata = urddata[maskshadow]
     mask[mask] = maskshadow
 
 
     ENERGY, xc, yc, grades = get_events_energy(urddata, np.copy(urdfile["HK"].data), caldbfile)
-    maskenergy = (grades >=0) & (grades < 9)
+    maskenergy = (grades >=0) & (grades <= 9)
     urddata = urddata[maskenergy]
     ENERGY = ENERGY[maskenergy]
     mask[mask] = maskenergy
@@ -189,7 +188,6 @@ def make_wcs_for_urd_sets(urdflist, attflist, gti = {}):
     if type(gti) is np.ndarray:
         gti = {urd:gti for urd in URDNS}
     qvtot, dttot = [], []
-    print(gti)
     for urdfname, attfname in zip(urdflist, attflist):
         attfile = fits.open(attfname)
         attdata = np.copy(attfile["ORIENTATION"].data)
@@ -197,7 +195,6 @@ def make_wcs_for_urd_sets(urdflist, attflist, gti = {}):
         urdn = fits.getheader(urdfname, 1)["URDN"]
         locgti = locgti if not urdn in gti else gti_intersection(locgti, gti.get(urdn))
         quats = get_gyro_quat(attdata)*qrot0*ART_det_QUAT[urdn]
-        print(len(quats))
         qvals, dt = make_small_steps_quats(attdata["TIME"], quats, locgti)
         qvtot.append(qvals)
         dttot.append(dt)
@@ -215,9 +212,7 @@ def make_wcs_for_urd_sets(urdflist, attflist, gti = {}):
     desize = desize + 1 - desize%2
     rasize = int((ramax - ramin)/locwcs.wcs.cdelt[0])//2
     rasize = rasize + 1 - rasize%2
-    print(rasize, desize)
     locwcs.wcs.crpix = np.array([rasize, desize], np.int)
-    print(locwcs.wcs.crpix, locwcs.wcs.crpix[0], type(locwcs.wcs.crpix[1]))
     locwcs.wcs.crval = [(ramin + ramax)/2., (decmin + decmax)/2.]
     return qvtot, dttot, locwcs
 
@@ -262,6 +257,12 @@ def make_mosaic_for_urdset_by_region(urdflist, attflist, ra, dec, deltara, delta
     ehdu.writeto("tmpemap.fits.gz", overwrite=True)
 
 def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti={}):
+    """
+    given two sets with paths to the urdfiles and corresponding attfiles,
+    and gti as a dictionary, each key contains gti for particular urd
+    the program produces overall count map and exposition map for this urdfiles set
+    the wcs is produced automatically to cover nonzero exposition area with some margin
+    """
 
     qvtot, dttot, locwcs = make_wcs_for_urd_sets(urdflist, attflist, gti)
     xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
@@ -291,7 +292,13 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti={}):
     ehdu.writeto("tmpemap.fits.gz", overwrite=True)
 
 
-def make_expmap_for_urd(urdfile, attfile, locwcs, segment, agti=None):
+def make_expmap_for_urd(urdfile, attfile, locwcs, agti=None):
+    """
+    given the urdfile, attfile, wcs and gti produces exposition map in the wcs coordinates.
+    gti is generated from as an intesection of agti and urdfile gti
+    it is assumed implicitly, that locwcs crpix is a precise center of the produced exposition map
+    therefore the size of produced image is locwcs.wcs.crpix*2 + 1 (assuming crpix is odd)
+    """
     gti = np.array([urdfile["GTI"].data["START"], urdfile["GTI"].data["STOP"]]).T
     gtiatt = np.array([attfile["ORIENTATION"].data["TIME"][[0, -1]]])
     if not agti is None: gtiatt = gti_intersection(gtiatt, agti)
