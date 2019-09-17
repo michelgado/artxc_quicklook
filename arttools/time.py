@@ -12,6 +12,9 @@ optica axis is shifted 11' away of the sattelite x axis, therefore we need some 
 """
 DELTAROLL = 2.*pi/24./18.
 
+def get_gti(ffile):
+    return np.array([ffile["GTI"].data["START"], ffile["GTI"].data["STOP"]]).T
+
 def check_gti_shape(gti):
     if gti.ndim != 2 or gti.shape[1] != 2:
         raise ValueError("gti is expected to be a numpy array of shape (n, 2), good luck next time")
@@ -114,10 +117,9 @@ def make_ingti_times(time, gti):
     maskgaps[cidx[1:-1] - 1] = False
     return tnew, maskgaps
 
-def hist_orientation(attdata, gti, v0=None):
-    quatint = Slerp(attdata["TIME"], get_gyro_quat(attdata))
-
-    tnew, maskgaps = make_ingti_times(attdata["TIME"], gti)
+def make_small_steps_quats(times, quats, gti):
+    quatint = Slerp(times, quats)
+    tnew, maskgaps = make_ingti_times(times, gti)
     ts = ((tnew[1:] + tnew[:-1])/2.)[maskgaps]
     dt = (tnew[1:] - tnew[:-1])[maskgaps]
     qval = quatint(ts)
@@ -155,9 +157,15 @@ def hist_orientation(attdata, gti, v0=None):
         qval = quatint(np.concatenate([ts[maskmoving], tnew]))
     else:
         dtn = dt
+    return qval, dtn
 
+def hist_orientation(qval, dt):
     oruniq, uidx, invidx = hist_quat(qval)
     exptime = np.zeros(uidx.size, np.double)
-    np.add.at(exptime, invidx, dtn)
-
+    np.add.at(exptime, invidx, dt)
     return exptime, qval[uidx]
+
+def hist_orientation_for_attfile(attdata, gti, v0=None):
+    quats = get_gyro_quat(attdata)
+    qval, dtn = make_small_steps_quats(attdata["TIME"], quats, gti)
+    return hist_orientation(qval, dtn)

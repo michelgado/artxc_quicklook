@@ -3,36 +3,31 @@ import pandas
 from astropy.io import fits
 from astropy.table import Table
 import datetime
+import numpy as np
+from .telescope import URDTOTEL
 
 ARTCALDBPATH = os.environ["ARTCALDB"]
 indexfname = "artxc_index.fits"
 
-URDTOTEL = {28: "T1",
-            22: "T2",
-            23: "T3",
-            24: "T4",
-            25: "T5",
-            26: "T6",
-            30: "T7"}
-
 idxdata = fits.getdata(os.path.join(ARTCALDBPATH, indexfname), 1)
 idxtabl = Table(idxdata).to_pandas()
 idxtabl["CAL_DATE"] = pandas.to_datetime(idxtabl["CAL_DATE"])
-idxtabl.set_index("CAL_DATE")
+idxtabl.set_index("CAL_DATE", inplace=True)
 
 def get_cif(cal_cname, instrume):
-    return idxtable.query("INSTRUME=='%s' and CAL_CNAME=='%s'" %
+    return idxtabl.query("INSTRUME=='%s' and CAL_CNAME=='%s'" %
                                (instrume, cal_cname))
 
 def get_relevat_file(cal_cname, instrume, date=datetime.datetime(2030, 10, 10)):
     caltable = get_cif(cal_cname, instrume)
-    didx = caltable.index.get_loc(date, method="ffil")
+    didx = caltable.index.get_loc(date, method="ffill")
+    row = caltable.iloc[didx]
     fpath = os.path.join(ARTCALDBPATH, row["CAL_DIR"], row["CAL_FILE"])
     return fpath
 
 def get_shadowmask(urdfile):
     fpath = get_relevat_file('OOFPIX', URDTOTEL[urdfile["EVENTS"].header["URDN"]])
-    return fits.getdata(fpath, 1)
+    return np.logical_not(fits.getdata(fpath, 1).astype(np.bool))
 
 def get_energycal(urdfile):
     fpath = get_relevat_file('TCOEF', URDTOTEL[urdfile["EVENTS"].header["URDN"]])

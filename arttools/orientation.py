@@ -4,6 +4,7 @@ from math import pi, cos, sin
 from ._det_spatial import urd_to_vec
 
 qrot0 = Rotation([sin(15*pi/360.), 0., 0., cos(15*pi/360.)])
+OPAX = np.array([1, 0, 0])
 
 ART_det_QUAT = {
      28 : Rotation([-0.0116889160688843,      -0.0013389302010230,      -0.0010349697278926,       0.9999302502398423]),
@@ -17,7 +18,23 @@ ART_det_QUAT = {
 
 def to_2pi_range(val): return val%(2.*pi)
 
+def make_orientation_gti(attdata, urdn, rac, decc, deltara, deltadec):
+    qval = get_gyro_quat(attdata)*qrot0*ART_det_QUAT[urdn]
+    r, d = vec_to_pol(qval.apply(OPAX))
+    r, d = r*180./pi, d*180./pi
+    masktor = np.empty(r.size + 2, np.bool)
+    masktor[1:-1] = np.all([r > rac - deltara, r < rac + deltara,
+                            d > decc - deltadec, d < decc + deltadec], axis=0)
+    masktor[[0, -1]] = False
+    start = np.where(np.logical_and(mastor[:-1], np.logical_not(masktor[1:])))[0]
+    end = np.where(np.logical_and(np.logical_not(mastor[:-1]), masktor[1:]))[0] - 1
+    mask = end - start > 0
+    gti = attdata["TIME"][np.array([stars, end]).T[mask]] + [-1e-3, +1e-3]
+    return gti
+
 def clear_att(attdata):
+    print(type(attdata))
+    print(attdata.size)
     attdata = attdata[np.argsort(attdata["TIME"])]
     if np.any(attdata["TIME"][1:] <= attdata["TIME"][:-1]):
         idx = np.where(attdata["TIME"][1:] <= attdata["TIME"][:-1])[0]
@@ -54,6 +71,7 @@ def get_gyro_quat(gyrodata):
     quat = Rotation(np.array([gyrodata["QORT_%d" % i] for i in [1,2,3,0]]).T)
     q0 = Rotation([0, 0, 0, 1]) #gyro axis initial rotattion in J2000 system
     qfin = q0*quat
+    print("len qfin", len(qfin))
     return qfin
 
 def filter_gyrodata(gyrodata):
@@ -88,10 +106,10 @@ def quat_to_pol_and_roll(qfin, opaxis=[1, 0, 0], north=[0, 0, 1]):
                            np.sum(yzprojection*qfin.apply(north), axis=1))
     return ra, dec, rollangle
 
-def extract_raw_gyro(gyrodata, qadd=qrot0):
+def extract_raw_gyro(gyrodata, qadd=Rotation([0, 0, 0, 1])):
     """
     unpacks row gyro fits file in to RA, DEC and roll angle (of the telescope coordinate system)
     in J2000 coordinates.
     """
-    qfin = get_gyro_quat(gyrodata)*qadd
+    qfin = get_gyro_quat(gyrodata)*qrot0*qadd
     return quat_to_pol_and_roll(qfin)
