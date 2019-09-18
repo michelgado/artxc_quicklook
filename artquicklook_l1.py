@@ -96,11 +96,12 @@ L1b       = os.path.join(wdir,stem,'L1b')
 stem_tail = '_urd.fits'
 gyro_file = stem + '_'+subvers+'_gyro_att.fits'
 module_names   = ['02','04','08','10','20','40','80']
+tel_names = ['T1','T2','T3','T4','T5','T6','T7']
 module_color   = ['k','r','g','b','m','c','lime']
 pdfname = stem + '.pdf'
 pdffile =  PdfPages(pdfname)
     
-for module in module_names:
+for module,teln in zip(module_names,tel_names):
     print ('>>>>>>>>> Working with module '+ module)
     evtfile = stem +'_'+subvers+'.'+ module + '_urd.fits'
     evtpath = os.path.join(L1b,evtfile)
@@ -109,7 +110,7 @@ for module in module_names:
         evtfits.close()
     except:
         print ('>>ERROR>> Cannot open '+evtpath)
-    artql.get_lcurve(evtpath,module)
+    artql.get_lcurve(evtpath,module,teln)
 
 
 #    plt.figure(figsize=(9, 9))

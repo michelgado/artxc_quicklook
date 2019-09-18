@@ -1,7 +1,8 @@
 from astropy.io import fits
 import numpy as np
+from arttools.caldb import get_caldb
 
-def get_lcurve(filepath,module):
+def get_lcurve(filepath,module,teln):
 #    """ Read eventfile, get events and corresponding GTIs"""
 ##    try:
     evtlist = fits.open(filepath)
@@ -13,32 +14,36 @@ def get_lcurve(filepath,module):
 ##   read events and select 
     evtimes     = np.array(evtlist['EVENTS'].data['TIME'])
     evenergies  = np.array(evtlist['EVENTS'].data['ENERGY'])
-    evntpatt    = np.array(evtlist['EVENTS'].data['GRADE'])
+    evntgrade   = np.array(evtlist['EVENTS'].data['GRADE'])
     evrawx      = np.array(evtlist['EVENTS'].data['RAW_X'])
     evrawy      = np.array(evtlist['EVENTS'].data['RAW_Y'])
 ##  filter out good inFOV events   
     Elow, Ehigh = 4., 11.
     energymask  = np.bitwise_and(evenergies>=Elow, evenergies<=Ehigh)
-    pattmask    = evntpatt>=0
-    goodphmask  = np.bitwise_and(energymask, pattmask)
+    grademask   = evntgrade>=0
+    goodphmask  = np.bitwise_and(energymask, grademask)
     infov_evts  = len(evtimes[goodphmask])
     totalmask   = np.copy(goodphmask)
-    print('Selected ', infov_evts, ' events with GRADE>=0 AND (4keV>=E>=11keV)')
+    print('Selected GOOD events:', infov_evts, ' with GRADE>=0 AND (4keV>=E>=11keV)')
 
-#
-#    #Select photons outside of FOV using caldb file
-#    detmask     =  get_CALDB_outfov(module)      
-#    active_pix  = np.sum(detmask)
-#    for rawx, rawy, i in zip(evrawx,evrawy,np.arange(len(totalmask))):
-#        if detmask[rawx, rawy]==0:
-#            totalmask[i] = 0
-#
-#    cl_events   = evtimes[totalmask]
-#    total_bkg_evts = len(evtimes[totalmask])
-#        
-#    print('Using only ',Elow,'-',Ehigh,' keV, NTOP==NBOT==1 photons')
-#    print('    outside illuminated area')
-#    print('selected: ',len(cl_events), ' events from ',len(evtimes))
+    #Read CALDB entry with OOF mask
+    oofmask = fits.getdata(get_caldb('OOFPIX', teln),1)
+    #Exclude boundary strips from mask, since they are noisy and will introduce additional noise in background
+    oofmask[0,:] = 0
+    oofmask[-1,:] = 0
+    oofmask[:,0] = 0
+    oofmask[:,-1] = 0
+    
+    # Now all pthotons with GRADE==-1 and RAWX,Y in 1..46 are inside detector ears
+    grademask    =  evntgrade==-1
+    energymask   =  np.bitwise_and(evenergies>=Elow, evenergies<=Ehigh)
+    rawxmask     =  np.bitwise_and(evrawx>0, evrawx<47)
+    rawymask     =  np.bitwise_and(evrawy>0, evrawy<47)
+    totalmask    =  np.bitwise_and(np.bitwise_and(grademask,energymask),np.bitwise_and(rawxmask,rawymask))
+    bkg_evts     =  evtimes[totalmask]
+    total_bkg_evts = len(evtimes[totalmask])
+    print('Selected BKG events:', infov_evts, ' with (4keV>=E>=11keV)')
+        
 #    mean_rate = total_bkg_evts/gti_total    
 #    print('Mean background countrate: ', np.round(mean_rate,2), 'cts/s')
 #    
