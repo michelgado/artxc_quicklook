@@ -99,7 +99,7 @@ def hist_quat(quat):
 
     orhist = np.empty((ra.size, 3), np.int)
     orhist[:, 0] = np.asarray((dec + pi/2.)/DELTASKY, np.int)
-    orhist[:, 1] = np.asarray(np.cos(dec)*ra/DELTASKY, np.int)
+    orhist[:, 1] = np.asarray(np.cos(dec - dec%(pi/180.*15./3600))*ra/DELTASKY, np.int)
     orhist[:, 2] = np.asarray(roll/DELTAROLL, np.int)
     return np.unique(orhist, return_index=True, return_inverse=True, axis=0)
 

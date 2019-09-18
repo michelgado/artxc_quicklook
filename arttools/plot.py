@@ -29,7 +29,6 @@ def get_image(attname, urdname, locwcs, gti):
     filter out events outsied of gti, tripple events, events with energy < 5 or > 11
     estimates its coordinates, split each photon on 100  subphotons and spreaad uniformiliy in the pixel
     return computed photons on the coordinates grid defined by locwcs
-
     """
     if not os.path.exists(attname):
         raise NoDATA("no attitude file")
@@ -79,7 +78,7 @@ def get_image(attname, urdname, locwcs, gti):
     print("\n\n\nfinal size after filtering!!!! ", r.size)
     x, y = locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1.).T
     img = np.histogram2d(x, y, [np.arange(locwcs.wcs.crpix[1]*2 + 2) + 0.5,
-                                np.arange(locwcs.wcs.crpix[0]*2 + 2) + 0.5])[0].T
+                                np.arange(locwcs.wcs.crpix[0]*2 + 2) + 0.5])[0].T/100.
 
     return img
 
@@ -99,14 +98,6 @@ def get_sky_image(urddata, URDN, attdata, xe, ye, subscale=1):
     ra = (np.arctan2(phvec[:,1], phvec[:,0])%(2.*pi))*180./pi
     return np.histogram2d(dec, ra, [ye, xe])[0]
 
-def make_vec_to_sky_hist_fun(vecs, effarea, locwcs, xsize, ysize):
-    def hist_vec_to_sky(quat, weight):
-        vec_icrs = quat.apply(vecs)
-        r, d = vec_to_pol(vec_icrs)
-        x, y = np.round(locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1)).T
-        locweight = weight*effarea
-        return np.histogram2d(x, y, [np.arange(xsize + 1) + 0.5, np.arange(ysize + 1) + 0.5], weights=locweight)[0].T
-    return hist_vec_to_sky
 
 def make_inverce_vign(vecsky, qval, exp, vignmap, hist):
     vecdet = qval.apply(vecsky, inverse=True)
@@ -155,6 +146,18 @@ def make_vignmap_for_quat2(locwcs, xsize, ysize, qval, exptime, vignmapfilename,
     hist[:] = pool.map(VignInt(vecsky, qval, exptime, rg), range(x.size))
     return hist.reshape((ysize, xsize)).T
 
+def make_vec_to_sky_hist_fun(rg, locwcs, xsize, ysize):
+    x, y = np.random.uniform(-13.685, 13.685, (2, 480*480))
+    effarea = rg(np.array([x, y]).T)
+    vecs = offset_to_vec(x, y)
+    def hist_vec_to_sky(quat, weight):
+        vec_icrs = quat.apply(vecs)
+        r, d = vec_to_pol(vec_icrs)
+        x, y = np.round(locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1)).T
+        locweight = weight*effarea/100.
+        return np.histogram2d(x, y, [np.arange(xsize + 1) + 0.5, np.arange(ysize + 1) + 0.5], weights=locweight)[0].T
+    return hist_vec_to_sky
+
 def make_vignmap_for_quat(locwcs, xsize, ysize, qval, exptime, vignmapfilename, energy=6.):
     """
     to do: implement mpi reduce
@@ -171,15 +174,9 @@ def make_vignmap_for_quat(locwcs, xsize, ysize, qval, exptime, vignmapfilename, 
     rg = RegularGridInterpolator([vignmapfile["Coord"].data["X"],
                                   vignmapfile["Coord"].data["Y"]],
                                  effarea/effarea.max())
-    x = (np.arange(-230, 230) + 0.5)*0.0595
-    y = np.copy(x)
-    x = np.repeat(x, y.size)
-    y = np.tile(y, y.size)
-    vmap = rg(np.array([x, y]).T)
-    vecs = offset_to_vec(x, y)
-    worker = make_vec_to_sky_hist_fun(vecs, vmap, locwcs, xsize, ysize)
+    worker = make_vec_to_sky_hist_fun(rg, locwcs, xsize, ysize)
     hist = sum(worker(q, exp) for q, exp in zip(qval, exptime))
-    return hist/10.
+    return hist
 
 def make_vignmap_mp(args):
     return make_vignmap_for_quat(*args)
@@ -243,6 +240,7 @@ def make_mosaic_for_urdset_by_region(urdflist, attflist, ra, dec, deltara, delta
             lhdu.writeto("tmpctmap.fits.gz", overwrite=True)
 
     qval, exptime = hist_orientation(qvtot, dttot)
+
     xsize = int(locwcs.wcs.crpix[0]*2 + 1)
     ysize = int(locwcs.wcs.crpix[1]*2 + 1)
 
@@ -280,10 +278,27 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti={}):
             lhdu = fits.HDUList([h1, img])
             lhdu.writeto("tmpctmap.fits.gz", overwrite=True)
     exptime, qval = hist_orientation(qvtot, dttot)
-
+    """
+    ra, dec = vec_to_pol(qval.apply([1, 0, 0]))
+    plt.scatter(ra*180./pi, dec*180./pi, s=exptime, facecolor="none", edgecolor="k")
+    plt.show()
+    print(exptime.size)
+    print(exptime)
+    print(len(qval))
+    #print(np.sum(exptime), np.sum(exptime)/7.)
+    """
     pool = Pool(24)
     vignfilename = "/srg/a1/work/andrey/art-xc_vignea.fits"
     emaps = pool.map(make_vignmap_mp, [(locwcs, xsize, ysize, qval[i::50], exptime[i::50], vignfilename) for i in range(50)])
+    """
+    idx = np.argsort(exptime)
+    print(len(emaps))
+    for i in range(9):
+        plt.subplot(331 + i)
+        plt.imshow(emaps[idx[idx.size - 1 - i]], interpolation="nearest")
+    plt.show()
+    pause
+    """
     emap = sum(emaps)
 
     emap = fits.ImageHDU(data=emap, header=locwcs.to_header())
