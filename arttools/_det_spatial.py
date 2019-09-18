@@ -32,11 +32,11 @@ def vec_to_offset_pairs(vec):
     return (vec[...,[1,2]]/vec[...,0][..., np.newaxis])*[F, -F]
 
 def urd_to_vec(urddata, subscale=1):
-    #sscale = (np.arange(subscale) - (subscale - 1)/2.)/subscale
+    sscale = (np.arange(subscale) - (subscale - 1)/2.)/subscale
     rawx = np.repeat(urddata["RAW_X"], subscale*subscale) + \
-                    np.random.uniform(-0.5, 0.5, subscale*subscale*urddata.size)
+            np.tile(np.tile(sscale, subscale), urddata.size)
     rawy = np.repeat(urddata["RAW_Y"], subscale*subscale) + \
-                    np.random.uniform(-0.5, 0.5, subscale*subscale*urddata.size)
+            np.tile(np.repeat(sscale, subscale), urddata.size)
     return raw_xy_to_vec(rawx, rawy)
 
 def weight_coordinate(PI, rawcoord, mask):
