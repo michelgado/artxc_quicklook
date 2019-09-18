@@ -34,7 +34,7 @@ def get_energycal(urdfile):
     return fits.open(fpath)
 
 def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=indexfname):
-    print(caldb_entry_type, telescope)
+    #print(caldb_entry_type, telescope)
 
     indexfile_path = os.path.join(CALDB_path, indexfile)
     try:
@@ -43,7 +43,7 @@ def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=in
         for entry in caldbdata:
             if entry['CAL_CNAME'] == caldb_entry_type and entry['INSTRUME']==telescope:
                 return_path = os.path.join(CALDB_path, entry['CAL_DIR'], entry['CAL_FILE'])
-                print(return_path)
+                #print(return_path)
                 return return_path
         return None
 
