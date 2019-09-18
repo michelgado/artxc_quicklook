@@ -179,8 +179,9 @@ def get_axis_movement_speed(attdata):
         dt - withd of the time bins
         dlaphadt - angular speed in time bin
     """
-    quats = arttools.orientation.get_gyro_quat(attdata)
+    quats = get_gyro_quat(attdata)
     vecs = quats.apply(OPAX)
-    dalphadt = np.arccos(np.sum(vecs[:-1]*vecs[1:], axis=1))/(attdata["TIME"][1:] - attdata["TIME"][:-1])*180./pi*3600.
-    return (attdata["TIME"][1:] + attdata["TIME"][:-1])/2., (attdata["TIME"][1:] - attdata["TIME"][:-1]), dalphadt
+    dt = (attdata["TIME"][1:] - attdata["TIME"][:-1])
+    dalphadt = np.arccos(np.sum(vecs[:-1]*vecs[1:], axis=1))/dt*180./pi*3600.
+    return (attdata["TIME"][1:] + attdata["TIME"][:-1])/2., dt, dalphadt
 
