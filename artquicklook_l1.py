@@ -101,7 +101,7 @@ module_color   = ['k','r','g','b','m','c','lime']
 pdfname = stem + '.pdf'
 pdffile =  PdfPages(pdfname)
     
-for module,teln in zip(module_names,tel_names):
+for module,teln in zip(module_names[:1],tel_names):
     print ('>>>>>>>>> Working with module '+ module)
     evtfile = stem +'_'+subvers+'.'+ module + '_urd.fits'
     evtpath = os.path.join(L1b,evtfile)
@@ -110,8 +110,8 @@ for module,teln in zip(module_names,tel_names):
         evtfits.close()
     except:
         print ('>>ERROR>> Cannot open '+evtpath)
-    artql.get_lcurve(evtpath,module,teln)
-
+    evtimes, evenergies, evgrade, evrawx, evrawy, gti, median_ratio = artql.get_cl_events(evtpath,module,teln)
+    artql.get_lcurve(evtimes, evenergies, evgrade, evrawx, evrawy, gti, median_ratio,evtpath,module,teln)
 
 #    plt.figure(figsize=(9, 9))
 #    plt.title('Out-of-FOV countrates, 5-60 keV, single events only')
