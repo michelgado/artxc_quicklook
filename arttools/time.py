@@ -105,6 +105,7 @@ def hist_quat(quat):
     return np.unique(orhist, return_index=True, return_inverse=True, axis=0)
 
 def make_ingti_times(time, gti):
+    print(gti[[0, -1]], time.min(), time.max())
     idx = np.searchsorted(time, gti)
     tnew = np.empty(np.sum(idx[:,1] - idx[:,0]) + 2*idx.shape[0], np.double)
     cidx = np.empty(idx.shape[0] + 1, np.int)
@@ -114,13 +115,18 @@ def make_ingti_times(time, gti):
         tnew[cidx[i]+1: cidx[i+1]-1] = time[idx[i,0]:idx[i,1]]
         tnew[cidx[i]] = gti[i, 0]
         tnew[cidx[i + 1] - 1] = gti[i, 1]
-    maskgaps = np.ones(tnew.size - 1, np.bool)
+    print(tnew.min(), tnew.max())
+    maskgaps = np.ones(max(tnew.size - 1, 0), np.bool)
     maskgaps[cidx[1:-1] - 1] = False
     return tnew, maskgaps
 
 def make_small_steps_quats(times, quats, gti):
+    print(times.min(), times.max())
     quatint = Slerp(times, quats)
     tnew, maskgaps = make_ingti_times(times, gti)
+    if tnew.size == 0:
+        return Rotation(np.empty((0, 4), np.double)), np.array([])
+    print(tnew.size, tnew.min(), tnew.max())
     ts = ((tnew[1:] + tnew[:-1])/2.)[maskgaps]
     dt = (tnew[1:] - tnew[:-1])[maskgaps]
     qval = quatint(ts)

@@ -24,7 +24,8 @@ import os
 class NoDATA(Exception):
     pass
 
-def get_image(attname, urdname, locwcs, gti):
+def get_image(attname, urdname, locwcs, gti=None):
+    print("image gti", gti)
     """
     filter out events outsied of gti, tripple events, events with energy < 5 or > 11
     estimates its coordinates, split each photon on 100  subphotons and spreaad uniformiliy in the pixel
@@ -48,6 +49,7 @@ def get_image(attname, urdname, locwcs, gti):
     shadow = get_shadowmask(urdfile)
 
     if not gti is None:
+        gti = gti_intersection(gti, np.array([attdata["TIME"][[0, -1]]]))
         idx = np.searchsorted(urddata['TIME'], gti)
         masktime = np.zeros(urddata.size, np.bool)
         for s, e in idx:
@@ -78,8 +80,8 @@ def get_image(attname, urdname, locwcs, gti):
     r, d = get_photons_sky_coord(urddata, urdfile[1].header["URDN"], attdata, 10)
     print("\n\n\nfinal size after filtering!!!! ", r.size)
     x, y = locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1.).T
-    img = np.histogram2d(x, y, [np.arange(locwcs.wcs.crpix[1]*2 + 2) + 0.5,
-                                np.arange(locwcs.wcs.crpix[0]*2 + 2) + 0.5])[0].T
+    img = np.histogram2d(x, y, [np.arange(locwcs.wcs.crpix[0]*2 + 2) + 0.5,
+                                np.arange(locwcs.wcs.crpix[1]*2 + 2) + 0.5])[0].T
 
     return img
 
@@ -192,8 +194,11 @@ def make_wcs_for_urd_sets(urdflist, attflist, gti = {}):
         attfile = fits.open(attfname)
         attdata = np.copy(attfile["ORIENTATION"].data)
         locgti = get_gti(fits.open(urdfname))
+        locgti = gti_intersection(locgti, np.array([attdata["TIME"][[0, -1]]]))
         urdn = fits.getheader(urdfname, 1)["URDN"]
         locgti = locgti if not urdn in gti else gti_intersection(locgti, gti.get(urdn))
+        if locgti.size == 0:
+            continue
         quats = get_gyro_quat(attdata)*qrot0*ART_det_QUAT[urdn]
         qvals, dt = make_small_steps_quats(attdata["TIME"], quats, locgti)
         qvtot.append(qvals)
@@ -266,7 +271,8 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti={}):
 
     qvtot, dttot, locwcs = make_wcs_for_urd_sets(urdflist, attflist, gti)
     xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
-    imgdata = np.zeros((xsize, ysize), np.double)
+    imgdata = np.zeros((ysize, xsize), np.double)
+    print(imgdata.shape)
     for urdfname, attfname in zip(urdflist, attflist):
         try:
             urdn = fits.getheader(urdfname, "EVENTS")["URDN"]
@@ -313,8 +319,9 @@ def make_expmap_for_urd(urdfile, attfile, locwcs, agti=None):
     ysize = int(locwcs.wcs.crpix[1]*2 - 1)
 
     pool = Pool(24)
-    emaps = pool.map(make_vignmap_mp, [(locwcs, xsize, ysize, qval[i::50], exptime[i::50], vignfilename) for i in range(50)])
-    return sum(emaps)
+    emap = sum(pool.imap_unordered(make_vignmap_mp,
+                [(locwcs, xsize, ysize, qval[i::50], exptime[i::50], vignfilename) for i in range(50)]))
+    return emap
 
 
 if __name__ == "__main__":
