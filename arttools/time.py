@@ -1,6 +1,7 @@
 import numpy as np
 from .orientation import get_gyro_quat_as_arr, vec_to_pol, \
         quat_to_pol_and_roll, extract_raw_gyro, get_gyro_quat, pol_to_vec
+from .telescope import OPAX
 from math import pi
 from scipy.spatial.transform import Rotation, Slerp
 
@@ -169,3 +170,18 @@ def hist_orientation_for_attfile(attdata, gti, v0=None):
     quats = get_gyro_quat(attdata)
     qval, dtn = make_small_steps_quats(attdata["TIME"], quats, gti)
     return hist_orientation(qval, dtn)
+
+def get_axis_movement_speed(attdata):
+    """
+    for provided gyrodata computes angular speed
+    returns:
+        ts - centers of the time bins
+        dt - withd of the time bins
+        dlaphadt - angular speed in time bin
+    """
+    quats = get_gyro_quat(attdata)
+    vecs = quats.apply(OPAX)
+    dt = (attdata["TIME"][1:] - attdata["TIME"][:-1])
+    dalphadt = np.arccos(np.sum(vecs[:-1]*vecs[1:], axis=1))/dt*180./pi*3600.
+    return (attdata["TIME"][1:] + attdata["TIME"][:-1])/2., dt, dalphadt
+
