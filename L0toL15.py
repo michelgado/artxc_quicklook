@@ -11,6 +11,7 @@ import copy
 from arttools._det_spatial import get_shadowed_pix_mask_for_urddata
 from arttools.energy import get_events_energy
 from arttools.orientation import extract_raw_gyro, get_photons_sky_coord, nonzero_quaternions, get_gyro_quat_as_arr
+from arttools.caldb import get_shadowmask
 
 parser = argparse.ArgumentParser(description="process L0 data to L1 format")
 parser.add_argument("stem", help="part of the L0 files name, which are euqal to them")
@@ -75,25 +76,23 @@ if __name__ == "__main__":
 
     caldbfile = fits.open(get_caldb("TCOEF", URDTOTEL[urdfile[1].header["URDN"]]))
     masktime = (urddata["TIME"] > attdata["TIME"][0]) & (urddata["TIME"] < attdata["TIME"][-1])
-    mask = np.copy(masktime)
-    urddata = urddata[masktime]
-
-    shadow = np.logical_not(fits.getdata(get_caldb("OOFPIX", URDTOTEL[urdfile[1].header["URDN"]])))
-    maskshadow = get_shadowed_pix_mask_for_urddata(urddata, shadow)
-    urddata = urddata[maskshadow]
-    mask[mask] = maskshadow
-
-    RA, DEC = get_photons_sky_coord(urddata,
+    RA, DEC = np.empty(urddata.size, np.double), np.empty(urddata.size, np.double)
+    r, d = get_photons_sky_coord(urddata[masktime],
                     urdfile["EVENTS"].header["URDN"],
                     attdata)
+    RA[masktime] = r
+    DEC[masktime] = d
     ENERGY, xc, yc, grades = get_events_energy(urddata,
                                     urdfile["HK"].data, caldbfile)
 
+    shadow = get_shadowmask(urdfile)
+    maskshadow = get_shadowed_pix_mask_for_urddata(urddata, shadow)
+    grades[np.logical_not(maskshadow)] += 64
     h = copy.copy(urdfile["EVENTS"].header)
     h.pop("NAXIS2")
 
     newurdtable = fits.BinTableHDU.from_columns(
-            [fits.Column(name=cd.name, array=np.copy(cd.array[mask]), format=cd.format, unit=cd.unit) \
+            [fits.Column(name=cd.name, array=cd.array, format=cd.format, unit=cd.unit) \
                 for cd in urddata.columns] +
             [fits.Column(name="ENERGY", array=ENERGY, format="1D", unit="keV"),
              fits.Column(name="RA", array=np.copy(RA*180./pi), format="1D", unit="deg"),
