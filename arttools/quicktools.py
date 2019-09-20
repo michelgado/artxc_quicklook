@@ -64,11 +64,11 @@ def get_cl_events(filepath,module,teln):
     evgrade     = np.array(evtlist['EVENTS'].data['GRADE'])[gtimask]
     evrawx      = np.array(evtlist['EVENTS'].data['RAW_X'])[gtimask]
     evrawy      = np.array(evtlist['EVENTS'].data['RAW_Y'])[gtimask]
-    return evtimes, evenergies, evgrade, evrawx, evrawy, gti, median_ratio
+    return evtimes, evenergies, evgrade, evflag, evrawx, evrawy, gti, median_ratio
 
 
 
-def get_spectrum(evtimes, evenergies, evgrade, evrawx, evrawy, gti, median_ratio, filepath, module, teln):
+def get_spectrum(evtimes, evenergies, evgrade, evflag, evrawx, evrawy, gti, median_ratio, filepath, module, teln):
     gti_total = np.sum(gti[:,-1]-gti[:,0])
     gti_start = gti[:,0]
     gti_stop = gti[:,-1]
@@ -79,76 +79,50 @@ def get_spectrum(evtimes, evenergies, evgrade, evrawx, evrawy, gti, median_ratio
     oofmask[-1,:] = 1
     oofmask[:,0]  = 1
     oofmask[:,-1] = 1
-    infov_pix_n   = np.sum(np.logical_not(oofmask).astype(np.bool))
+    infov_pix_n   = 48**2 - np.sum(oofmask)
     oofmask[0,:]  = 0
     oofmask[-1,:] = 0
     oofmask[:,0]  = 0
     oofmask[:,-1] = 0
     oofov_pix_n   = np.sum(oofmask)
-
+    print (infov_pix_n, oofov_pix_n)
 ##  filter out good inFOV events   
-    grademask   = evgrade>=0
-    goodphmask  = np.bitwise_and(energymask, grademask)
-    good_evts   = evtimes[goodphmask]
+    grademask   = np.bitwise_and(evgrade>=0, evflag==0)
+    good_evts   = evenergies[grademask]
     n_good_evts = len(good_evts)
-    totalmask   = np.copy(goodphmask)
-    print('Selected GOOD events:', n_good_evts, ' with GRADE>=0 AND (4keV>=E>=11keV)')
-
 
     # Now all pthotons with GRADE==-1 and RAWX,Y in 1..46 are inside detector ears
-    grademask    =  evgrade==-1
-    energymask   =  np.bitwise_and(evenergies>=Elow, evenergies<=Ehigh)
+    grademask    =  np.bitwise_and(evgrade>=0, evflag==2)
     rawxmask     =  np.bitwise_and(evrawx>0, evrawx<47)
     rawymask     =  np.bitwise_and(evrawy>0, evrawy<47)
-    totalmask    =  np.bitwise_and(np.bitwise_and(grademask,energymask),np.bitwise_and(rawxmask,rawymask))
-    bkg_evts     =  evtimes[totalmask]
-    n_bkg_evts = len(evtimes[totalmask])
-    print('Selected BKG events:', n_bkg_evts, ' with (4keV>=E>=11keV)')
+    totalmask    =  np.bitwise_and(grademask,np.bitwise_and(rawxmask,rawymask))
+    bkg_evts     =  evenergies[totalmask]
 
-        
-    mean_good_rate = n_good_evts/gti_total    
-    mean_bkg_rate  = (n_bkg_evts*infov_pix_n/oofov_pix_n)/gti_total    
-
-    print('Mean GOOD countrate: ', np.round(mean_good_rate,3), 'cts/s')
-    print('Mean normalized BKG countrate: ', np.round(mean_bkg_rate,3), 'cts/s')
-
-    #Make detector lightcurve correcting for DEADTIME of known and unknown events    
-    timebin = 20. #seconds. This binsize should allow for individual bright sources to be visible during survey  
-    starttime, endtime = gti_start[0],gti_stop[-1]
-    timebins  = np.arange(starttime, endtime,timebin)
-    if timebins[-1]!=endtime:
-        timebins = np.concatenate((timebins, [endtime]))
-    mean_times  = (timebins[:-1] + timebins[1:])*0.5    
-    delta_times = (timebins[1:]-timebins[:-1])*0.5    
-    lc_good_evts, tmpedges = np.histogram(good_evts, bins = timebins)
-    lc_bkg_evts, tmpedges  = np.histogram(bkg_evts, bins = timebins)
-    lc_raw_evts, tmpedges  = np.histogram(evtimes, bins = timebins)
-
-    # LIVETIME = SUM(GTI in tstart...tstop) - N_evts*ART-XC_DEADTIME/mean_effiiciency
-    # where ART-XC_DEADTIME is constant 0.77 ms and mean_efficiency is ratio of counted to all events
-    DEADTIME = 0.77/1000. #s
-    def calc_livetime(gti, tstart, tstop):
-        lti      = gti_intersection(gti, np.array([[tstart, tstop]]))
-        livetime = np.sum(lti.T[1]-lti.T[0])
-        return livetime
-    livetimes = np.array([ calc_livetime(gti, tstart, tstop) for tstart, tstop in zip(timebins[:-1],timebins[1:]) ])
-    deadtimes = (DEADTIME*lc_raw_evts)/median_ratio
-    exposures = livetimes - deadtimes
-    #Now we can calculate countrates    
-    good_rate    = np.divide(lc_good_evts, exposures)
-    good_rate_err= np.divide(np.sqrt(lc_good_evts), exposures) 
-    plt.figure()
-    plt.errorbar(mean_times, good_rate, xerr=delta_times, yerr=good_rate_err, color='darkred',ls='')
-    plt.gca().xaxis.set_major_formatter(ScalarFormatter(useOffset=False))
+    energybins = np.logspace(np.log10(4),2,81)
+    emeans, ewidths = (energybins[:-1]+energybins[1:])*0.5, (-energybins[:-1]+energybins[1:])*0.5  
+    fov_hist, tmpbinz = np.histogram(good_evts, bins=energybins) 
+    bkg_hist, tmpbinz = np.histogram(bkg_evts, bins=energybins)
+    bkg_hist = bkg_hist*(infov_pix_n/oofov_pix_n)
+    print (infov_pix_n/oofov_pix_n)
+    plt.figure(figsize=(9, 9))
+    plt.title('Single event spectra of '+module)
+    fov, bkg, em, ew = fov_hist, bkg_hist,emeans, ewidths
+    plt.errorbar(em, fov/ew, yerr=np.sqrt(fov)/ew, xerr=ew,
+                 label =module, color='k', ls='',fmt='')
+    plt.step(em+ew, fov/ew, color='k',lw=1.2)
+    plt.errorbar(em, bkg/ew, yerr=np.sqrt(bkg)/ew, xerr=ew,
+                 color='r', ls='',fmt='',alpha=0.5,label=module+' bkg')
+    plt.step(em+ew, bkg/ew, color='r',lw=1.2, ls=':',alpha=0.5)
+    plt.loglog()    
+    plt.legend()
+    plt.xlabel('Energy, keV')
+    plt.ylabel('Counts/keV')
     plt.show()
 
 
 
 
-
-
-
-def get_lcurve(evtimes, evenergies, evgrade, evrawx, evrawy, gti, median_ratio, filepath,module,teln):
+def get_lcurve(evtimes, evenergies, evgrade, evflag, evrawx, evrawy, gti, median_ratio, filepath,module,teln):
     gti_total = np.sum(gti[:,-1]-gti[:,0])
     gti_start = gti[:,0]
     gti_stop = gti[:,-1]

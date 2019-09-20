@@ -91,6 +91,7 @@ else:
     print ('>>>>>>>>> subversion:'+subvers)
 
 wdir      = '/srg/a1/work/oper/data/2019/'
+wdir      = '/srg/a1/pub/DATA/processed/2019/'
 L0        = os.path.join(wdir,stem,'L0')
 L1b       = os.path.join(wdir,stem,'L1b')
 stem_tail = '_urd.fits'
@@ -101,7 +102,7 @@ module_color   = ['k','r','g','b','m','c','lime']
 pdfname = stem + '.pdf'
 pdffile =  PdfPages(pdfname)
     
-for module,teln in zip(module_names[:1],tel_names):
+for module,teln in zip(module_names[:],tel_names):
     print ('>>>>>>>>> Working with module '+ module)
     evtfile = stem +'_'+subvers+'.'+ module + '_urd.fits'
     evtpath = os.path.join(L1b,evtfile)
@@ -111,7 +112,8 @@ for module,teln in zip(module_names[:1],tel_names):
     except:
         print ('>>ERROR>> Cannot open '+evtpath)
     evtimes, evenergies, evgrade, evrawx, evrawy, gti, median_ratio = artql.get_cl_events(evtpath,module,teln)
-    artql.get_lcurve(evtimes, evenergies, evgrade, evrawx, evrawy, gti, median_ratio,evtpath,module,teln)
+    artql.get_spectrum(evtimes, evenergies, evgrade, evrawx, evrawy, gti, median_ratio,evtpath,module,teln)
+#    artql.get_lcurve(evtimes, evenergies, evgrade, evrawx, evrawy, gti, median_ratio,evtpath,module,teln)
 
 #    plt.figure(figsize=(9, 9))
 #    plt.title('Out-of-FOV countrates, 5-60 keV, single events only')
