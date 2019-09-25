@@ -2,6 +2,45 @@
 # -*- coding: utf8 -*-
 '''
 
+                                  _.---"'"""""'`--.._
+                             _,.-'                   `-._
+                         _,."                            -.
+                     .-""   ___...---------.._             `.
+                     `---'""                  `-.            `.
+                                                 `.            \
+                                                   `.           \
+                                                     \           \
+                                                      .           \
+   QUICKLOOK?                                         |            .
+                                                      |            |
+                                _________             |            |
+                          _,.-'"         `"'-.._      :            |
+                      _,-'                      `-._.'             |
+                   _.'                              `.             '
+        _.-.    _,+......__                           `.          .
+      .'    `-"'           `"-.,-""--._                 \        /
+     /    ,'                  |    __  \                 \      /
+    `   ..                       +"  )  \                 \    /
+     `.'  \          ,-"`-..    |       |                  \  /
+      / " |        .'       \   '.    _.'                   .'
+     |,.."--"""--..|    "    |    `""`.                     |
+   ,"               `-._     |        |                     |
+ .'                     `-._+         |                     |
+/                           `.                        /     |
+|    `     '                  |                      /      |
+`-.....--.__                  |              |      /       |
+   `./ "| / `-.........--.-   '              |    ,'        '
+     /| ||        `.'  ,'   .'               |_,-+         /
+    / ' '.`.        _,'   ,'     `.          |   '   _,.. /
+   /   `.  `"'"'""'"   _,^--------"`.        |    `.'_  _/
+  /... _.`:.________,.'              `._,.-..|        "'
+ `.__.'                                 `._  /
+                                           "' mh
+
+picture from: https://www.fiikus.net/asciiart/pokemon/079.txt
+
+
+
 artquicklook_l1
 
 General description:
@@ -92,7 +131,7 @@ else:
 
 wdir      = '/srg/a1/work/oper/data/2019/'
 wdir      = '/srg/a1/pub/DATA/processed/2019/'
-L0        = os.path.join(wdir,stem,'L0')
+L1        = os.path.join(wdir,stem,'L1')
 L1b       = os.path.join(wdir,stem,'L1b')
 stem_tail = '_urd.fits'
 gyro_file = stem + '_'+subvers+'_gyro_att.fits'
@@ -103,7 +142,7 @@ pdfname = stem + '.pdf'
 #pdffile =  PdfPages(pdfname)
 
 with PdfPages(pdfname) as pdffile: 
-    for module,teln,modc in zip(module_names[:],tel_names,module_color):
+    for module,teln,modc in zip(module_names[:1],tel_names,module_color):
         print ('>>>>>>>>> Working with module '+ module)
         evtfile = stem +'_'+subvers+'.'+ module + '_urd.fits'
         evtpath = os.path.join(L1b,evtfile)
@@ -117,6 +156,9 @@ with PdfPages(pdfname) as pdffile:
         cleanmask = np.bitwise_and(np.bitwise_and(evgrade>=0,evgrade<=8),np.bitwise_and(evenergies>=4,evenergies<=11.))
         artql.get_rawmap(evrawx[cleanmask], evrawy[cleanmask], pdffile, teln)    
         artql.get_lcurve(evtimes, evenergies, evgrade, evflag, evrawx, evrawy, gti, evtpath,module,teln, pdffile)
+    
+    gyropath = os.path.join(L1,gyro_file)
+    artql.get_radec(gyropath, gti, pdffile)
     d = pdffile.infodict()
     d['Title'] = 'Quicklook ART-XC report, v.1'
     d['Author'] = 'hart'

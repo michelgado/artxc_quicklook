@@ -9,6 +9,7 @@ import matplotlib.colors as mc
 from astropy import units as u
 from astropy.coordinates import SkyCoord, Galactic
 from astropy.time import Time
+from astropy.wcs import WCS
 
 def get_hk_gti(time, voltage, gti):
     '''
@@ -139,6 +140,11 @@ def get_lcurve(evtimes, evenergies, evgrade, evflag, evrawx, evrawy, gti, filepa
     gti_start = gti[:,0]
     gti_stop = gti[:,-1]
 
+#    try:
+#        pzfile = fits.open('pz.fits')
+#        obsid, obsstart, obsstop = pzfile[1]['EXPERIMENT'],pzfile[1]['START'],pzfile[1]['STOP']
+        
+
 ##  filter out good inFOV events   
     Elow, Ehigh = 4., 11.
     energymask  = np.bitwise_and(evenergies>=Elow, evenergies<=Ehigh)
@@ -227,13 +233,13 @@ def get_lcurve(evtimes, evenergies, evgrade, evflag, evrawx, evrawy, gti, filepa
     plt.step(mean_times+delta_times, good_rate, color='k',lw=1., alpha=0.5)
     plt.axvline(gti_start[0], color='darkred', ls='dashed', lw=0.8)
     t_offset= np.min([2000, 0.1*np.sum(gti_stop[-1]-gti_start[0])])
-    plt.text(gti_start[0]-t_offset, (np.max(good_rate)-np.min(good_rate))*0.5, str(isosta), rotation='vertical', color='darkred',verticalalignment='center')
+    plt.text(gti_start[0]-t_offset, (np.nanmax(good_rate))*0.5, str(isosta), rotation='vertical', color='darkred',verticalalignment='top', horizontalalignment='center')
     plt.axvline(gti_stop[-1], color='darkred', ls='dashed', lw=0.8)
-    plt.text(gti_stop[-1]+t_offset, (np.max(good_rate)-np.min(good_rate))*0.5, str(isosto), rotation='vertical', color='darkred',verticalalignment='center')
-    plt.gca().xaxis.set_major_formatter(ScalarFormatter(useOffset=False))
+    plt.text(gti_stop[-1]+t_offset, (np.nanmax(good_rate))*0.5, str(isosto), rotation='vertical', color='darkred',verticalalignment='top', horizontalalignment='center')
     plt.ylabel('Counts/s')
     plt.xlabel('Time, s')
-    plt.xlim(gti_start[0]-t_offset, gti_stop[-1]+t_offset)
+    plt.xlim(gti_start[0]-t_offset-1000, gti_stop[-1]+t_offset+1000)
+    plt.gca().xaxis.set_major_formatter(ScalarFormatter(useOffset=False))
     plt.yscale('log')
     pdf.savefig() 
     plt.close()
@@ -274,144 +280,101 @@ def get_rawmap(selected_rawx, selected_rawy, pdf, teln):
 
 
 
-#    plt.figure()
-#    plt.hist(evtimes, bins=timebins, histtype='step', color='k')
-#    plt.hist(gtifilter(good_evts, newgti), bins=timebins, histtype='step', color='b')
-#    plt.plot(t_hk, v_hk*(-0.1), 'g-')
-#    plt.plot(t_ratios, ratios, 'r-')
-#    plt.show()
+def get_radec(gyropath, gti, pdf):
+    gti_start = gti[:,0]
+    gti_stop = gti[:,-1]
+    gyro = fits.open(gyropath)
+    ra, dec, time = gyro[1].data['RA'],gyro[1].data['DEC'],gyro[1].data['TIME']
+    timeints  = time[1:] - time[:-1]
 
-#    times, times_err, rates, rates_err = [],[],[],[]
-#    while c_time+timebin < endtime:
-#        n_bkg_photons = len(cl_events[np.bitwise_and(cl_events>=c_time, cl_events<(c_time + timebin))])
-#        livetime = get_gti_livetime(c_time, c_time+timebin, gti_start, gti_stop)
-#        livetime = get_deadtime_corr(c_time, c_time+timebin, livetime, evtimes)
-#        print ('From ',c_time,' to ',c_time+timebin,' selected ',n_bkg_photons,' in livetime of ',livetime)
-#        print ('Rate is ',np.round(n_bkg_photons/livetime,2 ),' cts')
-#        times.append(c_time+0.5*timebin)
-#        times_err.append(0.5*timebin)
-#        rates.append(n_bkg_photons/(livetime*active_pix))
-#        rates_err.append(np.sqrt(n_bkg_photons)/(livetime*active_pix))
-#        c_time+=timebin
-#
-#    n_bkg_photons = len(cl_events[np.bitwise_and(cl_events>=c_time, cl_events<(endtime))])
-#    livetime = get_gti_livetime(c_time, endtime, gti_start, gti_stop)
-#    livetime = get_deadtime_corr(c_time, endtime, livetime, evtimes)
-#    print ('From ',c_time,' to ',endtime,' selected ',n_bkg_photons,' in livetime of ',livetime)
-#    print ('Rate is ',np.round(n_bkg_photons/livetime,2 ),' cts')
-#    times.append((endtime+c_time)/2)
-#    times_err.append((endtime-c_time)/2)
-#    rates.append(n_bkg_photons/livetime)
-#    rates_err.append(np.sqrt(n_bkg_photons)/livetime)
-#    c_time+=timebin
-#
-#    evtlist.close()
-#    return np.array(times),np.array(times_err),np.array(rates),np.array(rates_err)
+    plt.figure(figsize=(9, 9))
+    xmin, xmax = np.max([gti_start[0]-1800, time[0]]),np.min([gti_stop[-1]+1800, time[-1]])
+    figtitle = 'GYRO data'  
+    if len(time[time<(gti_start[0]-86400)]):
+        figtitle+='\n<!>NULL or invalid values in GYRO file!'
+    if np.nanmax(timeints)>5.0:
+        figtitle+='\n<!>GAPS in GYRO file!'
+
+    time_mask = np.bitwise_and(time>= gti_start[0]-1800,time<= gti_stop[-1]+1800)
+    time,ra,dec = time[time_mask], ra[time_mask], dec[time_mask]
+    coords = SkyCoord(ra=ra*u.degree, dec=dec*u.degree, frame='icrs')
+    timeints  = time[1:] - time[:-1]
+    meantimes = (time[1:] + time[:-1])*0.5
+
+    deg2arcsec     = 3600.
+    good_times     = timeints>0.
+    meantimes      = meantimes[good_times]
+    timeints       = timeints[good_times]
+    offsets        = coords[:-1:].separation(coords[1::])
+    offsets        = offsets[good_times]
+    angular_speeds = (offsets/timeints)
+
+    plt.title(figtitle)
+    plt.plot(time, ra, 'r.', label='RA')
+    plt.plot(time, dec, 'b.', label='DEC')
+    plt.legend()
+    plt.xlabel('Time, s')
+    plt.ylabel('Coordinate, degree')
+    plt.xlim(xmin, xmax)
+    pdf.savefig()
+    plt.close()
 
 
-#def  get_gti_livetime(tstart, tstop, gti_start, gti_stop):
-#    #calculate total amount of live time in interval from tstart to tstop
-#    # livetime = sum(gti)
-#    livetime = 0.
-#    gti_before = gti_start >= tstop
-#    gti_after  = gti_stop<tstart
-#    gti_mask   = np.bitwise_or(gti_before, gti_after)
-#    gti_mask   = np.bitwise_not(gti_mask) 
-#    gti_start, gti_stop =  gti_start[gti_mask], gti_stop[gti_mask]
-#    for gti_start_time, gti_stop_time in zip(gti_start, gti_stop):
-#        if gti_start_time<=tstart and gti_stop_time<=tstop:
-#            dlivetime = (gti_stop_time - tstart)
-#            livetime+=dlivetime
-#        if tstart<=gti_start_time and gti_stop_time<=tstop:
-#            dlivetime = (gti_stop_time - gti_start_time)
-#            livetime+=dlivetime
-#        if tstart<=gti_start_time and tstop<=gti_stop_time:
-#            dlivetime = (tstop - gti_start_time)
-#            livetime+=dlivetime
-#        if gti_start_time<=tstart and tstop<=gti_stop_time:
-#            dlivetime = (tstop - tstart)
-#            livetime+=dlivetime
-#    return livetime
-#
-#def  get_deadtime_corr(tstart, tstop, livetime, all_events):
-#    # DEADTIME for ART-XC is fixed at 0.77 ms 
-#    
-#    DEADTIME_const = 0.77/1000. #seconds
-#    mask           = np.bitwise_and(all_events>=tstart, all_events<tstop)
-#    N_good_evts    = len(all_events[mask])
-#    livetime_corr       = livetime - N_good_evts*DEADTIME_const
-#    print ('DEADTIME correction is ',np.round((livetime/livetime_corr)*100, 1),'%')
-#    return livetime_corr
-#            
-#    
-#
-#def get_bkg_lcurve(filepath,module):
-#    """ Read eventfile, get events and corresponding GTIs"""
-##    try:
-#    evtlist = fits.open(filepath)
-##   read GTI 
-#    gti_start   = np.array(evtlist[2].data['START'])
-#    gti_stop    = np.array(evtlist[2].data['STOP'])
-#    gti_total   = np.sum(gti_stop-gti_start)
-#    print('Total livetime ',np.round(gti_total,2), ' s, not DEADTIME corrected')
-#    
-##   read events and select 
-#    evtimes     = np.array(evtlist[1].data['TIME'])
-#    evenergies  = np.array(evtlist[1].data['ENERGY'])
-#    evntop      = np.array(evtlist[1].data['NTOP'])
-#    evnbot      = np.array(evtlist[1].data['NBOT'])
-#    evrawx      = np.array(evtlist[1].data['RAW_X'])
-#    evrawy      = np.array(evtlist[1].data['RAW_Y'])
-##    
-#    Elow, Ehigh = 5., 60.
-#    energymask  = np.bitwise_and(evenergies>=Elow, evenergies<=Ehigh)
-#    pattmask    = np.bitwise_and(evntop==1, evnbot==1)
-#    goodphmask  = np.bitwise_and(energymask, pattmask)
-#    totalmask   = np.copy(goodphmask)
-#
-#    #Select photons outside of FOV using caldb file
-#    detmask     =  get_CALDB_outfov(module)      
-#    active_pix  = np.sum(detmask)
-#    for rawx, rawy, i in zip(evrawx,evrawy,np.arange(len(totalmask))):
-#        if detmask[rawx, rawy]==0:
-#            totalmask[i] = 0
-#
-#    cl_events   = evtimes[totalmask]
-#    total_bkg_evts = len(evtimes[totalmask])
-#        
-#    print('Using only ',Elow,'-',Ehigh,' keV, NTOP==NBOT==1 photons')
-#    print('    outside illuminated area')
-#    print('selected: ',len(cl_events), ' events from ',len(evtimes))
-#    mean_rate = total_bkg_evts/gti_total    
-#    print('Mean background countrate: ', np.round(mean_rate,2), 'cts/s')
-#    
-#    timebin = 100.
-#    starttime, endtime = gti_start[0],gti_stop[-1]
-#    c_time = starttime
-#    times, times_err, rates, rates_err = [],[],[],[]
-#    while c_time+timebin < endtime:
-#        n_bkg_photons = len(cl_events[np.bitwise_and(cl_events>=c_time, cl_events<(c_time + timebin))])
-#        livetime = get_gti_livetime(c_time, c_time+timebin, gti_start, gti_stop)
-#        livetime = get_deadtime_corr(c_time, c_time+timebin, livetime, evtimes)
-#        print ('From ',c_time,' to ',c_time+timebin,' selected ',n_bkg_photons,' in livetime of ',livetime)
-#        print ('Rate is ',np.round(n_bkg_photons/livetime,2 ),' cts')
-#        times.append(c_time+0.5*timebin)
-#        times_err.append(0.5*timebin)
-#        rates.append(n_bkg_photons/(livetime*active_pix))
-#        rates_err.append(np.sqrt(n_bkg_photons)/(livetime*active_pix))
-#        c_time+=timebin
-#
-#    n_bkg_photons = len(cl_events[np.bitwise_and(cl_events>=c_time, cl_events<(endtime))])
-#    livetime = get_gti_livetime(c_time, endtime, gti_start, gti_stop)
-#    livetime = get_deadtime_corr(c_time, endtime, livetime, evtimes)
-#    print ('From ',c_time,' to ',endtime,' selected ',n_bkg_photons,' in livetime of ',livetime)
-#    print ('Rate is ',np.round(n_bkg_photons/livetime,2 ),' cts')
-#    times.append((endtime+c_time)/2)
-#    times_err.append((endtime-c_time)/2)
-#    rates.append(n_bkg_photons/livetime)
-#    rates_err.append(np.sqrt(n_bkg_photons)/livetime)
-#    c_time+=timebin
-#
-#    evtlist.close()
-#    return np.array(times),np.array(times_err),np.array(rates),np.array(rates_err)
-#
+
+
+
+
+    plt.figure(figsize=(10, 6))
+    plt.title("GYRO: using 1 point per minute!")
+    plt.xlabel('Time, s')
+    plt.ylabel('Angular speed, arcsec/s')
+    plt.plot(meantimes[::60], angular_speeds[::60], 'r.-')
+    plt.yscale('log')
+    plt.xlim(xmin, xmax)
+    plt.tight_layout()
+    pdf.savefig() 
+    plt.close()
+
+    header = {
+        'NAXIS': 2,
+        'NAXIS1': 720,
+        'NAXIS2': 380,
+        'CRPIX1': 360.,
+        'CRPIX2': 180.,
+        'CRVAL1': 0.,
+        'CRVAL2': 0.,
+        'CDELT1': -0.5,
+        'CDELT2': 0.5,
+        'CTYPE1': 'GLON-MOL',
+        'CTYPE2': 'GLAT-MOL'}
+    wcs  = WCS(header)
+    #expoimg = np.zeros(720,360)
+
+    plt.figure(figsize=(12,7))
+    ax = plt.subplot(projection=wcs)
+    cmap = plt.cm.rainbow
+    time = time - time[0]
+    norm = mc.Normalize(vmin=time[0]*0.95, vmax=time[-1]*1.05)
+    for c,t in zip(coords[::100], time[::100]):
+        ax.plot_coord(c.transform_to('galactic'),'.', color=cmap(norm(t))) 
+    ax.plot_coord(coords[0].transform_to('galactic'),'.', color=cmap(norm(time[0])), label = 'Time from start: '+str(int(time[0]))) 
+    ax.plot_coord(coords[-1].transform_to('galactic'),'.', color=cmap(norm(time[-1])), label = 'Time from start: '+str(int(time[-1]))) 
+
+    lon = ax.coords['glon']
+    lat = ax.coords['glat']
+    lon.set_axislabel('Galactic Longitude')
+    lat.set_axislabel('Galactic Latitude')
+    lon.set_ticks(spacing=30. * u.degree)
+    lat.set_ticks(spacing=30. * u.degree)
+    ax.grid(lw=1.)
+    ax.coords[0].set_axislabel('Galactic Longitude')
+    ax.coords[1].set_axislabel('Galactic Latitude')
+    plt.legend()
+    pdf.savefig() 
+    plt.close()
+
+
+
+
+
+    
