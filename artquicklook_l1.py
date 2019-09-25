@@ -70,7 +70,7 @@ from arttools.caldb import get_shadowmask
 from sys import exit
 import os.path
 import arttools.quicktools as artql
-
+import datetime
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--stem", help="ART-XC stem")
@@ -100,20 +100,31 @@ module_names   = ['02','04','08','10','20','40','80']
 tel_names = ['T1','T2','T3','T4','T5','T6','T7']
 module_color   = ['k','r','g','b','m','c','lime']
 pdfname = stem + '.pdf'
-pdffile =  PdfPages(pdfname)
-    
-for module,teln in zip(module_names[:],tel_names):
-    print ('>>>>>>>>> Working with module '+ module)
-    evtfile = stem +'_'+subvers+'.'+ module + '_urd.fits'
-    evtpath = os.path.join(L1b,evtfile)
-    try:
-        evtfits = fits.open(evtpath)
-        evtfits.close()
-    except:
-        print ('>>ERROR>> Cannot open '+evtpath)
-    evtimes, evenergies, evgrade, evrawx, evrawy, gti, median_ratio = artql.get_cl_events(evtpath,module,teln)
-    artql.get_spectrum(evtimes, evenergies, evgrade, evrawx, evrawy, gti, median_ratio,evtpath,module,teln)
-#    artql.get_lcurve(evtimes, evenergies, evgrade, evrawx, evrawy, gti, median_ratio,evtpath,module,teln)
+#pdffile =  PdfPages(pdfname)
+
+with PdfPages(pdfname) as pdffile: 
+    for module,teln,modc in zip(module_names[:],tel_names,module_color):
+        print ('>>>>>>>>> Working with module '+ module)
+        evtfile = stem +'_'+subvers+'.'+ module + '_urd.fits'
+        evtpath = os.path.join(L1b,evtfile)
+        try:
+            evtfits = fits.open(evtpath)
+            evtfits.close()
+        except:
+            print ('>>ERROR>> Cannot open '+evtpath)
+        evtimes, evenergies, evgrade, evflag, evrawx, evrawy, gti = artql.get_cl_events(evtpath,module,teln)
+        fov_hist,bkg_hist,emeans, ewidths = artql.get_spectrum(evtimes, evenergies, evgrade, evflag, evrawx, evrawy, gti, evtpath,module,teln, pdffile)
+        cleanmask = np.bitwise_and(np.bitwise_and(evgrade>=0,evgrade<=8),np.bitwise_and(evenergies>=4,evenergies<=11.))
+        artql.get_rawmap(evrawx[cleanmask], evrawy[cleanmask], pdffile, teln)    
+        artql.get_lcurve(evtimes, evenergies, evgrade, evflag, evrawx, evrawy, gti, evtpath,module,teln, pdffile)
+    d = pdffile.infodict()
+    d['Title'] = 'Quicklook ART-XC report, v.1'
+    d['Author'] = 'hart'
+    d['Subject'] = 'ART-XC quicklook data'
+    d['CreationDate'] = datetime.datetime.today()
+    d['ModDate'] = datetime.datetime.today()
+
+
 
 #    plt.figure(figsize=(9, 9))
 #    plt.title('Out-of-FOV countrates, 5-60 keV, single events only')
