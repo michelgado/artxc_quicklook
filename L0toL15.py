@@ -73,21 +73,22 @@ if __name__ == "__main__":
     urdfname = fname
     urdfile = fits.open(urdfname)
     urddata = urdfile["EVENTS"].data
+    flag = np.ones(urddata.size, np.uint8)
 
     caldbfile = fits.open(get_caldb("TCOEF", URDTOTEL[urdfile[1].header["URDN"]]))
     masktime = (urddata["TIME"] > attdata["TIME"][0]) & (urddata["TIME"] < attdata["TIME"][-1])
+    flag[masktime] = 0
     RA, DEC = np.empty(urddata.size, np.double), np.empty(urddata.size, np.double)
     r, d = get_photons_sky_coord(urddata[masktime],
                     urdfile["EVENTS"].header["URDN"],
                     attdata)
     RA[masktime] = r
     DEC[masktime] = d
-    ENERGY, xc, yc, grades = get_events_energy(urddata,
-                                    urdfile["HK"].data, caldbfile)
+    ENERGY, xc, yc, grades = get_events_energy(urddata, urdfile["HK"].data, caldbfile)
 
     shadow = get_shadowmask(urdfile)
     maskshadow = get_shadowed_pix_mask_for_urddata(urddata, shadow)
-    grades[np.logical_not(maskshadow)] += 64
+    flag[np.logical_not(maskshadow)] = 2
     h = copy.copy(urdfile["EVENTS"].header)
     h.pop("NAXIS2")
 
@@ -97,7 +98,8 @@ if __name__ == "__main__":
             [fits.Column(name="ENERGY", array=ENERGY, format="1D", unit="keV"),
              fits.Column(name="RA", array=np.copy(RA*180./pi), format="1D", unit="deg"),
              fits.Column(name="DEC", array=np.copy(DEC*180./pi), format="1D", unit="deg"),
-             fits.Column(name="GRADE", array=grades, format="I")], header=h)
+             fits.Column(name="GRADE", array=grades, format="I"),
+             fits.Column(name="FLAG", array=flag, format="I")], header=h)
 
     newurdtable.name = "EVENTS"
     newfile = fits.HDUList([urdfile[0], newurdtable, urdfile[2], urdfile[3]])

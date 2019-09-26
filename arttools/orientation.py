@@ -16,6 +16,8 @@ ART_det_QUAT = {
      30 : Rotation([-0.0191570016725280,      -0.0012708747390465,      -0.0010039631945285,       0.9998151760311606]),
             }
 
+ART_det_mean_QUAT = Rotation([-0.0170407534937525, -0.0013956210322403, -0.0011146951027288, 0.9998532004335073])
+
 def to_2pi_range(val): return val%(2.*pi)
 
 def make_orientation_gti(attdata, urdn, rac, decc, deltara, deltadec):
@@ -33,8 +35,7 @@ def make_orientation_gti(attdata, urdn, rac, decc, deltara, deltadec):
     return gti
 
 def clear_att(attdata):
-    print(type(attdata))
-    print(attdata.size)
+    attdata = filter_gyrodata(attdata)
     attdata = attdata[np.argsort(attdata["TIME"])]
     if np.any(attdata["TIME"][1:] <= attdata["TIME"][:-1]):
         idx = np.where(attdata["TIME"][1:] <= attdata["TIME"][:-1])[0]
@@ -71,7 +72,6 @@ def get_gyro_quat(gyrodata):
     quat = Rotation(np.array([gyrodata["QORT_%d" % i] for i in [1,2,3,0]]).T)
     q0 = Rotation([0, 0, 0, 1]) #gyro axis initial rotattion in J2000 system
     qfin = q0*quat
-    print("len qfin", len(qfin))
     return qfin
 
 def filter_gyrodata(gyrodata):

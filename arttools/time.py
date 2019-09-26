@@ -4,6 +4,7 @@ from .orientation import get_gyro_quat_as_arr, vec_to_pol, \
 from .telescope import OPAX
 from math import pi
 from scipy.spatial.transform import Rotation, Slerp
+from scipy.interpolate import interp1d
 
 DELTASKY = 15./3600./180.*pi #previously I set it to be 5''
 """
@@ -11,10 +12,14 @@ optica axis is shifted 11' away of the sattelite x axis, therefore we need some 
 5'' binning at the edge of the detector, is rotation take place around its center is 2*pi/9/24
 (hint: pix size 45'', 5''=45''/9)
 """
-DELTAROLL = 2.*pi/24./18.
+DELTAROLL = 1./24./3.
 
 def get_gti(ffile):
     return np.array([ffile["GTI"].data["START"], ffile["GTI"].data["STOP"]]).T
+
+
+def filt_elist(urddata, gti):
+    return np.concatenate([urddata[s:e] for s, e in np.searchsorted(urddata["TIME"], gti)])
 
 def check_gti_shape(gti):
     if gti.ndim != 2 or gti.shape[1] != 2:
@@ -50,19 +55,14 @@ def gti_union(gti):
 
     3. compbine obtained start and end times in new gti
     """
-    gtiss = np.argsort(gti[:,0])
-    gtise = np.argsort(gti[:,1])
-
-    gtirs = np.ravel(gti[gtiss, :])
-    gtire = np.ravel(gti[gtise, :])
-    gtiidxs = np.argsort(gtirs)
-    gtiidxe = np.argsort(gtire)
-
-    newgti = np.array([
-        gti[gtiss[np.arange(0, gtiidxs.size, 2) == gtiidxs[0::2]], 0],
-        gti[gtise[np.arange(1, gtiidxe.size, 2) == gtiidxe[1::2]], 1]
-                ]).T
-    return newgti
+    gti = gti[gti[:, 1] > gti[:, 0]]
+    gti = gti[np.argsort(gti[:, 0])]
+    idx = np.argsort(np.ravel(gti))
+    gtis = np.ravel(gti)[idx]
+    mask = np.zeros(gtis.size, np.bool)
+    mask[::2] = idx[::2] == np.arange(0, idx.size, 2)
+    mask[1::2] = np.roll(mask[::2], -1)
+    return gtis[mask].reshape((-1, 2))
 
 def gti_intersection(gti1, gti2):
     check_gti_shape(gti1)
@@ -104,8 +104,8 @@ def hist_quat(quat):
     orhist[:, 2] = np.asarray(roll/DELTAROLL, np.int)
     return np.unique(orhist, return_index=True, return_inverse=True, axis=0)
 
-def make_ingti_times(time, gti):
-    print(gti[[0, -1]], time.min(), time.max())
+def make_ingti_times(time, ggti):
+    gti = gti_intersection(np.array([time[[0, -1]],]), ggti)
     idx = np.searchsorted(time, gti)
     tnew = np.empty(np.sum(idx[:,1] - idx[:,0]) + 2*idx.shape[0], np.double)
     cidx = np.empty(idx.shape[0] + 1, np.int)
@@ -115,20 +115,24 @@ def make_ingti_times(time, gti):
         tnew[cidx[i]+1: cidx[i+1]-1] = time[idx[i,0]:idx[i,1]]
         tnew[cidx[i]] = gti[i, 0]
         tnew[cidx[i + 1] - 1] = gti[i, 1]
-    print(tnew.min(), tnew.max())
     maskgaps = np.ones(max(tnew.size - 1, 0), np.bool)
     maskgaps[cidx[1:-1] - 1] = False
     return tnew, maskgaps
 
-def make_small_steps_quats(times, quats, gti):
-    print(times.min(), times.max())
+def make_small_steps_quats(times, quats, gti, urdhk=None):
     quatint = Slerp(times, quats)
     tnew, maskgaps = make_ingti_times(times, gti)
     if tnew.size == 0:
         return Rotation(np.empty((0, 4), np.double)), np.array([])
-    print(tnew.size, tnew.min(), tnew.max())
     ts = ((tnew[1:] + tnew[:-1])/2.)[maskgaps]
     dt = (tnew[1:] - tnew[:-1])[maskgaps]
+    if not urdhk is None:
+        crate = (urdhk["EVENTS"][1:] - urdhk["EVENTS"][:-1])/\
+            (urdhk["TIME"][1:] - urdhk["TIME"][:-1])
+        icrate = interp1d((urdhk["TIME"][1:] + urdhk["TIME"][:-1])/2.,
+                          crate, bounds_error=False, fill_value=np.median(crate))
+        dt = dt*(1. - 770e-6*icrate(ts))
+
     qval = quatint(ts)
 
     ra, dec, roll = quat_to_pol_and_roll(quatint(tnew))

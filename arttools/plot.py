@@ -5,7 +5,7 @@ from astropy.visualization import MinMaxInterval, SqrtStretch, ImageNormalize, L
 from astropy.wcs import WCS
 from .orientation import extract_raw_gyro, qrot0, ART_det_QUAT, \
         get_gyro_quat, nonzero_quaternions, vec_to_pol, pol_to_vec, get_gyro_quat_as_arr, \
-        get_photons_sky_coord
+        get_photons_sky_coord, filter_gyrodata, clear_att
 from ._det_spatial import raw_xy_to_vec, offset_to_vec, urd_to_vec, vec_to_offset_pairs, get_shadowed_pix_mask_for_urddata
 from .time import hist_orientation, gti_intersection, get_gti, make_small_steps_quats, hist_orientation_for_attfile
 from .telescope import URDNS
@@ -13,12 +13,17 @@ from .caldb import get_energycal, get_shadowmask
 from .energy import get_events_energy
 from astropy.io import fits
 from math import pi, cos, sin
-from multiprocessing import Pool, cpu_count
+from multiprocessing import Pool, cpu_count, Queue, Process, Pipe
+from threading import Thread
 import copy
 import time
 from scipy.interpolate import RegularGridInterpolator
+from scipy.spatial import ConvexHull
 import  matplotlib.pyplot as plt
-import os
+import os, sys
+from scipy.optimize import minimize
+
+ART_det_mean_QUAT = Rotation([-0.0170407534937525, -0.0013956210322403, -0.0011146951027288, 0.9998532004335073])
 
 
 class NoDATA(Exception):
@@ -50,12 +55,12 @@ def get_image(attname, urdname, locwcs, gti=None):
 
     if not gti is None:
         gti = gti_intersection(gti, np.array([attdata["TIME"][[0, -1]]]))
-        idx = np.searchsorted(urddata['TIME'], gti)
-        masktime = np.zeros(urddata.size, np.bool)
-        for s, e in idx:
-            masktime[s:e] = True
-    else:
-        masktime = np.ones(urddata.size, np.bool)
+    #gti = gti_intersection(gti, get_gti(urdfile))
+
+    idx = np.searchsorted(urddata['TIME'], gti)
+    masktime = np.zeros(urddata.size, np.bool)
+    for s, e in idx:
+        masktime[s:e] = True
 
     mask = np.copy(masktime)
     urddata = urddata[masktime]
@@ -64,9 +69,14 @@ def get_image(attname, urdname, locwcs, gti=None):
     urddata = urddata[maskshadow]
     mask[mask] = maskshadow
 
+    maskedgestrips = np.all([urddata["RAW_X"] > 0, urddata["RAW_X"] < 47,
+                             urddata["RAW_Y"] > 0, urddata["RAW_Y"] < 47], axis=0)
+
+    urddata = urddata[maskedgestrips]
+    mask[mask] = maskedgestrips
 
     ENERGY, xc, yc, grades = get_events_energy(urddata, np.copy(urdfile["HK"].data), caldbfile)
-    maskenergy = (grades >=0) & (grades <= 9)
+    maskenergy = (grades > -1) & (grades < 10)
     urddata = urddata[maskenergy]
     ENERGY = ENERGY[maskenergy]
     mask[mask] = maskenergy
@@ -90,7 +100,7 @@ def get_rawxy_hist(data):
     return img
 
 def get_sky_image(urddata, URDN, attdata, xe, ye, subscale=1):
-    attdata = filter_gyrodata(attdata)
+    agttdata = filter_gyrodata(attdata)
     qj2000 = Slerp(attdata["TIME"], get_gyro_quat(attdata))
     qj2000 = qj2000(np.repeat(urddata["TIME"], subscale*subscale))
     qall = qj2000*qrot0*ART_det_QUAT[URDN]
@@ -101,13 +111,13 @@ def get_sky_image(urddata, URDN, attdata, xe, ye, subscale=1):
     ra = (np.arctan2(phvec[:,1], phvec[:,0])%(2.*pi))*180./pi
     return np.histogram2d(dec, ra, [ye, xe])[0]
 
-def make_vec_to_sky_hist_fun(vecs, effarea, locwcs, xsize, ysize):
+def make_vec_to_sky_hist_fun(vecs, effarea, locwcs, img):
     def hist_vec_to_sky(quat, weight):
         vec_icrs = quat.apply(vecs)
         r, d = vec_to_pol(vec_icrs)
-        x, y = np.round(locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1)).T
+        x, y = (locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1) + 0.5).T.astype(np.int)
         locweight = weight*effarea
-        return np.histogram2d(x, y, [np.arange(xsize + 1) + 0.5, np.arange(ysize + 1) + 0.5], weights=locweight)[0].T
+        return np.add.at(img, [i, j], locweight)
     return hist_vec_to_sky
 
 def make_inverce_vign(vecsky, qval, exp, vignmap, hist):
@@ -139,25 +149,102 @@ class VignInt(object):
         mask = np.all([xy[:,0] > -14.2, xy[:,0] < 14.2, xy[:,1] > -14.2, xy[:,1] < 14.2], axis=0)
         return np.sum(self.exptime[mask]*self.rg(xy[mask]))
 
+class SkyPix(object):
+    def __init__(self, rg, qval, exptime, locwcs):
+        self.rg = rg
+        self.qval = qval
+        self.exptime = exptime
+        self.locwcs = locwcs
+
+    def __call__(self, idx):
+        x, y = idx
+        ra, dec = self.locwcs.all_pix2world([[x, y],], 1).T
+        vec = pol_to_vec(ra*pi/180., dec*pi/180.,)
+        vax = self.qval.apply([1., 0., 0.])
+        vprod = np.sum(vax*vec[0][np.newaxis,:], axis=1)
+        m1 = np.arccos(vprod) < 1170./3600.*pi/180.
+        xyoffset = vec_to_offset_pairs(self.qval[m1].apply(vec, inverse=True))
+        efscale = np.sum(self.rg(xyoffset)*self.exptime[m1])
+        return x - 1, y - 1, efscale
+
+
+class SphProj(object):
+
+    @staticmethod
+    def worker(rg, qval, exptime, locwcs, qin, qout):
+        while True:
+            i, j = qin.get()
+            if i == -1:
+                break
+            ra, dec = locwcs.all_pix2world([[i, j],], 1).T
+            vec = pol_to_vec(ra*pi/180., dec*pi/180.,)
+            """
+            vax = self.qval.apply([1., 0., 0.])
+            vprod = np.sum(vax*vec[0][np.newaxis,:], axis=1)
+            m1 = np.arccos(vprod) < 1170./3600.*pi/180.
+            xyoffset = vec_to_offset_pairs(self.qval[m1].apply(vec, inverse=True))
+            efscale = np.sum(self.rg(xyoffset)*self.exptime[m1])
+            """
+            xyoffset = vec_to_offset_pairs(qval.apply(vec[0], inverse=True))
+            efscale = np.sum(rg(xyoffset)*exptime)
+            qout.put([i - 1, j - 1, efscale])
+
+    @staticmethod
+    def collect(qout, img, size):
+        for k in range(size):
+            i, j, exp = qout.get()
+            img[j, i] = exp
+
+    def __init__(self, rg, qval, exptime, locwcs, mpnum=40):
+        self.qin = Queue(100)
+        self.qout = Queue()
+        self.pool = [Process(target=self.worker, args=(rg, qval, exptime, locwcs, self.qin, self.qout)) for i in range(mpnum)]
+
+    def start(self, xsize, ysize):
+        img = np.zeros((ysize, xsize), np.double)
+        for proc in self.pool: proc.start()
+
+        #pix = np.array([np.repeat(np.arange(1, xsize + 1), ysize), np.tile(np.arange(1, ysize + 1), xsize)]).T
+        ctr = 0
+        th = Thread(target=self.collect, args=(self.qout, img, xsize*ysize))
+        th.start()
+        for i in range(1, xsize + 1):
+            for j in range(1, ysize + 1):
+                self.qin.put([i, j])
+                sys.stderr.write('\rdone {0:%}'.format((i*ysize + j)/xsize/ysize))
+        for i in range(len(self.pool) + 5):
+            self.qin.put([-1, None])
+        for p in self.pool: p.join()
+        th.join()
+        return img
+
+
 def make_vignmap_for_quat2(locwcs, xsize, ysize, qval, exptime, vignmapfilename, energy=6.):
     vignmapfile = fits.open(vignmapfilename)
+    img = np.zeros((ysize, xsize), np.double)
     effarea = vignmapfile["Vign_EA"].data["EFFAREA"][
         np.searchsorted(vignmapfile["Vign_EA"].data["E"], energy)]
     rg = RegularGridInterpolator([vignmapfile["Coord"].data["X"],
                                   vignmapfile["Coord"].data["Y"]],
                                  effarea/effarea.max(), bounds_error=False, fill_value=0.)
-    x = np.repeat(np.arange(ysize) + 1., xsize)
-    y = np.tile(np.arange(xsize) + 1., ysize)
-    print(x.size, y.size)
-    hist = np.zeros(x.size, np.double)
-    xy = np.array([x, y]).T
-    r, d = locwcs.all_pix2world(xy, 1).T
-    vecsky = pol_to_vec(r, d)
-    pool = Pool(24)
-    hist[:] = pool.map(VignInt(vecsky, qval, exptime, rg), range(x.size))
-    return hist.reshape((ysize, xsize)).T
 
-def make_vignmap_for_quat(locwcs, xsize, ysize, qval, exptime, vignmapfilename, energy=6.):
+    """
+    pool = Pool(40)
+    pix = np.array([np.repeat(np.arange(1, xsize + 1), ysize), np.tile(np.arange(1, ysize + 1), xsize)]).T
+    ctr = 0
+    sp = SkyPix(rg, qval, exptime, locwcs)
+    for i, j, val in pool.imap_unordered(sp, pix):
+        img[j, i] = val
+        sys.stderr.write('\rdone {0:%}'.format(ctr/pix.shape[0]))
+        ctr += 1
+    """
+    proc = SphProj(rg, qval, exptime, locwcs)
+    img = proc.start(xsize, ysize)
+    return img
+
+
+
+def make_vignmap_for_quat(locwcs, xsize, ysize, qval, exptime, vignmapfilename, energy=6., ssize=64000): #262144):
     """
     to do: implement mpi reduce
     """
@@ -172,54 +259,107 @@ def make_vignmap_for_quat(locwcs, xsize, ysize, qval, exptime, vignmapfilename, 
         np.searchsorted(vignmapfile["Vign_EA"].data["E"], energy)]
     rg = RegularGridInterpolator([vignmapfile["Coord"].data["X"],
                                   vignmapfile["Coord"].data["Y"]],
-                                 effarea/effarea.max())
-    x = (np.arange(-230, 230) + 0.5)*0.0595
-    y = np.copy(x)
-    x = np.repeat(x, y.size)
-    y = np.tile(y, y.size)
+                                 effarea/effarea.max(),
+                                 bounds_error = False,
+                                 fill_value=0.)
+    #r, phi = np.sqrt(np.random.uniform(0., 14.8**2., ssize)), np.random.uniform(0., 2.*pi, ssize)
+    #x, y = r*np.cos(phi), r*np.sin(phi)
+    x = np.tile((np.arange(-115, 115) + 0.5)*0.595/5., 230)
+    y = np.repeat((np.arange(-115, 115) + 0.5)*0.595/5., 230)
+    mxy = (x**2. + y**2.) < (26.*0.595)**2.
+    x, y = x[mxy], y[mxy]
+
     vmap = rg(np.array([x, y]).T)
     vecs = offset_to_vec(x, y)
-    worker = make_vec_to_sky_hist_fun(vecs, vmap, locwcs, xsize, ysize)
-    hist = sum(worker(q, exp) for q, exp in zip(qval, exptime))
-    return hist/100.
+    img = np.zeros((ysize, xsize), np.double)
+    #wgh = np.zeros((ysize, xsize), np.int)
+
+    for q, exp in zip(qval ,exptime):
+        vec_icrs = q.apply(vecs)
+        r, d = vec_to_pol(vec_icrs)
+        x, y = (locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1) + 0.5).T.astype(np.int)
+        #u, idx, iidx, counts = np.unique(np.array([x, y]), return_index=True, return_inverse=True, return_counts=True, axis=1)
+        u, idx = np.unique(np.array([x, y]), return_index=True, axis=1)
+        #mask = (x < img.shape[1]) & (y < img.shape[0])
+        #np.add.at(img, (y[mask], x[mask]), vmap[mask]*exp)
+        np.add.at(img, (u[1], u[0]), vmap[idx]*exp)
+    #wgh[wgh==0] = 1
+    #return img*(14.8**2.*pi/0.595**2./ssize)
+    return img #/wgh
 
 def make_vignmap_mp(args):
     return make_vignmap_for_quat(*args)
 
-def make_wcs_for_urd_sets(urdflist, attflist, gti = {}):
-    if type(gti) is np.ndarray:
-        gti = {urd:gti for urd in URDNS}
-    qvtot, dttot = [], []
-    for urdfname, attfname in zip(urdflist, attflist):
-        attfile = fits.open(attfname)
-        attdata = np.copy(attfile["ORIENTATION"].data)
-        locgti = get_gti(fits.open(urdfname))
-        locgti = gti_intersection(locgti, np.array([attdata["TIME"][[0, -1]]]))
-        urdn = fits.getheader(urdfname, 1)["URDN"]
-        locgti = locgti if not urdn in gti else gti_intersection(locgti, gti.get(urdn))
-        if locgti.size == 0:
-            continue
-        quats = get_gyro_quat(attdata)*qrot0*ART_det_QUAT[urdn]
-        qvals, dt = make_small_steps_quats(attdata["TIME"], quats, locgti)
-        qvtot.append(qvals)
-        dttot.append(dt)
-    dttot = np.concatenate(dttot)
-    qvtot = Rotation(np.concatenate([q.as_quat() for q in qvtot]))
-    opaxis = qvtot.apply([1, 0, 0])
+def make_wcs_for_quat_radecs(ra, dec, pixsize=20./3600.):
+    radec = np.array([ra, dec]).T
+    ch = ConvexHull(radec)
+    r, d = radec[ch.vertices].T
+    def find_bbox(alpha):
+        x = r*cos(alpha) - d*sin(alpha)
+        y = r*sin(alpha) + d*cos(alpha)
+        return (x.max() - x.min())*(y.max() - y.min())
+    res = minimize(find_bbox, [pi/4., ], method="Nelder-Mead")
+    alpha = res.x
+    x, y = r*cos(alpha) - d*sin(alpha), r*sin(alpha) + d*cos(alpha)
+    xmin, xmax = x.min(), x.max()
+    ymin, ymax = y.min(), y.max()
+    xc = (xmax + xmin)/2.
+    yc = (ymax + ymin)/2.
+
+    locwcs = WCS(naxis=2)
+    locwcs.wcs.cdelt = [pixsize, pixsize]
+    cdmat = np.array([[cos(alpha), sin(alpha)], [-sin(alpha), cos(alpha)]])
+    print(cdmat)
+    locwcs.wcs.cd = cdmat*20./3600.
+    locwcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    locwcs.wcs.crval = [xc*cos(alpha) + yc*sin(alpha), -xc*sin(alpha) + yc*cos(alpha)]
+    desize = int((ymax - ymin + 0.6)/locwcs.wcs.cdelt[1])//2
+    desize = desize + 1 - desize%2
+    rasize = int((xmax - xmin + 0.6)/locwcs.wcs.cdelt[0])//2
+    rasize = rasize + 1 - rasize%2
+    locwcs.wcs.crpix = [rasize, desize]
+    print(locwcs.wcs)
+    plt.scatter(ra, dec, color="g")
+    print(rasize, desize)
+    r1, d1 = locwcs.all_pix2world(np.array([np.arange(1, rasize*2 + 1), np.ones(rasize*2)]).T, 1).T
+    print(r1, d1)
+    plt.scatter(r1, d1, color="b")
+    r1, d1 = locwcs.all_pix2world(np.array([np.arange(1, rasize*2 + 1), np.ones(rasize*2)*desize*2]).T, 1).T
+    plt.scatter(r1, d1, color="b")
+    r1, d1 = locwcs.all_pix2world(np.array([np.ones(desize*2), np.arange(1, desize*2 + 1)]).T, 1).T
+    plt.scatter(r1, d1, color="b")
+    r1, d1 = locwcs.all_pix2world(np.array([np.ones(desize*2)*rasize*2, np.arange(1, desize*2 + 1)]).T, 1).T
+    plt.scatter(r1, d1, color="b")
+
+    plt.scatter(*locwcs.all_pix2world([[1., 1.], [0., locwcs.wcs.crpix[1]*2 + 1],
+                                      [locwcs.wcs.crpix[0]*2 + 1, locwcs.wcs.crpix[1]*2 + 1],
+                                      [1., locwcs.wcs.crpix[1]*2 + 1]], 1).T, color="r")
+    plt.scatter([locwcs.wcs.crval[0],], [locwcs.wcs.crval[1],], color="k")
+    plt.show()
+    return locwcs
+
+def make_wcs_for_quats(quats, pixsize=20./3600.):
+    opaxis = quats.apply([1, 0, 0])
     ra, dec = vec_to_pol(opaxis)
     ra, dec = ra*180/pi, dec*180/pi
-    ramin, ramax = ra.min() - 0.5, ra.max() + 0.5
-    decmin, decmax = dec.min() - 0.5, dec.max() + 0.5
-    locwcs = WCS(naxis=2)
-    locwcs.wcs.cdelt = [20./3600., 20./3600.]
-    locwcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
-    desize = int((decmax - decmin)/locwcs.wcs.cdelt[1])//2
-    desize = desize + 1 - desize%2
-    rasize = int((ramax - ramin)/locwcs.wcs.cdelt[0])//2
-    rasize = rasize + 1 - rasize%2
-    locwcs.wcs.crpix = np.array([rasize, desize], np.int)
-    locwcs.wcs.crval = [(ramin + ramax)/2., (decmin + decmax)/2.]
-    return qvtot, dttot, locwcs
+    return make_wcs_for_quat_radecs(ra, dec, pixsize)
+
+def make_wcs_for_attsets(attflist, gti):
+    for attname in attflist:
+        attdata = np.copy(fits.getdata(attname, 1))
+        attdata = clear_att(attdata)
+        lgti = gti_intersection(gti, np.array([attdata["TIME"][[0, -1]],]))
+        print(lgti)
+        idx = np.searchsorted(attdata["TIME"], lgti)
+        mask = np.zeros(attdata.size, np.bool)
+        for s, e in idx:
+            mask[s:e] = True
+        attdata = attdata[mask]
+        quats = get_gyro_quat(attdata)*qrot0*ART_det_mean_QUAT
+        qvtot.append(quats) #qvals)
+
+    qvtot = Rotation(np.concatenate([q.as_quat() for q in qvtot]))
+    return make_wcs_for_quat_set(qvtot)
 
 def make_mosaic_for_urdset_by_region(urdflist, attflist, ra, dec, deltara, deltadec):
     gti = {}
@@ -269,7 +409,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti={}):
     the wcs is produced automatically to cover nonzero exposition area with some margin
     """
 
-    qvtot, dttot, locwcs = make_wcs_for_urd_sets(urdflist, attflist, gti)
+    qvtot, dttot, locwcs = make_wcs_for_urd_sets(attflist, gti.get(28))
     xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
     imgdata = np.zeros((ysize, xsize), np.double)
     print(imgdata.shape)
@@ -289,7 +429,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti={}):
 
     pool = Pool(24)
     vignfilename = "/srg/a1/work/andrey/art-xc_vignea.fits"
-    emaps = pool.map(make_vignmap_mp, [(locwcs, xsize, ysize, qval[i::50], exptime[i::50], vignfilename) for i in range(50)])
+    emaps = pool.imap(make_vignmap_mp, [(locwcs, xsize, ysize, qval[i::50], exptime[i::50], vignfilename) for i in range(50)])
     emap = sum(emaps)
 
     emap = fits.ImageHDU(data=emap, header=locwcs.to_header())
