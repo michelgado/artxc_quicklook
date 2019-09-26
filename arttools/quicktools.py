@@ -306,7 +306,7 @@ def get_radec(gyropath, gti, pdf):
     meantimes      = meantimes[good_times]
     timeints       = timeints[good_times]
     offsets        = coords[:-1:].separation(coords[1::])
-    offsets        = offsets[good_times]
+    offsets        = offsets[good_times]*deg2arcsec
     angular_speeds = (offsets/timeints)
 
     plt.title(figtitle)
@@ -318,10 +318,6 @@ def get_radec(gyropath, gti, pdf):
     plt.xlim(xmin, xmax)
     pdf.savefig()
     plt.close()
-
-
-
-
 
 
     plt.figure(figsize=(10, 6))
