@@ -1,7 +1,7 @@
 import numpy as np
 from .orientation import get_gyro_quat_as_arr, vec_to_pol, \
         quat_to_pol_and_roll, extract_raw_gyro, get_gyro_quat, pol_to_vec, \
-        clear_att
+        clear_att, hist_orientation
 from .telescope import OPAX
 from .mask import edges as maskedges
 from math import pi
@@ -186,13 +186,12 @@ def make_small_steps_quats(times, quats, gti, urdhk=None):
         dtn = dt
     return qval, dtn
 
-def hist_orientation(qval, dt):
-    oruniq, uidx, invidx = hist_quat(qval)
-    exptime = np.zeros(uidx.size, np.double)
-    np.add.at(exptime, invidx, dt)
-    return exptime, qval[uidx]
 
-#skyvec = pol_to_vec(np.array([ra*pi/180.,]), np.array([dec*pi/180.,]))[0]
+def estimate_epxtime(skyvec, ts, quats, gti):
+    pass
+
+
+
 def make_sky_vec_exptime(skyvec, ts, quats, gti):
     quatint = Slerp(times, quats)
     tnew, maskgaps = make_ingti_times(times, gti)
@@ -208,9 +207,6 @@ def make_sky_vec_exptime(skyvec, ts, quats, gti):
         dt = dt*(1. - 770e-6*icrate(ts))
 
     qval = quatint(ts)
-
-
-
 
 
 def hist_orientation_for_attfile(attdata, gti, v0=None):
@@ -237,8 +233,3 @@ def make_hv_gti(hkdata):
     input: HK hdu extention of an L0 events fits file
     '''
     return hkdata["TIME"][maskedges(hkdata["HV"] < -95.) + [0, -1]]
-
-
-def deadtime_corr(ts, dt, hkdata):
-    pass
-
