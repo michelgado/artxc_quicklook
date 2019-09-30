@@ -10,6 +10,7 @@ from astropy import units as u
 from astropy.coordinates import SkyCoord, Galactic
 from astropy.time import Time
 from astropy.wcs import WCS
+import subprocess
 
 def get_hk_gti(time, voltage, gti):
     '''
@@ -280,7 +281,7 @@ def get_rawmap(selected_rawx, selected_rawy, pdf, teln):
 
 
 
-def get_radec(gyropath, gti, pdf):
+def get_radec(gyropath, gti, pdf, pngname):
     gti_start = gti[:,0]
     gti_stop = gti[:,-1]
     gyro = fits.open(gyropath)
@@ -306,22 +307,18 @@ def get_radec(gyropath, gti, pdf):
     meantimes      = meantimes[good_times]
     timeints       = timeints[good_times]
     offsets        = coords[:-1:].separation(coords[1::])
-    offsets        = offsets[good_times]
+    offsets        = offsets[good_times]*deg2arcsec
     angular_speeds = (offsets/timeints)
 
     plt.title(figtitle)
-    plt.plot(time, ra, 'r.', label='RA')
+    plt.plot(time, ra-180., 'r.', label='RA-180 deg')
     plt.plot(time, dec, 'b.', label='DEC')
     plt.legend()
     plt.xlabel('Time, s')
     plt.ylabel('Coordinate, degree')
     plt.xlim(xmin, xmax)
-    pdf.savefig()
+    plt.savefig(pngname, dpi=400,format='png')
     plt.close()
-
-
-
-
 
 
     plt.figure(figsize=(10, 6))
@@ -376,5 +373,15 @@ def get_radec(gyropath, gti, pdf):
 
 
 
-
+def run(command, verbose=False):
+    if verbose:
+        print('command run: {}'.format(command))  # add timestamp
+    try:
+        retcode = subprocess.call(command, shell=True)
+        if retcode < 0:
+            print("command run: terminated by signal", -retcode, file=sys.stderr)
+       # else:
+       #     print("command run: returned", retcode, file=sys.stderr)
+    except OSError as e:
+        print("command run: execution failed:", e, file=sys.stderr)
     
