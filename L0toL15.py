@@ -11,7 +11,8 @@ import copy
 from arttools._det_spatial import get_shadowed_pix_mask_for_urddata
 from arttools.energy import get_events_energy
 from arttools.orientation import extract_raw_gyro, get_photons_sky_coord, nonzero_quaternions, get_gyro_quat_as_arr
-from arttools.caldb import get_shadowmask
+from arttools.caldb import get_shadowmask, get_energycal
+from arttools.time import get_gti, gti_union, gti_intersection, make_hv_gti
 
 parser = argparse.ArgumentParser(description="process L0 data to L1 format")
 parser.add_argument("stem", help="part of the L0 files name, which are euqal to them")
@@ -28,29 +29,6 @@ URDTOTEL = {28: "T1",
             26: "T6",
             30: "T7"}
 
-
-def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=indexfname):
-    """
-    Get entry from CALDB index file
-    v000/hart/250719 very dirty, unprotected paths!
-    v001/hart/070819 refractored
-    """
-
-    #Try to open file
-    indexfile_path = os.path.join(CALDB_path, indexfile)
-    try:
-        caldbindx   = fits.open(indexfile_path)
-        caldbdata   = caldbindx[1].data
-        for entry in caldbdata:
-            print(entry["CAL_CNAME"], caldb_entry_type, entry["INSTRUME"], telescope)
-            if entry['CAL_CNAME'] == caldb_entry_type and entry['INSTRUME']==telescope:
-                return_path = os.path.join(CALDB_path, entry['CAL_DIR'], entry['CAL_FILE'])
-                return return_path
-        return None
-
-    except:
-        print ('No index file here:' + indexfile_path)
-        return None
 
 if __name__ == "__main__":
     if len(sys.argv) != 4 or "-h" in sys.argv:
@@ -75,7 +53,12 @@ if __name__ == "__main__":
     urddata = urdfile["EVENTS"].data
     flag = np.ones(urddata.size, np.uint8)
 
-    caldbfile = fits.open(get_caldb("TCOEF", URDTOTEL[urdfile[1].header["URDN"]]))
+    gti = get_gti(urdfile)
+    gti = gti_union(gti[:,:] + [0, 1.])
+    gti = gti_intersection(gti, make_hv_gti(urdfile["HK"].data))
+    gti = gti_intersection(gti, np.array([attdata["TIME"][[0, -1]],]))
+
+    caldbfile = get_energycal(urdfile)
     masktime = (urddata["TIME"] > attdata["TIME"][0]) & (urddata["TIME"] < attdata["TIME"][-1])
     flag[masktime] = 0
     RA, DEC = np.empty(urddata.size, np.double), np.empty(urddata.size, np.double)
@@ -92,15 +75,19 @@ if __name__ == "__main__":
     h = copy.copy(urdfile["EVENTS"].header)
     h.pop("NAXIS2")
 
-    newurdtable = fits.BinTableHDU.from_columns(
-            [fits.Column(name=cd.name, array=cd.array, format=cd.format, unit=cd.unit) \
-                for cd in urddata.columns] +
-            [fits.Column(name="ENERGY", array=ENERGY, format="1D", unit="keV"),
-             fits.Column(name="RA", array=np.copy(RA*180./pi), format="1D", unit="deg"),
-             fits.Column(name="DEC", array=np.copy(DEC*180./pi), format="1D", unit="deg"),
-             fits.Column(name="GRADE", array=grades, format="I"),
-             fits.Column(name="FLAG", array=flag, format="I")], header=h)
+    print(urddata["TIME_I"][:10])
+    cols = urdfile["EVENTS"].data.columns
+    cols.add_col(fits.Column(name="ENERGY", array=ENERGY, format="1D", unit="keV"))
+    cols.add_col(fits.Column(name="RA", array=np.copy(RA*180./pi), format="1D", unit="deg"))
+    cols.add_col(fits.Column(name="DEC", array=np.copy(DEC*180./pi), format="1D", unit="deg"))
+    cols.add_col(fits.Column(name="GRADE", array=grades, format="I"))
+    cols.add_col(fits.Column(name="FLAG", array=flag, format="I"))
+    cols["TIME_I"].array = urddata["TIME_I"]
+
+    newurdtable = fits.BinTableHDU.from_columns(cols, header=h)
 
     newurdtable.name = "EVENTS"
-    newfile = fits.HDUList([urdfile[0], newurdtable, urdfile[2], urdfile[3]])
+    gtitable = urdfile["GTI"]
+    gtitable.data = np.array([tuple(g) for g in gti], dtype=gtitable.data.dtype)
+    newfile = fits.HDUList([urdfile[0], newurdtable, urdfile["HK"], gtitable])
     newfile.writeto(os.path.join(outdir, os.path.basename(urdfname)), overwrite=True)

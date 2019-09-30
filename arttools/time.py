@@ -1,7 +1,9 @@
 import numpy as np
 from .orientation import get_gyro_quat_as_arr, vec_to_pol, \
-        quat_to_pol_and_roll, extract_raw_gyro, get_gyro_quat, pol_to_vec
+        quat_to_pol_and_roll, extract_raw_gyro, get_gyro_quat, pol_to_vec, \
+        clear_att
 from .telescope import OPAX
+from .mask import edges as maskedges
 from math import pi
 from scipy.spatial.transform import Rotation, Slerp
 from scipy.interpolate import interp1d
@@ -13,12 +15,16 @@ optica axis is shifted 11' away of the sattelite x axis, therefore we need some 
 (hint: pix size 45'', 5''=45''/9)
 """
 DELTAROLL = 1./24./3.
+ARTDEADTIME = 770e-6 #seconds - ART-XC detector deadtime
+
+class ART_TIME_ERROR(ValueError):
+    pass
 
 def get_gti(ffile):
-    return np.array([ffile["GTI"].data["START"], ffile["GTI"].data["STOP"]]).T
+    gti = np.array([ffile["GTI"].data["START"], ffile["GTI"].data["STOP"]]).T
+    return gti_union(gti + [-0.5, +0.5]) + [+0.5, -0.5]
 
-
-def filt_elist(urddata, gti):
+def get_filtered_elist(urddata, gti):
     return np.concatenate([urddata[s:e] for s, e in np.searchsorted(urddata["TIME"], gti)])
 
 def check_gti_shape(gti):
@@ -38,22 +44,24 @@ def filter_nonitersect(gti, gtifilt):
 
 def gti_union(gti):
     """
+    produces union of the input gti interval
+    !!!AHTUNG!!!
+    the gti intervals with TSTART > TSTOP will be eliminated
+
+    algorithm:
     we want to erase all casess when time intervals in gti are intersected
 
     to do that we use a simple algorithm:
 
-    we want to find all start and end times for which all
-    start and end times of other gtis are greater or lesser....
-    such start and end times contain intersected gti intervals and will be start and end times of new gti
-
     1. sort gtis by the start time in ascending order
-    1.1 find sorted index of raveled  sorted gtis where start times ar evend and end times are odd
-    1.2 check start times which have sorted index equal to their positional indexes
-    1.3 extract these times - they are start times for new gtis
-
-    2. repeat for end times
-
-    3. compbine obtained start and end times in new gti
+    2. produce time searies which on even place hold this sorted start times, and on odd - corresponding end times
+    3. from 1d time array, obtained in previous step produce sorted array
+    since the start times were sorted, they can change their placing only one or several end times are greater.
+    Therefore just check which start times did not change their positions due to sorting - those are start times of union gti
+    The end times for the gti intervals located one index before start times in sorted array.
+    the last  end time is also last time of sorted array.
+    Taking in mind, that first start time is a first  time in sorted array produce bit mask for the start time and roll it 1step back to get end times mask
+    done...
     """
     gti = gti[gti[:, 1] > gti[:, 0]]
     gti = gti[np.argsort(gti[:, 0])]
@@ -94,6 +102,9 @@ def angular_speed(attdata):
 def mkgtimask(time, gti):
     mask = np.zeros(time.size, np.bool)
     idx = np.searchsorted(time, gti)
+    for s, e in idx:
+        mask[s:e] = True
+    return mask
 
 def hist_quat(quat):
     ra, dec, roll = quat_to_pol_and_roll(quat)
@@ -119,6 +130,15 @@ def make_ingti_times(time, ggti):
     maskgaps[cidx[1:-1] - 1] = False
     return tnew, maskgaps
 
+def deadtime_correction(time, urdhk):
+    if time[0] > urdhk["TIME"][-1] or time[-1] < urdhk["TIME"][0]:
+        raise ART_TIME_ERROR("provided urd houskeeping data does not include provided time interval")
+
+    tcrate = (urdhk["EVENTS"][1:] - urdhk["EVENTS"][:-1])/(urdhk["TIME"][1:] - urdhk["TIME"][:-1])
+    icrate = interp1d((urdhk["TIME"][1:] + urdhk["TIME"][:-1])/2.,
+                       crate, bounds_error=False, fill_value=np.median(crate))
+    return (1. - 770e-6*icrate(ts))
+
 def make_small_steps_quats(times, quats, gti, urdhk=None):
     quatint = Slerp(times, quats)
     tnew, maskgaps = make_ingti_times(times, gti)
@@ -126,15 +146,11 @@ def make_small_steps_quats(times, quats, gti, urdhk=None):
         return Rotation(np.empty((0, 4), np.double)), np.array([])
     ts = ((tnew[1:] + tnew[:-1])/2.)[maskgaps]
     dt = (tnew[1:] - tnew[:-1])[maskgaps]
+
     if not urdhk is None:
-        crate = (urdhk["EVENTS"][1:] - urdhk["EVENTS"][:-1])/\
-            (urdhk["TIME"][1:] - urdhk["TIME"][:-1])
-        icrate = interp1d((urdhk["TIME"][1:] + urdhk["TIME"][:-1])/2.,
-                          crate, bounds_error=False, fill_value=np.median(crate))
-        dt = dt*(1. - 770e-6*icrate(ts))
+        dt = dt*deadtime_correction(ts, urdhk)
 
     qval = quatint(ts)
-
     ra, dec, roll = quat_to_pol_and_roll(quatint(tnew))
 
     """
@@ -176,6 +192,27 @@ def hist_orientation(qval, dt):
     np.add.at(exptime, invidx, dt)
     return exptime, qval[uidx]
 
+#skyvec = pol_to_vec(np.array([ra*pi/180.,]), np.array([dec*pi/180.,]))[0]
+def make_sky_vec_exptime(skyvec, ts, quats, gti):
+    quatint = Slerp(times, quats)
+    tnew, maskgaps = make_ingti_times(times, gti)
+    if tnew.size == 0:
+        return Rotation(np.empty((0, 4), np.double)), np.array([])
+    ts = ((tnew[1:] + tnew[:-1])/2.)[maskgaps]
+    dt = (tnew[1:] - tnew[:-1])[maskgaps]
+    if not urdhk is None:
+        crate = (urdhk["EVENTS"][1:] - urdhk["EVENTS"][:-1])/\
+            (urdhk["TIME"][1:] - urdhk["TIME"][:-1])
+        icrate = interp1d((urdhk["TIME"][1:] + urdhk["TIME"][:-1])/2.,
+                          crate, bounds_error=False, fill_value=np.median(crate))
+        dt = dt*(1. - 770e-6*icrate(ts))
+
+    qval = quatint(ts)
+
+
+
+
+
 def hist_orientation_for_attfile(attdata, gti, v0=None):
     quats = get_gyro_quat(attdata)
     qval, dtn = make_small_steps_quats(attdata["TIME"], quats, gti)
@@ -194,4 +231,14 @@ def get_axis_movement_speed(attdata):
     dt = (attdata["TIME"][1:] - attdata["TIME"][:-1])
     dalphadt = np.arccos(np.sum(vecs[:-1]*vecs[1:], axis=1))/dt*180./pi*3600.
     return (attdata["TIME"][1:] + attdata["TIME"][:-1])/2., dt, dalphadt
+
+def make_hv_gti(hkdata):
+    '''
+    input: HK hdu extention of an L0 events fits file
+    '''
+    return hkdata["TIME"][maskedges(hkdata["HV"] < -95.) + [0, -1]]
+
+
+def deadtime_corr(ts, dt, hkdata):
+    pass
 
