@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/opt/soft/psoft/bin/python3
 # -*- coding: utf8 -*-
 '''
 
@@ -92,6 +92,9 @@ ALGORITHM:
 
 
 
+30/09/19 v002
+    now instead of 2Mb pdf with ra-dec plot there is slim png
+    all hail the hypnotoad
 
 17/09/19 v001
     initial version derived from old artxc_l0_quicklook
@@ -112,8 +115,8 @@ import arttools.quicktools as artql
 import datetime
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--stem", help="ART-XC stem")
-parser.add_argument("--version", help="data version", default='000')
+parser.add_argument("--stem", help="ART-XC stem like srg_YYYYMMDD_HHMMSS")
+parser.add_argument("--version", help="data version, usually 000", default='000')
 args = parser.parse_args()
     
 
@@ -138,8 +141,7 @@ module_names   = ['02','04','08','10','20','40','80']
 tel_names = ['T1','T2','T3','T4','T5','T6','T7']
 module_color   = ['k','r','g','b','m','c','lime']
 pdfname = stem + '.pdf'
-#pdffile =  PdfPages(pdfname)
-
+pngname = stem + '.png'
 with PdfPages(pdfname) as pdffile: 
     for module,teln,modc in zip(module_names[:],tel_names,module_color):
         print ('>>>>>>>>> Working with module '+ module)
@@ -157,10 +159,15 @@ with PdfPages(pdfname) as pdffile:
         artql.get_lcurve(evtimes, evenergies, evgrade, evflag, evrawx, evrawy, gti, evtpath,module,teln, pdffile)
     
     gyropath = os.path.join(L1,gyro_file)
-    artql.get_radec(gyropath, gti, pdffile)
+    artql.get_radec(gyropath, gti, pdffile, pngname)
     d = pdffile.infodict()
     d['Title'] = 'Quicklook ART-XC report, v.01'
     d['Author'] = 'oper'
     d['Subject'] = 'ART-XC quicklook data'
     d['CreationDate'] = datetime.datetime.today()
     d['ModDate'] = datetime.datetime.today()
+artql.run('convert '+pngname+' '+pngname.replace('.png','_gyro.pdf'))
+artql.run('pdfunite '+pdfname+' '+pngname.replace('.png','_gyro.pdf')+' '+pngname.replace('.png','_qreport.pdf'))
+artql.run('rm '+pdfname+' '+pngname.replace('.png','_gyro.pdf')+' '+pngname)
+
+
