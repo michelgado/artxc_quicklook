@@ -18,6 +18,7 @@ ART_det_QUAT = {
 
 ART_det_mean_QUAT = Rotation([-0.0194994955435183, -0.0014672512426498, -0.0011597505547702, 0.9998081175035487])
 
+
 def to_2pi_range(val): return val%(2.*pi)
 
 def make_orientation_gti(attdata, urdn, rac, decc, deltara, deltadec):
@@ -114,9 +115,17 @@ def extract_raw_gyro(gyrodata, qadd=Rotation([0, 0, 0, 1])):
     qfin = get_gyro_quat(gyrodata)*qrot0*qadd
     return quat_to_pol_and_roll(qfin)
 
-def hist_orientation(qval, dt):
-    oruniq, uidx, invidx = hist_quat(qval)
-    exptime = np.zeros(uidx.size, np.double)
-    np.add.at(exptime, invidx, dt)
-    return exptime, qval[uidx]
 
+def get_axis_movement_speed(attdata):
+    """
+    for provided gyrodata computes angular speed
+    returns:
+        ts - centers of the time bins
+        dt - withd of the time bins
+        dlaphadt - angular speed in time bin
+    """
+    quats = get_gyro_quat(attdata)
+    vecs = quats.apply(OPAX)
+    dt = (attdata["TIME"][1:] - attdata["TIME"][:-1])
+    dalphadt = np.arccos(np.sum(vecs[:-1]*vecs[1:], axis=1))/dt*180./pi*3600.
+    return (attdata["TIME"][1:] + attdata["TIME"][:-1])/2., dt, dalphadt

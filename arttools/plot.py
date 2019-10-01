@@ -3,12 +3,11 @@ from scipy.spatial.transform import Rotation, Slerp
 import numpy as np
 from astropy.visualization import MinMaxInterval, SqrtStretch, ImageNormalize, LogStretch
 from astropy.wcs import WCS
-from .orientation import extract_raw_gyro, qrot0, ART_det_QUAT, \
-        get_gyro_quat, nonzero_quaternions, vec_to_pol, pol_to_vec, get_gyro_quat_as_arr, \
-        get_photons_sky_coord, filter_gyrodata, clear_att, hist_orientation
+from .orientation import *
 from ._det_spatial import raw_xy_to_vec, offset_to_vec, urd_to_vec, vec_to_offset_pairs, get_shadowed_pix_mask_for_urddata
-from .time import gti_union, gti_intersection, get_gti, \
-                  make_small_steps_quats, hist_orientation_for_attfile, make_hv_gti
+from .time import gti_union, gti_intersection, get_gti, make_hv_gti
+from .atthist import make_small_steps_quats
+from .atthist  import hist_orientation_for_attfile, hist_orientation
 from .telescope import URDNS, OPAX
 from .caldb import get_energycal, get_shadowmask
 from .energy import get_events_energy
@@ -41,10 +40,6 @@ def make_events_mask(minrawx = 0, minrawy=0, maxrawx=47, maxrawy=47,
     return mask_events
 
 standard_events_mask = make_events_mask()
-
-
-
-
 
 def get_image(attname, urdname, locwcs, gti=None, maskevents=standard_events_mask):
     """
@@ -256,7 +251,7 @@ def make_vignmap_for_quat(locwcs, xsize, ysize, qval, exptime, vignmapfilename, 
                                  fill_value=0.)
     x = np.tile((np.arange(-115, 115) + 0.5)*0.595/5., 230)
     y = np.repeat((np.arange(-115, 115) + 0.5)*0.595/5., 230)
-    mxy = (x**2. + y**2.) < (26.*0.595)**2.
+    mxy = (x**2. + y**2.) < (25.*0.595)**2.
     x, y = x[mxy], y[mxy]
 
     vmap = rg(np.array([x, y]).T)
@@ -429,7 +424,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti={}):
 
             urdfile = fits.open(urdfname)
             attgti = np.array([attdata["TIME"][[0, -1]]])
-            tgti = attgti if urdn not in gti else gti_intersection(gti, attgti)
+            tgti = attgti if urdn not in gti else gti_intersection(gti[urdn], attgti)
             tgti = gti_intersection(tgti, get_gti(urdfile))
             tgti = gti_intersection(tgti, make_hv_gti(urdfile["HK"].data))
 
@@ -450,7 +445,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti={}):
     emap = fits.ImageHDU(data=emap, header=locwcs.to_header())
     h1 = fits.PrimaryHDU(header=locwcs.to_header())
     ehdu = fits.HDUList([h1, emap])
-    ehdu.writeto("tmpemap.fits.gz", overwrite=True)
+    ehdu.writeto("tmpexmap.fits.gz", overwrite=True)
 
 
 def make_expmap_for_urd(urdfile, attfile, locwcs, agti=None):
