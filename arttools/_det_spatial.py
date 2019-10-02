@@ -8,6 +8,9 @@ dxya = np.arctan(DL/F) #0.595 - distance between strips, 2693 - ART-XC focal len
 def raw_xy_to_offset(rawx, rawy):
     return (rawx - 23.5)*DL, (rawy - 23.5)*DL
 
+def offset_to_raw_xy(x, y):
+    return np.array(x*DL + 24, np.int), np.array(y*DL + 24, np.int)
+
 def raw_xy_to_vec(rawx, rawy):
     """
     assuming that the detector is located in the  YZ vizier plane and X is normal to it

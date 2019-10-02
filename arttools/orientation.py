@@ -3,7 +3,7 @@ import numpy as np
 from math import pi, cos, sin
 from ._det_spatial import urd_to_vec
 
-qrot0 = Rotation([sin(15*pi/360.), 0., 0., cos(15*pi/360.)])
+qrot0 = Rotation([sin(15*pi/360.), 0., 0., cos(15*pi/360.)]) #ART detectors cs to the spasecraft cs
 OPAX = np.array([1, 0, 0])
 
 ART_det_QUAT = {
@@ -18,11 +18,10 @@ ART_det_QUAT = {
 
 ART_det_mean_QUAT = Rotation([-0.0194994955435183, -0.0014672512426498, -0.0011597505547702, 0.9998081175035487])
 
-
 def to_2pi_range(val): return val%(2.*pi)
 
-def make_orientation_gti(attdata, urdn, rac, decc, deltara, deltadec):
-    qval = get_gyro_quat(attdata)*qrot0*ART_det_QUAT[urdn]
+def make_orientation_gti(attdata, rac, decc, deltara, deltadec):
+    qval = get_gyro_quat(attdata)*ART_det_mean_QUAT
     r, d = vec_to_pol(qval.apply(OPAX))
     r, d = r*180./pi, d*180./pi
     masktor = np.empty(r.size + 2, np.bool)
@@ -32,7 +31,7 @@ def make_orientation_gti(attdata, urdn, rac, decc, deltara, deltadec):
     start = np.where(np.logical_and(mastor[:-1], np.logical_not(masktor[1:])))[0]
     end = np.where(np.logical_and(np.logical_not(mastor[:-1]), masktor[1:]))[0] - 1
     mask = end - start > 0
-    gti = attdata["TIME"][np.array([stars, end]).T[mask]] + [-1e-3, +1e-3]
+    gti = attdata["TIME"][np.array([stars, end]).T[mask]] + [-1e-6, +1e-6]
     return gti
 
 def clear_att(attdata):
@@ -45,10 +44,8 @@ def clear_att(attdata):
     return attdata
 
 def get_photons_vectors(urddata, URDN, attdata, subscale=1):
-    attdata = clear_att(attdata)
-    qj2000 = Slerp(attdata["TIME"], get_gyro_quat(attdata))
-    qj2000 = qj2000(np.repeat(urddata["TIME"], subscale*subscale))
-    qall = qj2000*qrot0*ART_det_QUAT[URDN]
+    qj2000 = Slerp(attdata["TIME"], get_gyro_quat(attdata)*ART_det_QUAT[URDN])
+    qall = qj2000(np.repeat(urddata["TIME"], subscale*subscale))
     photonvecs = urd_to_vec(urddata, subscale)
     phvec = qall.apply(photonvecs)
     return phvec
@@ -72,8 +69,11 @@ def get_photons_sky_coord(urddata, URDN, attdata, subscale=1):
 def get_gyro_quat(gyrodata):
     quat = Rotation(np.array([gyrodata["QORT_%d" % i] for i in [1,2,3,0]]).T)
     q0 = Rotation([0, 0, 0, 1]) #gyro axis initial rotattion in J2000 system
-    qfin = q0*quat
+    qfin = q0*quat*qrot0
     return qfin
+
+def get_gyro_quat_for_urdn(urdn, gyrodata):
+    return get_gyro_quat(gyrodata)*ART_det_QUAT[urdn]
 
 def filter_gyrodata(gyrodata):
     return gyrodata[nonzero_quaternions(np.array([gyrodata["QORT_%d" % i] for i in [1,2,3,0]]).T)]
@@ -112,7 +112,7 @@ def extract_raw_gyro(gyrodata, qadd=Rotation([0, 0, 0, 1])):
     unpacks row gyro fits file in to RA, DEC and roll angle (of the telescope coordinate system)
     in J2000 coordinates.
     """
-    qfin = get_gyro_quat(gyrodata)*qrot0*qadd
+    qfin = get_gyro_quat(gyrodata)*qadd
     return quat_to_pol_and_roll(qfin)
 
 
@@ -129,3 +129,5 @@ def get_axis_movement_speed(attdata):
     dt = (attdata["TIME"][1:] - attdata["TIME"][:-1])
     dalphadt = np.arccos(np.sum(vecs[:-1]*vecs[1:], axis=1))/dt*180./pi*3600.
     return (attdata["TIME"][1:] + attdata["TIME"][:-1])/2., dt, dalphadt
+
+

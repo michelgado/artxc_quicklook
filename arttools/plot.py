@@ -1,13 +1,11 @@
-import matplotlib.pyplot as plt
 from scipy.spatial.transform import Rotation, Slerp
 import numpy as np
 from astropy.visualization import MinMaxInterval, SqrtStretch, ImageNormalize, LogStretch
 from astropy.wcs import WCS
 from .orientation import *
 from ._det_spatial import raw_xy_to_vec, offset_to_vec, urd_to_vec, vec_to_offset_pairs, get_shadowed_pix_mask_for_urddata
-from .time import gti_union, gti_intersection, get_gti, make_hv_gti
-from .atthist import make_small_steps_quats
-from .atthist  import hist_orientation_for_attfile, hist_orientation
+from .time import gti_union, gti_intersection, get_gti, get_filtered_table
+from .atthist import make_small_steps_quats, hist_orientation_for_attdata, hist_orientation, make_wcs_for_attdata
 from .telescope import URDNS, OPAX
 from .caldb import get_energycal, get_shadowmask
 from .energy import get_events_energy
@@ -19,11 +17,10 @@ import copy
 import time
 from scipy.interpolate import RegularGridInterpolator
 from scipy.spatial import ConvexHull
-import  matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 import os, sys
 from scipy.optimize import minimize
-
-ART_det_mean_QUAT = Rotation([-0.0170407534937525, -0.0013956210322403, -0.0011146951027288, 0.9998532004335073])
+from .expmap import make_expmap_for_wcs
 
 
 class NoDATA(Exception):
@@ -41,23 +38,7 @@ def make_events_mask(minrawx = 0, minrawy=0, maxrawx=47, maxrawy=47,
 
 standard_events_mask = make_events_mask()
 
-def get_image(attname, urdname, locwcs, gti=None, maskevents=standard_events_mask):
-    """
-    filter out events outsied of gti, tripple events, events with energy < 5 or > 11
-    estimates its coordinates, split each photon on 100  subphotons and spreaad uniformiliy in the pixel
-    return computed photons on the coordinates grid defined by locwcs
-
-    """
-    if not os.path.exists(attname):
-        raise NoDATA("no attitude file")
-
-    attfile = fits.open(attname)
-    attdata = np.copy(attfile["ORIENTATION"].data)
-    attdata = clear_att(attdata)
-    urdfile = fits.open(urdname)
-    if urdfile["HK"].data.size < 5:
-        raise NoDATA("not enough HK data")
-
+def make_image(urdfile, attdata, locwcs, gti=None, maskevents=standard_events_mask):
     urddata = np.copy(urdfile["EVENTS"].data)
     URDN = urdfile["EVENTS"].header["URDN"]
     caldbfile = get_energycal(urdfile)
@@ -66,7 +47,6 @@ def get_image(attname, urdname, locwcs, gti=None, maskevents=standard_events_mas
     attgti = np.array([attdata["TIME"][[0, -1]]])
     gti = attgti if gti is None else gti_intersection(gti, attgti)
     gti = gti_intersection(gti, get_gti(urdfile))
-    gti = gti_intersection(gti, make_hv_gti(urdfile["HK"].data))
 
     idx = np.searchsorted(urddata['TIME'], gti)
     masktime = np.zeros(urddata.size, np.bool)
@@ -95,6 +75,26 @@ def get_image(attname, urdname, locwcs, gti=None, maskevents=standard_events_mas
                                 np.arange(locwcs.wcs.crpix[1]*2 + 2) + 0.5])[0].T
     return img
 
+
+def get_image(attname, urdname, locwcs, gti=None, maskevents=standard_events_mask):
+    """
+    filter out events outsied of gti, tripple events, events with energy < 5 or > 11
+    estimates its coordinates, split each photon on 100  subphotons and spreaad uniformiliy in the pixel
+    return computed photons on the coordinates grid defined by locwcs
+
+    """
+    if not os.path.exists(attname):
+        raise NoDATA("no attitude file")
+
+    attfile = fits.open(attname)
+    attdata = np.copy(attfile["ORIENTATION"].data)
+    attdata = clear_att(attdata)
+    urdfile = fits.open(urdname)
+    if urdfile["HK"].data.size < 5:
+        raise NoDATA("not enough HK data")
+    return make_image(attdata, urdfile, locwcs, gti, maskevents)
+
+
 def get_rawxy_hist(urddata):
     img = np.histogram2d(urddata['RAW_X'], urddata['RAW_Y'], [np.arange(49) - 0.5,]*2)[0]
     return img
@@ -103,7 +103,7 @@ def get_sky_image(urddata, URDN, attdata, xe, ye, subscale=1):
     agttdata = filter_gyrodata(attdata)
     qj2000 = Slerp(attdata["TIME"], get_gyro_quat(attdata))
     qj2000 = qj2000(np.repeat(urddata["TIME"], subscale*subscale))
-    qall = qj2000*qrot0*ART_det_QUAT[URDN]
+    qall = qj2000*ART_det_QUAT[URDN]
 
     photonvecs = urd_to_vec(urddata, subscale)
     phvec = qall.apply(photonvecs)
@@ -218,7 +218,6 @@ class SphProj(object):
         th.join()
         return img
 
-
 def make_vignmap_for_quat2(locwcs, xsize, ysize, qval, exptime, vignmapfilename, energy=6.):
     vignmapfile = fits.open(vignmapfilename)
     img = np.zeros((ysize, xsize), np.double)
@@ -271,81 +270,6 @@ def make_vignmap_for_quat(locwcs, xsize, ysize, qval, exptime, vignmapfilename, 
 def make_vignmap_mp(args):
     return make_vignmap_for_quat(*args)
 
-def make_wcs_for_radecs(ra, dec, pixsize=20./3600.):
-    radec = np.array([ra, dec]).T
-    ch = ConvexHull(radec)
-    r, d = radec[ch.vertices].T
-    def find_bbox(alpha):
-        x = r*cos(alpha) - d*sin(alpha)
-        y = r*sin(alpha) + d*cos(alpha)
-        return (x.max() - x.min())*(y.max() - y.min())
-    res = minimize(find_bbox, [pi/4., ], method="Nelder-Mead")
-    alpha = res.x
-    x, y = r*cos(alpha) - d*sin(alpha), r*sin(alpha) + d*cos(alpha)
-    xmin, xmax = x.min(), x.max()
-    ymin, ymax = y.min(), y.max()
-    xc = (xmax + xmin)/2.
-    yc = (ymax + ymin)/2.
-
-    locwcs = WCS(naxis=2)
-    locwcs.wcs.cdelt = [pixsize, pixsize]
-    cdmat = np.array([[cos(alpha), sin(alpha)], [-sin(alpha), cos(alpha)]])
-    locwcs.wcs.cd = cdmat*pixsize
-    locwcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
-    locwcs.wcs.crval = [xc*cos(alpha) + yc*sin(alpha), -xc*sin(alpha) + yc*cos(alpha)]
-    desize = int((ymax - ymin + 0.7)/pixsize)//2
-    desize = desize + 1 - desize%2
-    rasize = int((xmax - xmin + 0.7)/pixsize)//2
-    rasize = rasize + 1 - rasize%2
-    locwcs.wcs.crpix = [rasize, desize]
-    print(locwcs)
-    """
-    #inspect obtained wcs region
-    plt.scatter(ra, dec, color="g")
-    r1, d1 = locwcs.all_pix2world(np.array([np.arange(1, rasize*2 + 1), np.ones(rasize*2)]).T, 1).T
-    plt.scatter(r1, d1, color="b")
-    r1, d1 = locwcs.all_pix2world(np.array([np.arange(1, rasize*2 + 1), np.ones(rasize*2)*desize*2]).T, 1).T
-    plt.scatter(r1, d1, color="b")
-    r1, d1 = locwcs.all_pix2world(np.array([np.ones(desize*2), np.arange(1, desize*2 + 1)]).T, 1).T
-    plt.scatter(r1, d1, color="b")
-    r1, d1 = locwcs.all_pix2world(np.array([np.ones(desize*2)*rasize*2, np.arange(1, desize*2 + 1)]).T, 1).T
-    plt.scatter(r1, d1, color="b")
-
-    plt.scatter(*locwcs.all_pix2world([[1., 1.], [0., locwcs.wcs.crpix[1]*2 + 1],
-                                      [locwcs.wcs.crpix[0]*2 + 1, locwcs.wcs.crpix[1]*2 + 1],
-                                      [1., locwcs.wcs.crpix[1]*2 + 1]], 1).T, color="r")
-    plt.scatter([locwcs.wcs.crval[0],], [locwcs.wcs.crval[1],], color="k")
-    plt.show()
-    """
-    return locwcs
-
-def make_wcs_for_quats(quats, pixsize=20./3600.):
-    opaxis = quats.apply(OPAX)
-    ra, dec = vec_to_pol(opaxis)
-    ra, dec = ra*180/pi, dec*180/pi
-    return make_wcs_for_radecs(ra, dec, pixsize)
-
-def make_wcs_for_attsets(attflist, gti=None):
-    print("wcs gti", gti)
-    qvtot = []
-    for attname in attflist:
-        attdata = np.copy(fits.getdata(attname, 1))
-        attdata = clear_att(attdata)
-        if not gti is None:
-            lgti = gti_intersection(gti, np.array([attdata["TIME"][[0, -1]],]))
-            idx = np.searchsorted(attdata["TIME"], lgti)
-            mask = np.zeros(attdata.size, np.bool)
-            for s, e in idx:
-                mask[s:e] = True
-            attdata = attdata[mask]
-        quats = get_gyro_quat(attdata)*qrot0*ART_det_mean_QUAT
-        qvtot.append(quats) #qvals)
-
-    print("attname ok")
-    qvtot = Rotation(np.concatenate([q.as_quat() for q in qvtot]))
-    print(len(qvtot))
-    return make_wcs_for_quats(qvtot)
-
 def make_mosaic_for_urdset_by_region(urdflist, attflist, ra, dec, deltara, deltadec):
     gti = {}
     urdflist = {}
@@ -386,29 +310,33 @@ def make_mosaic_for_urdset_by_region(urdflist, attflist, ra, dec, deltara, delta
     ehdu = fits.HDUList([h1, emap])
     ehdu.writeto("tmpemap.fits.gz", overwrite=True)
 
-def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti={}):
+def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti):
     """
     given two sets with paths to the urdfiles and corresponding attfiles,
     and gti as a dictionary, each key contains gti for particular urd
     the program produces overall count map and exposition map for this urdfiles set
     the wcs is produced automatically to cover nonzero exposition area with some margin
     """
-    print(gti)
+    attgti = []
+    for attname in set(attflist):
+        attdata = fits.getdata(attname, "ORIENTATION")
+        attdata = clear_att(attdata)
+        attgti.append(attdata["TIME"][[0, -1]])
 
-    attgti = None if gti == {} else \
-        gti_union(np.concatenate([gti[k] for k in gti]))
+    attgti = np.array(attgti)
+    attdata = attdata[np.argsort(attdata["TIME"])]
+    gti = gti_intersection(attgti, gti)
+    attdata = get_filtered_table(attdata, gti)
 
-    locwcs = make_wcs_for_attsets(set(attflist), attgti)
+    locwcs = make_wcs_for_attdata(attdata, gti)
     xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
     imgdata = np.zeros((ysize, xsize), np.double)
+    urdgti = {}
 
-    dttot = []
-    qvtot = []
-
-    for urdfname, attfname in zip(urdflist, attflist):
+    for urdfname in urdflist:
         try:
-            urdn = fits.getheader(urdfname, "EVENTS")["URDN"]
-            timg = get_image(attfname, urdfname, locwcs, gti.get(urdn, None))
+            urdfile = fits.open(urdfname)
+            timg = make_image(urdfile, attdata, locwcs, gti)
         except NoDATA as nd:
             print(nd)
         else:
@@ -417,35 +345,19 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti={}):
             h1 = fits.PrimaryHDU(header=locwcs.to_header())
             lhdu = fits.HDUList([h1, img])
             lhdu.writeto("tmpctmap.fits.gz", overwrite=True)
-
-
-            attdata = np.copy(fits.getdata(attfname, 1))
-            attdata = clear_att(attdata)
-
-            urdfile = fits.open(urdfname)
-            attgti = np.array([attdata["TIME"][[0, -1]]])
-            tgti = attgti if urdn not in gti else gti_intersection(gti[urdn], attgti)
-            tgti = gti_intersection(tgti, get_gti(urdfile))
-            tgti = gti_intersection(tgti, make_hv_gti(urdfile["HK"].data))
-
-            quats = get_gyro_quat(attdata)*qrot0*ART_det_QUAT[urdn]
-            qvals, dt = make_small_steps_quats(attdata["TIME"], quats, tgti) #, fits.getdata(urdfname, "HK"))
-            dttot.append(dt)
-            qvtot.append(qvals)
-
-    dttot = np.concatenate(dttot)
-    qvtot = Rotation(np.concatenate([q.as_quat() for q in qvtot]))
-
-    exptime, qval = hist_orientation(qvtot, dttot)
-    pool = Pool(40)
-    vignfilename = "/srg/a1/work/andrey/art-xc_vignea.fits"
-    stepsize = len(qval)//100
-    emap = sum(pool.imap_unordered(make_vignmap_mp, [(locwcs, xsize, ysize, qval[i::stepsize], exptime[i::stepsize], vignfilename) for i in range(stepsize)]))
+            urdn = urdfile["EVENTS"].header["URDN"]
+            urdgti[urdn] = urdgti.get(urdn, []) + [get_gti(urdfile),]
+    urdgti = {urdn:np.concatenate(urdgti[urdn]) for urdn in urdgti}
+    urdgti = {urdn:gti_intersection(gti, urdgti[urdn]) for urdn in urdgti}
+    emap = make_expmap_for_wcs(locwcs, attdata, urdgti)
+    import matplotlib.pyplot as plt
+    plt.imshow(emap, interpolation="nearest")
+    plt.show()
 
     emap = fits.ImageHDU(data=emap, header=locwcs.to_header())
     h1 = fits.PrimaryHDU(header=locwcs.to_header())
     ehdu = fits.HDUList([h1, emap])
-    ehdu.writeto("tmpexmap.fits.gz", overwrite=True)
+    ehdu.writeto("tmpemap.fits.gz", overwrite=True)
 
 
 def make_expmap_for_urd(urdfile, attfile, locwcs, agti=None):
@@ -459,8 +371,8 @@ def make_expmap_for_urd(urdfile, attfile, locwcs, agti=None):
     gtiatt = np.array([attfile["ORIENTATION"].data["TIME"][[0, -1]]])
     if not agti is None: gtiatt = gti_intersection(gtiatt, agti)
     gti = gti_intersection(gtiatt, gti)
-    exptime, qval = hist_orientation_for_attfile(attfile["ORIENTATION"].data, gti)
-    qval = qval*qrot0*ART_det_QUAT[urdfile["EVENTS"].header["URDN"]]
+    exptime, qval = hist_orientation_for_attdata(attfile["ORIENTATION"].data, gti)
+    qval = qval*ART_det_QUAT[urdfile["EVENTS"].header["URDN"]]
     """
     to do: implement vignmap in caldb
     """

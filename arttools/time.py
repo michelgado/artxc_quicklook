@@ -12,10 +12,14 @@ class ART_TIME_ERROR(ValueError):
 
 def get_gti(ffile):
     gti = np.array([ffile["GTI"].data["START"], ffile["GTI"].data["STOP"]]).T
-    return gti_union(gti + [-0.5, +0.5]) + [+0.5, -0.5]
+    gti = gti_union(gti + [-0.5, +0.5]) + [+0.5, -0.5]
+    return gti_intersection(gti, make_hv_gti(ffile["HK"].data))
 
-def get_filtered_elist(urddata, gti):
-    return np.concatenate([urddata[s:e] for s, e in np.searchsorted(urddata["TIME"], gti)])
+def get_filtered_table(tabledata, gti):
+    """
+    tabledata - any numpy record like array, containing unique TIME value in each row
+    """
+    return np.concatenate([tabledata[s:e] for s, e in np.searchsorted(tabledata["TIME"], gti)])
 
 def check_gti_shape(gti):
     if gti.ndim != 2 or gti.shape[1] != 2:
@@ -53,7 +57,7 @@ def gti_union(gti):
     Taking in mind, that first start time is a first  time in sorted array produce bit mask for the start time and roll it 1step back to get end times mask
     done...
     """
-    gti = gti[gti[:, 1] > gti[:, 0]]
+    gti = np.copy(gti[gti[:, 1] > gti[:, 0]])
     gti = gti[np.argsort(gti[:, 0])]
     idx = np.argsort(np.ravel(gti))
     gtis = np.ravel(gti)[idx]
@@ -77,6 +81,24 @@ def gti_intersection(gti1, gti2):
     ts = np.sort(np.concatenate([gti1[:,0], gti2[:,0]]))
     gtinew = np.array([ts[np.searchsorted(ts, tend) - 1], tend]).T
     return gtinew
+
+def gti_difference(gti1, gti2):
+    """
+    prdouce difference of the gti2 relative to gti1
+    AHTUNG the order of the argunets is important
+    result is
+    gti in gti2 and not in gti1
+    """
+    check_gti_shape(gti1)
+    check_gti_shape(gti2)
+
+    gti1 = gti_union(gti1)
+    gti2 = gti_union(gti2)
+    gti3 = np.empty((gti1.shape[0] + 1, 2), np.double)
+    gti3[:-1,1] = gti1[:,0]
+    gti3[1:, 0] = gti1[:,1]
+    gti3[[0, -1], [0, 1]] = gti2[[0, -1], [0, 1]]
+    return gti_intersection(gti2, gti3)
 
 def merge_consecutive_kvea_gtis(urdfile):
     pass

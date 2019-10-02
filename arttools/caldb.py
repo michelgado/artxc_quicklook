@@ -32,11 +32,11 @@ def get_vigneting_by_urd(urdn):
     return fits.open("/srg/a1/work/andrey/art-xc_vignea.fits")
 
 def get_shadowmask_by_urd(urdn):
-    fpath = get_relevat_file('OOFPIX', urdn)
+    fpath = get_relevat_file('OOFPIX', URDTOTEL[urdn])
     return np.logical_not(fits.getdata(fpath, 1).astype(np.bool))
 
 def get_shadowmask(urdfile):
-    return get_shadowmask_by_urd(URDTOTEL[urdfile["EVENTS"].header["URDN"]])
+    return get_shadowmask_by_urd(urdfile["EVENTS"].header["URDN"])
 
 def get_energycal(urdfile):
     fpath = get_relevat_file('TCOEF', URDTOTEL[urdfile["EVENTS"].header["URDN"]])
