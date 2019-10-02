@@ -1,7 +1,6 @@
 import numpy as np
 from .mask import edges as maskedges
 from math import pi
-from scipy.spatial.transform import Rotation, Slerp
 from scipy.interpolate import interp1d
 
 ARTDEADTIME = 770e-6 #seconds - ART-XC detector deadtime

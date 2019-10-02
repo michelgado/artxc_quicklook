@@ -27,7 +27,7 @@ class NoDATA(Exception):
     pass
 
 def make_events_mask(minrawx = 0, minrawy=0, maxrawx=47, maxrawy=47,
-                     mingrade=-1, maxgrade=10, minenergy=4., maxenergy=12.):
+                     mingrade=-1, maxgrade=10, minenergy=4., maxenergy=16.):
     def mask_events(urddata, grade, energy):
         eventsmask = np.all([grade > mingrade, grade < maxgrade,
                             urddata["RAW_X"] > minrawx, urddata["RAW_X"] < maxrawx,
@@ -318,17 +318,20 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti):
     the wcs is produced automatically to cover nonzero exposition area with some margin
     """
     attgti = []
+    attall = []
     for attname in set(attflist):
         attdata = fits.getdata(attname, "ORIENTATION")
         attdata = clear_att(attdata)
         attgti.append(attdata["TIME"][[0, -1]])
+        attall.append(get_filtered_table(attdata, gti))
+
 
     attgti = np.array(attgti)
-    attdata = attdata[np.argsort(attdata["TIME"])]
+    attall = np.concatenate(attall)
+    attall = attall[np.argsort(attall["TIME"])]
     gti = gti_intersection(attgti, gti)
-    attdata = get_filtered_table(attdata, gti)
 
-    locwcs = make_wcs_for_attdata(attdata, gti)
+    locwcs = make_wcs_for_attdata(attall, gti)
     xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
     imgdata = np.zeros((ysize, xsize), np.double)
     urdgti = {}
@@ -336,7 +339,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti):
     for urdfname in urdflist:
         try:
             urdfile = fits.open(urdfname)
-            timg = make_image(urdfile, attdata, locwcs, gti)
+            timg = make_image(urdfile, attall, locwcs, gti)
         except NoDATA as nd:
             print(nd)
         else:
@@ -349,7 +352,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti):
             urdgti[urdn] = urdgti.get(urdn, []) + [get_gti(urdfile),]
     urdgti = {urdn:np.concatenate(urdgti[urdn]) for urdn in urdgti}
     urdgti = {urdn:gti_intersection(gti, urdgti[urdn]) for urdn in urdgti}
-    emap = make_expmap_for_wcs(locwcs, attdata, urdgti)
+    emap = make_expmap_for_wcs(locwcs, attall, urdgti)
     import matplotlib.pyplot as plt
     plt.imshow(emap, interpolation="nearest")
     plt.show()

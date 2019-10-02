@@ -42,6 +42,14 @@ def get_energycal(urdfile):
     fpath = get_relevat_file('TCOEF', URDTOTEL[urdfile["EVENTS"].header["URDN"]])
     return fits.open(fpath)
 
+
+def get_backprofile_by_urdn(urdn):
+    return fits.getdata("/srg/a1/work/andrey/ART-XC/gc/bkg_grades0_9_urd%d.fits" % urdn)
+
+def get_backprofile(urdfile):
+    return get_backprofile_by_urdn(urdfile["EVENTS"].header["URDN"])
+
+
 def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=indexfname):
     #print(caldb_entry_type, telescope)
 

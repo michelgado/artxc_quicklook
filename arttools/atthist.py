@@ -1,14 +1,19 @@
-from scipy.spatial.transform import Rotation, Slerp
 from .time import make_ingti_times, deadtime_correction
 from .orientation import get_gyro_quat, quat_to_pol_and_roll, pol_to_vec, \
     ART_det_QUAT, ART_det_mean_QUAT, vec_to_pol
+from ._det_spatial import DL, offset_to_vec
+from .telescope import OPAX
+
+from scipy.spatial.transform import Rotation, Slerp
 from scipy.spatial import ConvexHull
 from scipy.optimize import minimize
 from astropy.wcs import WCS
 from math import cos, sin, pi
-from .telescope import OPAX
 import numpy as np
-from math import pi
+
+from multiprocessing import Pool, cpu_count, Queue, Process
+
+MPNUM = cpu_count()
 
 
 DELTASKY = 15./3600./180.*pi #previously I set it to be 5''
@@ -113,7 +118,7 @@ def make_wcs_for_radecs(ra, dec, pixsize=20./3600.):
         y = r*sin(alpha) + d*cos(alpha)
         return (x.max() - x.min())*(y.max() - y.min())
     res = minimize(find_bbox, [pi/4., ], method="Nelder-Mead")
-    res = minimize(find_bbox, [0., ], method="Nelder-Mead")
+    #res = minimize(find_bbox, [0., ], method="Nelder-Mead")
     #alpha = 0. #res.x
     alpha = res.x
     x, y = r*cos(alpha) - d*sin(alpha), r*sin(alpha) + d*cos(alpha)
@@ -186,3 +191,73 @@ def make_wcs_for_attsets(attflist, gti=None):
 
     qvtot = Rotation(np.concatenate([q.as_quat() for q in qvtot]))
     return make_wcs_for_quats(qvtot)
+
+class AttWCShist(object):
+    def __init__(self, wcs, vmap, qin, qout, imgshape=None, subscale=5):
+        self.wcs = wcs
+        self.qin = qin
+        self.qout = qout
+        if imgshape is None:
+            imgshape = [int(wcs.wcs.crpix[1]*2 + 1), int(wcs.wcs.crpix[0]*2 + 1)]
+        self.img = np.zeros(imgshape, np.double)
+        xmin, xmax = vmap.grid[0][[0, -1]]
+        ymin, ymax = vmap.grid[0][[0, -1]]
+        dd = DL/subscale
+        dx = dd - dd%(xmax - xmin)
+        x = np.linspace(xmin - dx/2., xmax + dx/2., int((xmax - xmin + dx)/dd))
+        dy = dd - dd%(ymax - ymin)
+        y = np.linspace(ymin - dy/2., ymax + dy/2., int((ymax - ymin + dy)/dd))
+
+        x, y = np.tile(x, y.size), np.repeat(y, x.size)
+        vmap = vmap(np.array([x, y]).T)
+        mask = vmap > 0.
+        x, y = x[mask], y[mask]
+        self.vmap = vmap[mask]
+        self.vecs = offset_to_vec(x, y)
+
+    def integrate_vmap_on_sky(self, quat, exp):
+
+
+    def put_vmap_on_sky(self, quat, exp):
+        vec_icrs = quat.apply(self.vecs)
+        r, d = vec_to_pol(vec_icrs)
+        x, y = (self.wcs.all_world2pix(np.degrees(np.array([r, d]).T), 1) + 0.5).T.astype(np.int)
+        u, idx = np.unique(np.array([x, y]), return_index=True, axis=1)
+        mask = np.all([u[0] > -1, u[1] > -1, u[0] < self.img.shape[1], u[1] < self.img.shape[0]], axis=0)
+        u, idx = u[:, mask], idx[mask]
+        np.add.at(self.img, (u[1], u[0]), self.vmap[idx]*exp)
+
+    def __call__(self):
+        while True:
+            vals = self.qin.get()
+            if vals == -1:
+                break
+            q, exp = vals
+            self.put_vmap_on_sky(q, exp)
+        self.qout.put(self.img)
+
+    @staticmethod
+    def trace_and_collect(exptime, qvals, qin, qout, pool):
+        for proc in pool:
+            proc.start()
+
+        for i in range(exptime.size):
+            qin.put([qvals[i], exptime[i]])
+            sys.stderr.write('\rdone {0:%}'.format(i/exptime.size))
+
+        for p in pool:
+            qin.put(-1)
+
+        img = sum(qout.get() for p in pool)
+        for p in pool:
+            p.join()
+        return img
+
+    @classmethod
+    def make_mp_expmap(cls, wcs, vmap, exptime, qvals, mpnum=MPNUM):
+        qin = Queue(100)
+        qout = Queue(2)
+        pool = [Process(target=cls(wcs, vmap, qin, qout)) for i in range(mpnum)]
+        resimg = cls.trace_and_collect(exptime, qvals, qin, qout, pool)
+        return resimg
+
