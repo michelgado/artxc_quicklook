@@ -51,15 +51,15 @@ def get_photons_vectors(urddata, URDN, attdata, subscale=1):
     return phvec
 
 def vec_to_pol(phvec):
-    dec = np.arctan(phvec[:,2]/np.sqrt(phvec[:,0]**2. + phvec[:,1]**2.))
-    ra = (np.arctan2(phvec[:,1], phvec[:,0])%(2.*pi))
+    dec = np.arctan(phvec[...,2]/np.sqrt(phvec[...,0]**2. + phvec[...,1]**2.))
+    ra = (np.arctan2(phvec[...,1], phvec[...,0])%(2.*pi))
     return ra, dec
 
 def pol_to_vec(phi, theta):
-    vec = np.empty((theta.size, 3), np.double)
-    vec[:, 0] = np.cos(theta)*np.cos(phi)
-    vec[:, 1] = np.cos(theta)*np.sin(phi)
-    vec[:, 2] = np.sin(theta)
+    vec = np.empty(theta.shape + (3,), np.double)
+    vec[..., 0] = np.cos(theta)*np.cos(phi)
+    vec[..., 1] = np.cos(theta)*np.sin(phi)
+    vec[..., 2] = np.sin(theta)
     return vec
 
 def get_photons_sky_coord(urddata, URDN, attdata, subscale=1):

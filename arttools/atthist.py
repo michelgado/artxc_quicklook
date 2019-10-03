@@ -3,13 +3,16 @@ from .orientation import get_gyro_quat, quat_to_pol_and_roll, pol_to_vec, \
     ART_det_QUAT, ART_det_mean_QUAT, vec_to_pol
 from ._det_spatial import DL, offset_to_vec
 from .telescope import OPAX
+import healpy
 
 from scipy.spatial.transform import Rotation, Slerp
 from scipy.spatial import ConvexHull
 from scipy.optimize import minimize
+from astropy.coordinates import SkyCoord
 from astropy.wcs import WCS
 from math import cos, sin, pi
 import numpy as np
+import sys
 
 from multiprocessing import Pool, cpu_count, Queue, Process
 
@@ -193,7 +196,7 @@ def make_wcs_for_attsets(attflist, gti=None):
     return make_wcs_for_quats(qvtot)
 
 class AttWCShist(object):
-    def __init__(self, wcs, vmap, qin, qout, imgshape=None, subscale=5):
+    def __init__(self, wcs, vmap, qin, qout, imgshape=None, subscale=3):
         self.wcs = wcs
         self.qin = qin
         self.qout = qout
@@ -216,7 +219,7 @@ class AttWCShist(object):
         self.vecs = offset_to_vec(x, y)
 
     def integrate_vmap_on_sky(self, quat, exp):
-
+        pass
 
     def put_vmap_on_sky(self, quat, exp):
         vec_icrs = quat.apply(self.vecs)
@@ -234,7 +237,7 @@ class AttWCShist(object):
                 break
             q, exp = vals
             self.put_vmap_on_sky(q, exp)
-        self.qout.put(self.img)
+        self.qout.put(self.pix)
 
     @staticmethod
     def trace_and_collect(exptime, qvals, qin, qout, pool):
@@ -249,6 +252,7 @@ class AttWCShist(object):
             qin.put(-1)
 
         img = sum(qout.get() for p in pool)
+
         for p in pool:
             p.join()
         return img
@@ -259,5 +263,76 @@ class AttWCShist(object):
         qout = Queue(2)
         pool = [Process(target=cls(wcs, vmap, qin, qout)) for i in range(mpnum)]
         resimg = cls.trace_and_collect(exptime, qvals, qin, qout, pool)
+        return resimg
+
+
+class AttHealpixhist(object):
+    def __init__(self, nside, vmap, qin, qout, imgshape=None, subscale=3):
+        self.nside =nside
+        self.qin = qin
+        self.qout = qout
+        xmin, xmax = vmap.grid[0][[0, -1]]
+        ymin, ymax = vmap.grid[0][[0, -1]]
+        dd = DL/subscale
+        dx = dd - dd%(xmax - xmin)
+        x = np.linspace(xmin - dx/2., xmax + dx/2., int((xmax - xmin + dx)/dd))
+        dy = dd - dd%(ymax - ymin)
+        y = np.linspace(ymin - dy/2., ymax + dy/2., int((ymax - ymin + dy)/dd))
+
+        x, y = np.tile(x, y.size), np.repeat(y, x.size)
+        vmap = vmap(np.array([x, y]).T)
+        mask = vmap > 0.
+        x, y = x[mask], y[mask]
+        self.vmap = vmap[mask]
+        self.vecs = offset_to_vec(x, y)
+        self.pixs = {}
+
+    def integrate_vmap_on_sky(self, quat, exp):
+        pass
+
+    def put_vmap_on_sky(self, quat, exp):
+        vec_icrs = quat.apply(self.vecs)
+        r, d = vec_to_pol(vec_icrs)
+        sc = SkyCoord(r*180/pi, d*180/pi, unit=("deg", "deg"), frame="fk5")
+        hidx = healpy.ang2pix(self.nside, sc.galactic.l.value, sc.galactic.b.value, lonlat=True)
+        u = np.unique(hidx)
+        for i in u:
+            self.pixs[i] = self.pixs.get(i, 0) + exp
+
+    def __call__(self):
+        while True:
+            vals = self.qin.get()
+            if vals == -1:
+                break
+            q, exp = vals
+            self.put_vmap_on_sky(q, exp)
+        self.qout.put(self.pixs)
+
+    @staticmethod
+    def trace_and_collect(exptime, qvals, nside, qin, qout, pool):
+        for proc in pool:
+            proc.start()
+
+        for i in range(exptime.size):
+            qin.put([qvals[i], exptime[i]])
+            sys.stderr.write('\rdone {0:%}'.format(i/exptime.size))
+
+        for p in pool:
+            qin.put(-1)
+
+        img = np.zeros(healpy.nside2npix(nside))
+        for proc in pool:
+            for idx, exptime in qout.get().items():
+                img[idx] += exptime
+        for p in pool:
+            p.join()
+        return img
+
+    @classmethod
+    def make_mp_expmap(cls, nside, vmap, exptime, qvals, mpnum=MPNUM):
+        qin = Queue(100)
+        qout = Queue(2)
+        pool = [Process(target=cls(nside, vmap, qin, qout)) for i in range(mpnum)]
+        resimg = cls.trace_and_collect(exptime, qvals, nside, qin, qout, pool)
         return resimg
 

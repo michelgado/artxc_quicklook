@@ -1,9 +1,11 @@
 from .orientation import ART_det_QUAT
-from .atthist import hist_orientation_for_attdata, AttWCShist
+from .atthist import hist_orientation_for_attdata, AttWCShist, AttHealpixhist
 from .vignetting import make_vignetting_for_urdn, make_overall_vignetting
 from .time import gti_intersection, gti_difference
 from functools import reduce
+from multiprocessing import cpu_count
 
+MPNUM = cpu_count()
 
 
 def make_expmap_for_wcs(wcs, attdata, gti, mpnum=MPNUM):
@@ -33,3 +35,25 @@ def make_expmap_for_wcs(wcs, attdata, gti, mpnum=MPNUM):
         emap = AttWCShist.make_mp_expmap(wcs, vmap, exptime, qval, mpnum) + emap
         print(" done!")
     return emap
+
+
+def make_expmap_for_healpix(attdata, gti, mpnum=MPNUM):
+    overall_gti = reduce(gti_intersection, gti.values())
+    exptime, qval = hist_orientation_for_attdata(attdata, overall_gti)
+    vmap = make_overall_vignetting()
+    print("produce overall urds expmap")
+    emap = AttHealpixhist.make_mp_expmap(2048, vmap, exptime, qval, mpnum)
+    print("\ndone!")
+    for urd in gti:
+        urdgti = gti_difference(overall_gti, gti[urd])
+        if urdgti.size == 0:
+            print("urd %d has no individual gti, continue" % urd)
+            continue
+        print("urd %d progress:" % urd)
+        exptime, qval = hist_orientation_for_attdata(attdata, urdgti, ART_det_QUAT[urd])
+        vmap = make_vignetting_for_urdn(urd)
+        emap = AttHealpixhist.make_mp_expmap(2048, vmap, exptime, qval, mpnum) + emap
+        print(" done!")
+    return emap
+
+
