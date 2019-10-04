@@ -10,7 +10,7 @@ import copy
 
 from arttools._det_spatial import get_shadowed_pix_mask_for_urddata
 from arttools.energy import get_events_energy
-from arttools.orientation import extract_raw_gyro, get_photons_sky_coord, nonzero_quaternions, get_gyro_quat_as_arr
+from arttools.orientation import extract_raw_gyro, get_photons_sky_coord, nonzero_quaternions, get_gyro_quat_as_arr, clear_att
 from arttools.caldb import get_shadowmask, get_energycal
 from arttools.time import get_gti, gti_union, gti_intersection, make_hv_gti
 
@@ -46,8 +46,8 @@ if __name__ == "__main__":
         os.mkdir(outdir)
 
     attfile = fits.open(attfname)
-    attdata = np.copy(attfile["ORIENTATION"].data)
-    attdata = attdata[nonzero_quaternions(get_gyro_quat_as_arr(attdata))]
+    attdata = clear_att(np.copy(attfile["ORIENTATION"].data))
+    #attdata = attdata[nonzero_quaternions(get_gyro_quat_as_arr(attdata))]
     urdfname = fname
     urdfile = fits.open(urdfname)
     urddata = urdfile["EVENTS"].data

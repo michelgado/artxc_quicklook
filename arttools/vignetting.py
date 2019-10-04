@@ -35,7 +35,8 @@ def make_vignetting_for_urdn(urdn, energy=6., phot_index=None, useshadowmask=Tru
     return vmap
 
 
-def make_overall_vignetting(energy=6., phot_index=None, useshadowmask=True, subgrid=10):
+def make_overall_vignetting(energy=6., phot_index=None, useshadowmask=True,
+                            subgrid=10, urdweights={urdn:1. for urdn in URDNS}):
     if subgrid < 1:
         print("ahtung! subgrid defines splines of the translation of multiple vigneting file into one map")
         print("set subgrid to 2")
@@ -68,7 +69,7 @@ def make_overall_vignetting(energy=6., phot_index=None, useshadowmask=True, subg
     for urdn in URDNS:
         vmap = make_vignetting_for_urdn(urdn, energy, phot_index, useshadowmask)
         quat = iquat*ART_det_QUAT[urdn]
-        newvmap += vmap(vec_to_offset_pairs(quat.apply(vecs, inverse=True))).reshape(shape)
+        newvmap += vmap(vec_to_offset_pairs(quat.apply(vecs, inverse=True))).reshape(shape)*urdweights.get(urdn, 1.)
 
     vmap = RegularGridInterpolator((x[:, 0], y[0]), newvmap, bounds_error=False, fill_value=0)
     return vmap

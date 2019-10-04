@@ -112,6 +112,11 @@ def mkgtimask(time, gti):
         mask[s:e] = True
     return mask
 
+def tarange(dt, gti, conservecrit=0.1):
+    dtl = dt - (gti[1] - gti[0])%dt
+    dtl = -dtl/2. if dtl < dt*conservecrit else dtl/2.
+    return np.arange(gti[0] - dtl, gti[1] + dtl + 0.1*abs(dtl), dt)
+
 def make_ingti_times(time, ggti):
     gti = gti_intersection(np.array([time[[0, -1]],]), ggti)
     idx = np.searchsorted(time, gti)
@@ -127,15 +132,12 @@ def make_ingti_times(time, ggti):
     maskgaps[cidx[1:-1] - 1] = False
     return tnew, maskgaps
 
-def deadtime_correction(time, urdhk):
+def deadtime_correction(urdhk):
     ts = urdhk["TIME"]
-    if time[0] > ts[-1] or time[-1] < ts[0]:
-        raise ART_TIME_ERROR("provided urd houskeeping data does not include provided time interval")
-
     tcrate = (urdhk["EVENTS"][1:] - urdhk["EVENTS"][:-1])/(ts[1:] - ts[:-1])
-    icrate = interp1d((ts[1:] + ts[:-1])/2., tcrate,
-                      bounds_error=False, fill_value=np.median(tcrate))
-    return (1. - ARTDEADTIME*icrate(ts))
+    dtcorr = interp1d((ts[1:] + ts[:-1])/2., (1. - ARTDEADTIME*tcrate),
+                      bounds_error=False, fill_value=(1. - ARTDEADTIME*np.median(tcrate)))
+    return dtcorr
 
 
 
