@@ -140,6 +140,7 @@ def make_wcs_for_radecs(ra, dec, pixsize=20./3600.):
     rasize = rasize + 1 - rasize%2
     locwcs.wcs.crpix = [rasize, desize]
     #inspect obtained wcs region
+    """
     import matplotlib.pyplot as plt
     plt.scatter(ra, dec, color="g")
     plt.scatter(r, d, color="m")
@@ -157,6 +158,7 @@ def make_wcs_for_radecs(ra, dec, pixsize=20./3600.):
                                       [1., locwcs.wcs.crpix[1]*2 + 1]], 1).T, color="r")
     plt.scatter([locwcs.wcs.crval[0],], [locwcs.wcs.crval[1],], color="k")
     plt.show()
+    """
     return locwcs
 
 def make_wcs_for_quats(quats, pixsize=20./3600.):

@@ -1,22 +1,39 @@
 from .caldb import get_shadowmask_by_urd, get_vigneting_by_urd
 from scipy.interpolate import interp1d, RegularGridInterpolator
-from scipy.integrate import quad
+from scipy.integrate import cumtrapz
 from ._det_spatial import get_shadowed_pix_mask, offset_to_raw_xy, DL, \
     offset_to_vec, vec_to_offset_pairs, vec_to_offset
 from .telescope import URDNS
 from .orientation import ART_det_QUAT, ART_det_mean_QUAT
 import numpy as np
+from math import log10
+
+TINY =1e-15
 
 def make_vignetting_for_urdn(urdn, energy=6., phot_index=None, useshadowmask=True):
     vignfile = get_vigneting_by_urd(urdn)
+
+    """
+    efintlog = interp1d(np.log10(vignfile["Vign_EA"].data["E"]),
+                     np.log10(np.maximum(vignfile["Vign_EA"].data["EFFAREA"], TINY)),
+                     axis=0)
+    efint = lambda E: 10.**efintlog(log10(E))
+    """
     efint = interp1d(vignfile["Vign_EA"].data["E"],
                      vignfile["Vign_EA"].data["EFFAREA"],
                      axis=0)
 
+
     if not phot_index is None:
+        vignmap = cumtrapz(vignfile["Vign_EA"].data["EFFAREA"]*\
+                           vignfile["Vign_EA"].data["E"]**(-phot_index),
+                           vignfile["Vign_EA"].data["E"],
+                           axis=0)
+        """
         vignmap = quad(lambda E: efint(E)*E**(-phot_index),
                        vignfile["Vign_EA"].data["E"][0],
                        vignfile["Vign_EA"].data["E"][-1])
+        """
     else:
         vignmap = efint(energy)
 

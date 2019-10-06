@@ -85,9 +85,6 @@ def get_events_energy(eventlist, hkdata, caldb):
     print("total events", eventlist.size)
     emean = np.zeros(eventlist.size, np.double)
     bitmask = np.zeros((8, emean.size), np.bool)
-    #mark bitmask last bit for edge strips
-    #bitmask[0, :] = np.any([eventlist["RAW_X"] == 0, eventlist["RAW_X"] == 47,
-    #                        eventlist["RAW_Y"] == 0, eventlist["RAW_Y"] == 47], axis=0)
 
     T = interp1d(hkdata["TIME"], hkdata["TD1"],
             bounds_error=False, kind="linear",

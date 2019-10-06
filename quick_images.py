@@ -27,6 +27,7 @@ if __name__ == "__main__":
         idx = arttools.mask.edges(m1)
         idx = idx[idx[:,1] - idx[:,0] > 1]
         gti = attdata['TIME'][idx]
+        print(gti)
 
         urdnames = [os.path.join(l0path, session + name) for name in urdgroups[session]]
         attnames = [urdname[:-12] + "_gyro.fits" for urdname in urdnames]

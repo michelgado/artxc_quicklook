@@ -12,13 +12,13 @@ import matplotlib.pyplot as plt
 
 MPNUM = cpu_count()
 
-
-def make_background_det_map_for_urdn(urdn, useshadowmask=True):
+def make_background_det_map_for_urdn(urdn, useshadowmask=True, ignoreedgestrips=True):
     bkgprofile = get_backprofile_by_urdn(urdn)
     shmask = get_shadowmask_by_urd(urdn)
     sh2 = np.ones((48, 48), np.bool)
-    sh2[[0, -1], :] = False
-    sh2[:, [0, -1]] = False
+    if ignoreedgestrips:
+        sh2[[0, -1], :] = False
+        sh2[:, [0, -1]] = False
     bkgmap = RegularGridInterpolator(((np.arange(-24, 24) + 0.5)*DL,
                                       (np.arange(-24, 24) + 0.5)*DL),
                                         bkgprofile*shmask*sh2/bkgprofile.sum(),
