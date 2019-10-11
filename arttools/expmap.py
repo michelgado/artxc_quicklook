@@ -1,5 +1,5 @@
 from .orientation import ART_det_QUAT
-from .atthist import hist_orientation_for_attdata, AttWCShist, AttHealpixhist
+from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist
 from .vignetting import make_vignetting_for_urdn, make_overall_vignetting
 from .time import gti_intersection, gti_difference
 from functools import reduce
@@ -24,8 +24,9 @@ def make_expmap_for_wcs(wcs, attdata, gti, mpnum=MPNUM, dtcorr={}):
     exptime, qval = hist_orientation_for_attdata(attdata, overall_gti)
     vmap = make_overall_vignetting()
     print("produce overall urds expmap")
-    emap = AttWCShist.make_mp(wcs, vmap, exptime, qval, mpnum)
+    emap = AttWCSHist.make_mp(vmap, exptime, qval, wcs, mpnum)
     print("\ndone!")
+    #emap = 0.
     for urd in gti:
         urdgti = gti_difference(overall_gti, gti[urd])
         if urdgti.size == 0:
@@ -34,12 +35,13 @@ def make_expmap_for_wcs(wcs, attdata, gti, mpnum=MPNUM, dtcorr={}):
         print("urd %d progress:" % urd)
         exptime, qval = hist_orientation_for_attdata(attdata, urdgti, ART_det_QUAT[urd])
         vmap = make_vignetting_for_urdn(urd)
-        emap = AttWCShist.make_mp(wcs, vmap, exptime, qval, mpnum) + emap
+        emap = AttWCSHist.make_mp(vmap, exptime, qval, wcs,  mpnum) + emap
         print(" done!")
     return emap
 
 
 def make_expmap_for_healpix(attdata, gti, mpnum=MPNUM):
+    """
     print(gti)
     overall_gti = reduce(gti_intersection, gti.values())
     print(overall_gti)
@@ -49,15 +51,17 @@ def make_expmap_for_healpix(attdata, gti, mpnum=MPNUM):
     print("produce overall urds expmap")
     emap = AttHealpixhist.make_mp(2048, vmap, exptime, qval, mpnum)
     print("\ndone!")
+    """
+    emap = 0.
     for urd in gti:
-        urdgti = gti_difference(overall_gti, gti[urd])
+        urdgti = gti[urd] # gti_difference(overall_gti, gti[urd])
         if urdgti.size == 0:
             print("urd %d has no individual gti, continue" % urd)
             continue
         print("urd %d progress:" % urd)
         exptime, qval = hist_orientation_for_attdata(attdata, urdgti, ART_det_QUAT[urd])
         vmap = make_vignetting_for_urdn(urd)
-        emap = AttHealpixhist.make_mp(2048, vmap, exptime, qval, mpnum) + emap
+        emap = AttHealpixHist.make_mp(2048, vmap, exptime, qval, mpnum) + emap
         print(" done!")
     return emap
 

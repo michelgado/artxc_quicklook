@@ -10,7 +10,8 @@ from math import log10
 
 TINY =1e-15
 
-def make_vignetting_for_urdn(urdn, energy=6., phot_index=None, useshadowmask=True):
+def make_vignetting_for_urdn(urdn, energy=6., phot_index=None,
+                             useshadowmask=True, ignoreedgestrips=True):
     vignfile = get_vigneting_by_urd(urdn)
 
     """
@@ -36,6 +37,15 @@ def make_vignetting_for_urdn(urdn, energy=6., phot_index=None, useshadowmask=Tru
         """
     else:
         vignmap = efint(energy)
+
+    if ignoreedgestrips:
+        x, y = np.meshgrid(vignfile["Coord"].data["X"], vignfile["Coord"].data["Y"])
+        rawx, rawy = offset_to_raw_xy(x.ravel(), y.ravel())
+        centralstrips = np.ones((48, 48), np.bool)
+        centralstrips[[0, -1], :] = False
+        centralstrips[:, [0, -1]] = False
+        esmask = get_shadowed_pix_mask(rawx, rawy, centralstrips).reshape(vignmap.shape)
+        vignmap = vignmap*esmask
 
     if useshadowmask:
         x, y = np.meshgrid(vignfile["Coord"].data["X"], vignfile["Coord"].data["Y"])

@@ -22,7 +22,7 @@ def get_relevat_file(cal_cname, instrume, date=datetime.datetime(2030, 10, 10)):
     caltable = get_cif(cal_cname, instrume)
     didx = caltable.index.get_loc(date, method="ffill")
     row = caltable.iloc[didx]
-    fpath = os.path.join(ARTCALDBPATH, row["CAL_DIR"], row["CAL_FILE"])
+    fpath = os.path.join(ARTCALDBPATH, row["CAL_DIR"].rstrip(), row["CAL_FILE"].rstrip())
     return fpath
 
 def get_vigneting_by_urd(urdn):

@@ -91,8 +91,12 @@ def gti_difference(gti1, gti2):
     check_gti_shape(gti1)
     check_gti_shape(gti2)
 
+    if gti1.size == 0 or gti2.size == 0:
+        return gti2
+
     gti1 = gti_union(gti1)
     gti2 = gti_union(gti2)
+
     gti3 = np.empty((gti1.shape[0] + 1, 2), np.double)
     gti3[:-1,1] = gti1[:,0]
     gti3[1:, 0] = gti1[:,1]

@@ -140,7 +140,6 @@ def make_wcs_for_radecs(ra, dec, pixsize=20./3600.):
     rasize = rasize + 1 - rasize%2
     locwcs.wcs.crpix = [rasize, desize]
     #inspect obtained wcs region
-    """
     import matplotlib.pyplot as plt
     plt.scatter(ra, dec, color="g")
     plt.scatter(r, d, color="m")
@@ -158,7 +157,6 @@ def make_wcs_for_radecs(ra, dec, pixsize=20./3600.):
                                       [1., locwcs.wcs.crpix[1]*2 + 1]], 1).T, color="r")
     plt.scatter([locwcs.wcs.crval[0],], [locwcs.wcs.crval[1],], color="k")
     plt.show()
-    """
     return locwcs
 
 def make_wcs_for_quats(quats, pixsize=20./3600.):
@@ -195,14 +193,12 @@ def make_wcs_for_attsets(attflist, gti=None):
     qvtot = Rotation(np.concatenate([q.as_quat() for q in qvtot]))
     return make_wcs_for_quats(qvtot)
 
-class AttWCShist(object):
-    def __init__(self, wcs, vmap, qin, qout, imgshape=None, subscale=4):
-        self.wcs = wcs
+
+class AttHist(object):
+
+    def __init__(self, vmap, qin, qout, subscale=4):
         self.qin = qin
         self.qout = qout
-        if imgshape is None:
-            imgshape = [int(wcs.wcs.crpix[1]*2 + 1), int(wcs.wcs.crpix[0]*2 + 1)]
-        self.img = np.zeros(imgshape, np.double)
         xmin, xmax = vmap.grid[0][[0, -1]]
         ymin, ymax = vmap.grid[0][[0, -1]]
         dd = DL/subscale
@@ -217,20 +213,10 @@ class AttWCShist(object):
         x, y = x[mask], y[mask]
         self.vmap = vmap[mask]
         self.vecs = offset_to_vec(x, y)
-
-    def integrate_vmap_on_sky(self, quat, exp):
-        pass
+        self.vecs = self.vecs/np.sqrt(np.sum(self.vecs**2., axis=1))[:, np.newaxis]
 
     def put_vmap_on_sky(self, quat, exp):
-        vec_icrs = quat.apply(self.vecs)
-        r, d = vec_to_pol(vec_icrs)
-        x, y = (self.wcs.all_world2pix(np.degrees(np.array([r, d]).T), 1) + 0.5).T.astype(np.int)
-        #sc = SkyCoord(r*180./pi, d*180/pi, unit=("deg", "deg"), frame="fk5")
-        #x, y = (self.wcs.all_world2pix(np.array([sc.galactic.l.value, sc.galactic.b.value]).T, 1) + 0.5).T.astype(np.int)
-        u, idx = np.unique(np.array([x, y]), return_index=True, axis=1)
-        mask = np.all([u[0] > -1, u[1] > -1, u[0] < self.img.shape[1], u[1] < self.img.shape[0]], axis=0)
-        u, idx = u[:, mask], idx[mask]
-        np.add.at(self.img, (u[1], u[0]), self.vmap[idx]*exp)
+        raise NotImplementedError("its a prototype class for vignetting to sky hist, the method is not implemented")
 
     def __call__(self):
         while True:
@@ -239,10 +225,10 @@ class AttWCShist(object):
                 break
             q, exp = vals
             self.put_vmap_on_sky(q, exp)
-        self.qout.put(self.img)
+        self.qout.put(self.res)
 
     @staticmethod
-    def trace_and_collect(exptime, qvals, qin, qout, pool):
+    def trace_and_collect(exptime, qvals, qin, qout, pool, accumulate, *args):
         for proc in pool:
             proc.start()
 
@@ -253,44 +239,60 @@ class AttWCShist(object):
         for p in pool:
             qin.put(-1)
 
-        img = sum(qout.get() for p in pool)
+        res = accumulate(qout, len(pool), *args)
 
         for p in pool:
             p.join()
-        return img
+        return res
+
+    @staticmethod
+    def accumulate(qout, size, *args):
+        return sum(qout.get() for i in range(size))
 
     @classmethod
-    def make_mp(cls, wcs, vmap, exptime, qvals, mpnum=MPNUM):
+    def make_mp(cls, vmap, exptime, qvals, *args, mpnum=MPNUM, **kwargs):
+        raise NotImplementedError("need to be implemented")
         qin = Queue(100)
         qout = Queue(2)
-        pool = [Process(target=cls(wcs, vmap, qin, qout)) for i in range(mpnum)]
-        resimg = cls.trace_and_collect(exptime, qvals, qin, qout, pool)
+        pool = [Process(target=cls(vmap, qin, qout)) for i in range(mpnum)]
+        resimg = cls.trace_and_collect(exptime, qvals, qin, qout, pool, cls.accumulate, *args)
         return resimg
 
 
-class AttHealpixhist(object):
-    def __init__(self, nside, vmap, qin, qout, imgshape=None, subscale=3):
-        self.nside =nside
-        self.qin = qin
-        self.qout = qout
-        xmin, xmax = vmap.grid[0][[0, -1]]
-        ymin, ymax = vmap.grid[0][[0, -1]]
-        dd = DL/subscale
-        dx = dd - dd%(xmax - xmin)
-        x = np.linspace(xmin - dx/2., xmax + dx/2., int((xmax - xmin + dx)/dd))
-        dy = dd - dd%(ymax - ymin)
-        y = np.linspace(ymin - dy/2., ymax + dy/2., int((ymax - ymin + dy)/dd))
+class AttWCSHist(AttHist):
 
-        x, y = np.tile(x, y.size), np.repeat(y, x.size)
-        vmap = vmap(np.array([x, y]).T)
-        mask = vmap > 0.
-        x, y = x[mask], y[mask]
-        self.vmap = vmap[mask]
-        self.vecs = offset_to_vec(x, y)
-        self.pixs = {}
+    def __init__(self, *args, wcs, imgshape=None, **kwargs):
+        super().__init__(*args, **kwargs)
 
-    def integrate_vmap_on_sky(self, quat, exp):
-        pass
+        self.wcs = wcs
+        if imgshape is None:
+            imgshape = [int(wcs.wcs.crpix[1]*2 + 1), int(wcs.wcs.crpix[0]*2 + 1)]
+        self.img = np.zeros(imgshape, np.double)
+        self.res = self.img
+
+
+    def put_vmap_on_sky(self, quat, exp):
+        vec_icrs = quat.apply(self.vecs)
+        r, d = vec_to_pol(vec_icrs)
+        x, y = (self.wcs.all_world2pix(np.degrees(np.array([r, d]).T), 1) + 0.5).T.astype(np.int)
+        u, idx = np.unique(np.array([x, y]), return_index=True, axis=1)
+        mask = np.all([u[0] > -1, u[1] > -1, u[0] < self.img.shape[1], u[1] < self.img.shape[0]], axis=0)
+        u, idx = u[:, mask], idx[mask]
+        np.add.at(self.img, (u[1], u[0]), self.vmap[idx]*exp)
+
+    @classmethod
+    def make_mp(cls, vmap, exptime, qvals, wcs, mpnum=MPNUM):
+        qin = Queue(100)
+        qout = Queue(2)
+        pool = [Process(target=cls(vmap, qin, qout, wcs=wcs)) for i in range(mpnum)]
+        resimg = cls.trace_and_collect(exptime, qvals, qin, qout, pool, cls.accumulate)
+        return resimg
+
+class AttHealpixHist(AttHist):
+    def __init__(self, *args, nside, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.nside = nside
+        self.res = {}
 
     def put_vmap_on_sky(self, quat, exp):
         vec_icrs = quat.apply(self.vecs)
@@ -303,42 +305,41 @@ class AttHealpixhist(object):
         mv = mv/counts
 
         for i in range(u.size):
-            self.pixs[u[i]] = self.pixs.get(u[i], 0) + exp*self.vmap[posidx[i]]
-
-    def __call__(self):
-        while True:
-            vals = self.qin.get()
-            if vals == -1:
-                break
-            q, exp = vals
-            self.put_vmap_on_sky(q, exp)
-        self.qout.put(self.pixs)
+            self.res[u[i]] = self.res.get(u[i], 0) + exp*self.vmap[posidx[i]]
 
     @staticmethod
-    def trace_and_collect(exptime, qvals, nside, qin, qout, pool):
-        for proc in pool:
-            proc.start()
-
-        for i in range(exptime.size):
-            qin.put([qvals[i], exptime[i]])
-            sys.stderr.write('\rdone {0:%}'.format(i/exptime.size))
-
-        for p in pool:
-            qin.put(-1)
-
+    def accumulate(qout, size, nside):
         img = np.zeros(healpy.nside2npix(nside))
-        for proc in pool:
+        for proc in range(size):
             for idx, exptime in qout.get().items():
                 img[idx] += exptime
-        for p in pool:
-            p.join()
         return img
 
     @classmethod
-    def make_mp(cls, nside, vmap, exptime, qvals, mpnum=MPNUM):
+    def make_mp(cls, vmap, exptime, qvals, nside, mpnum=MPNUM):
         qin = Queue(100)
         qout = Queue(2)
-        pool = [Process(target=cls(nside, vmap, qin, qout)) for i in range(mpnum)]
-        resimg = cls.trace_and_collect(exptime, qvals, nside, qin, qout, pool)
+        pool = [Process(target=cls(vmap, qin, qout, nside=nside)) for i in range(mpnum)]
+        resimg = cls.trace_and_collect(exptime, qvals, qin, qout, pool, nside)
         return resimg
 
+
+class AttCircHist(AttHist):
+    def __init__(self, *args, dvec, rapp, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.dvec = dvec
+        self.rapp = rapp
+        self.res = 0.
+
+    def put_vmap_on_sky(self, quat, exp):
+        vec_icrs = quat.apply(self.vecs)
+        mask = np.arccos(np.minimum(np.sum(vec_icrs*self.dvec, axis=1), 1.)) < self.rapp
+        self.res += (0. if not np.any(mask) else np.mean(self.vmap[mask]))
+
+    @classmethod
+    def make_mp(cls, vmap, exptime, qvals, dvec, rapp, mpnum=MPNUM):
+        qin = Queue(100)
+        qout = Queue(2)
+        pool = [Process(target=cls(vmap, qin, qout, dvec=dvec, rapp=rapp)) for i in range(mpnum)]
+        resimg = cls.trace_and_collect(exptime, qvals, qin, qout, pool, cls.accumulate)
+        return resimg

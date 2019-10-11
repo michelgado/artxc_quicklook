@@ -24,6 +24,7 @@ from .expmap import make_expmap_for_wcs
 from .lightcurve import get_overall_countrate
 from .background import make_bkgmap_for_wcs
 from scipy.interpolate import interp1d
+from matplotlib.colors import LogNorm
 
 
 class NoDATA(Exception):
@@ -71,6 +72,7 @@ def make_image(urdfile, attdata, locwcs, gti=None, maskevents=standard_events_ma
         raise NoDATA("empty event list, after e filter")
 
     urddata = urddata[maskevents]
+    print("events on image", urddata.size)
 
     r, d = get_photons_sky_coord(urddata, urdfile[1].header["URDN"], attdata, 10)
     x, y = locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1.).T
@@ -320,25 +322,29 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti):
     the program produces overall count map and exposition map for this urdfiles set
     the wcs is produced automatically to cover nonzero exposition area with some margin
     """
-    attgti = []
     ottgti = np.empty((0, 2), np.double)
+    attgti = []
     attall = []
     for attname in set(attflist):
-        attdata = fits.getdata(attname, "ORIENTATION")
+        attdata = np.copy(fits.getdata(attname, "ORIENTATION"))
         attdata = clear_att(attdata)
-        print(attdata["TIME"][[0, -1]])
-        print(gti)
         attgti = gti_intersection(gti, np.array([attdata["TIME"][[0, -1]],]))
+        if attgti.size == 0:
+            continue
+        print(attname)
+        print(attgti)
+        attgti = gti_difference(ottgti, attgti)
         print(attgti)
         if attgti.size == 0:
             continue
-        attgti = gti_difference(ottgti, attgti)
-        attall.append(get_filtered_table(attdata, gti))
+
+        attall.append(get_filtered_table(attdata, attgti))
         ottgti = gti_union(np.concatenate([ottgti, attgti]))
 
     attall = np.concatenate(attall)
     attall = attall[np.argsort(attall["TIME"])]
     gti = ottgti
+
 
     locwcs = make_wcs_for_attdata(attall, gti)
     xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
@@ -346,25 +352,32 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti):
     urdgti = {}
     bkgrate = {}
     bkgts = {}
+    k = 0
 
     for urdfname in urdflist[:]:
         try:
             urdfile = fits.open(urdfname)
             urdn = urdfile["EVENTS"].header["URDN"]
-            """
             ts, rate = get_overall_countrate(urdfile, 40., 100.)
-            print("ts and rate", ts, rate)
             bkgrate[urdn] = bkgrate.get(urdn, []) + [rate,]
             bkgts[urdn] = bkgts.get(urdn, []) + [ts,]
-            """
             locgti = gti_difference(urdgti.get(urdn, np.empty((0, 2), np.double)), get_gti(urdfile))
             locgti = gti_intersection(gti, locgti)
-            print("urdfname", urdfname)
+            print(urdfname, locgti)
+            print(np.any(np.isnan(rate)))
+            print(np.where(np.isnan(rate)))
             timg = make_image(urdfile, attall, locwcs, locgti)
         except NoDATA as nd:
             print(nd)
         else:
             imgdata += timg
+            """
+            plt.clf()
+            plt.imshow(timg, interpolation="nearest", norm=LogNorm())
+            plt.title(urdfname)
+            plt.savefig("plots/%04d.png" % k)
+            k += 1
+            """
             img = fits.ImageHDU(data=imgdata, header=locwcs.to_header())
             h1 = fits.PrimaryHDU(header=locwcs.to_header())
             lhdu = fits.HDUList([h1, img])
@@ -374,25 +387,23 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti):
     #urdgti = {urdn:gti_intersection(gti, urdgti[urdn]) for urdn in urdgti}
     for urdn in bkgrate:
         ts = np.concatenate(bkgts[urdn])
-        print(bkgrate[urdn])
-        print(type(bkgrate[urdn]))
-        print(len(bkgrate[urdn]))
         rt = np.concatenate(bkgrate[urdn])
         idx = np.argsort(ts)
         bkgrate[urdn] = interp1d(ts[idx], rt[idx], bounds_error=False, fill_value=np.median(rt))
+    import pickle
+    pickle.dump(bkgrate, open("bkgrate.pickle", "wb"))
+    pickle.dump(urdgti, open("urdgti.pickle", "wb"))
 
     emap = make_expmap_for_wcs(locwcs, attall, urdgti)
     emap = fits.ImageHDU(data=emap, header=locwcs.to_header())
     h1 = fits.PrimaryHDU(header=locwcs.to_header())
     ehdu = fits.HDUList([h1, emap])
     ehdu.writeto("tmpemap.fits.gz", overwrite=True)
-    """
     bmap = make_bkgmap_for_wcs(locwcs, attall, urdgti, time_corr=bkgrate)
     bmap = fits.ImageHDU(data=bmap, header=locwcs.to_header())
     h1 = fits.PrimaryHDU(header=locwcs.to_header())
     ehdu = fits.HDUList([h1, bmap])
     ehdu.writeto("tmpbmap.fits.gz", overwrite=True)
-    """
 
 
 def make_expmap_for_urd(urdfile, attfile, locwcs, agti=None):

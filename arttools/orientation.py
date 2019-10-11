@@ -37,6 +37,7 @@ def make_orientation_gti(attdata, rac, decc, deltara, deltadec):
 def clear_att(attdata):
     attdata = filter_gyrodata(attdata)
     attdata = attdata[np.argsort(attdata["TIME"])]
+    attdata = attdata[attdata["TIME"] > 617228538.1056] # first ART-XC observation time, any quaternions from earlier epoch is definetely a fake
     if np.any(attdata["TIME"][1:] <= attdata["TIME"][:-1]):
         idx = np.where(attdata["TIME"][1:] <= attdata["TIME"][:-1])[0]
         utime, idx = np.unique(attdata["TIME"], return_index=True)
@@ -76,7 +77,7 @@ def get_gyro_quat_for_urdn(urdn, gyrodata):
     return get_gyro_quat(gyrodata)*ART_det_QUAT[urdn]
 
 def filter_gyrodata(gyrodata):
-    return gyrodata[nonzero_quaternions(np.array([gyrodata["QORT_%d" % i] for i in [1,2,3,0]]).T)]
+    return np.copy(gyrodata)[nonzero_quaternions(np.array([gyrodata["QORT_%d" % i] for i in [1,2,3,0]]).T)]
 
 def nonzero_quaternions(quat):
     mask = np.sum(quat**2, axis=1) > 0

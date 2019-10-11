@@ -1,5 +1,5 @@
 from .orientation import ART_det_QUAT
-from .atthist import hist_orientation_for_attdata, AttWCShist, AttHealpixhist
+from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist
 from .vignetting import make_vignetting_for_urdn, make_overall_vignetting
 from .time import gti_intersection, gti_difference
 from .caldb import get_backprofile_by_urdn, get_shadowmask_by_urd
@@ -15,13 +15,12 @@ MPNUM = cpu_count()
 def make_background_det_map_for_urdn(urdn, useshadowmask=True, ignoreedgestrips=True):
     bkgprofile = get_backprofile_by_urdn(urdn)
     shmask = get_shadowmask_by_urd(urdn)
-    sh2 = np.ones((48, 48), np.bool)
     if ignoreedgestrips:
-        sh2[[0, -1], :] = False
-        sh2[:, [0, -1]] = False
+        shmask[[0, -1], :] = False
+        shmask[:, [0, -1]] = False
     bkgmap = RegularGridInterpolator(((np.arange(-24, 24) + 0.5)*DL,
                                       (np.arange(-24, 24) + 0.5)*DL),
-                                        bkgprofile*shmask*sh2/bkgprofile.sum(),
+                                        bkgprofile*shmask/bkgprofile.sum(),
                                         method="nearest")
     return bkgmap
 
@@ -74,20 +73,8 @@ def make_bkgmap_for_wcs(wcs, attdata, gti, mpnum=MPNUM, time_corr={}):
         if urdgti.size == 0:
             print("urd %d has no individual gti, continue" % urd)
             continue
-        print("urd %d progress:" % urd)
-        print("exptime", np.sum(urdgti[:,1] - urdgti[:,0]))
-        exptime, qval = hist_orientation_for_attdata(attdata, urdgti, ART_det_QUAT[urd])
-        print("test 2", np.sum(exptime))
-        plt.hist(exptime, 32, histtype="step", color="r")
         exptime, qval = hist_orientation_for_attdata(attdata, urdgti, ART_det_QUAT[urd], \
                                                      time_corr.get(urd, lambda x: 1.))
-        print("exptime update", exptime)
-
-        plt.hist(exptime, 32, histtype="step", color="g")
-        plt.show()
-        print(exptime)
-        print(np.any(np.isnan(exptime)))
         bkgmap = make_background_det_map_for_urdn(urd)
-        bkg = AttWCShist.make_mp(wcs, bkgmap, exptime, qval, mpnum) + bkg
-        print(" done!")
+        bkg = AttWCSHist.make_mp(bkgmap, exptime, qval, wcs, mpnum) + bkg
     return bkg
