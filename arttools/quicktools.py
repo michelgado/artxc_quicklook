@@ -20,6 +20,8 @@ def get_hk_gti(time, voltage, gti):
     hv_mask    = v_hk<-95.
     t_indexes  = edges(hv_mask)
     t_indexes[1::2]-= 1
+    if t_indexes[-1][-1] == len(t_hk):
+        t_indexes[-1][-1]-=1
     hk_gti     = np.reshape(np.take(t_hk, np.ravel(t_indexes)), (-1,2))        
     return gti_intersection(gti, hk_gti)
 
