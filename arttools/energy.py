@@ -35,6 +35,30 @@ def bitmask_to_grade(bitmask):
     maskint = np.packbits(bitmask, axis=0)[0]
     return GRADESI[maskint]
 
+def get_bot_energy(eventlist, hkdata, caldb):
+    T = interp1d(hkdata["TIME"], hkdata["TD1"],
+            bounds_error=False, kind="linear",
+            fill_value=(hkdata["TD1"][0], hkdata["TD1"][-1]))(eventlist["TIME"])
+    botcal = caldb["BOT"].data
+    rawx, maskb = mkeventindex(eventlist["RAW_X"])
+    sigmab = botcal["fwhm_1"][rawx]*T + botcal["fwhm_0"][rawx]
+    PHAB = np.array([eventlist["PHA_BOT_SUB1"], eventlist["PHA_BOT"], eventlist["PHA_BOT_ADD1"]])
+    energb = random_uniform(PHAB, rawx, T, botcal)
+    maskb = np.logical_and(maskb, energb > botcal["THRESHOLD"][rawx])
+    return energb, maskb
+
+def get_top_energy(eventlist, hkdata, caldb):
+    T = interp1d(hkdata["TIME"], hkdata["TD1"],
+            bounds_error=False, kind="linear",
+            fill_value=(hkdata["TD1"][0], hkdata["TD1"][-1]))(eventlist["TIME"])
+    topcal = caldb["TOP"].data
+    rawy, maskt = mkeventindex(eventlist["RAW_Y"])
+    sigmat = topcal["fwhm_1"][rawy]*T + topcal["fwhm_0"][rawy]
+    PHAT = np.array([eventlist["PHA_TOP_SUB1"], eventlist["PHA_TOP"], eventlist["PHA_TOP_ADD1"]])
+    energt = random_uniform(PHAT, rawy, T, topcal) #PHA_to_PI(PHAT, rawy, T, topcal)
+    maskt = np.logical_and(maskt, energt > topcal["THRESHOLD"][rawy])
+    return energt, maskt
+
 def get_events_energy(eventlist, hkdata, caldb):
     """
     from the captured event, which described with 6 16bit int numbers (left,right,central; top and bot digital amplitudes),
@@ -61,9 +85,6 @@ def get_events_energy(eventlist, hkdata, caldb):
     print("total events", eventlist.size)
     emean = np.zeros(eventlist.size, np.double)
     bitmask = np.zeros((8, emean.size), np.bool)
-    #mark bitmask last bit for edge strips
-    bitmask[0, :] = np.any([eventlist["RAW_X"] == 0, eventlist["RAW_X"] == 47,
-                            eventlist["RAW_Y"] == 0, eventlist["RAW_Y"] == 47], axis=0)
 
     T = interp1d(hkdata["TIME"], hkdata["TD1"],
             bounds_error=False, kind="linear",

@@ -22,16 +22,33 @@ def get_relevat_file(cal_cname, instrume, date=datetime.datetime(2030, 10, 10)):
     caltable = get_cif(cal_cname, instrume)
     didx = caltable.index.get_loc(date, method="ffill")
     row = caltable.iloc[didx]
-    fpath = os.path.join(ARTCALDBPATH, row["CAL_DIR"], row["CAL_FILE"])
+    fpath = os.path.join(ARTCALDBPATH, row["CAL_DIR"].rstrip(), row["CAL_FILE"].rstrip())
     return fpath
 
-def get_shadowmask(urdfile):
-    fpath = get_relevat_file('OOFPIX', URDTOTEL[urdfile["EVENTS"].header["URDN"]])
+def get_vigneting_by_urd(urdn):
+    """
+    to do: put vignmap in the caldb
+    """
+    return fits.open("/srg/a1/work/andrey/art-xc_vignea.fits")
+
+def get_shadowmask_by_urd(urdn):
+    fpath = get_relevat_file('OOFPIX', URDTOTEL[urdn])
     return np.logical_not(fits.getdata(fpath, 1).astype(np.bool))
+
+def get_shadowmask(urdfile):
+    return get_shadowmask_by_urd(urdfile["EVENTS"].header["URDN"])
 
 def get_energycal(urdfile):
     fpath = get_relevat_file('TCOEF', URDTOTEL[urdfile["EVENTS"].header["URDN"]])
     return fits.open(fpath)
+
+
+def get_backprofile_by_urdn(urdn):
+    return fits.getdata("/srg/a1/work/andrey/ART-XC/gc/bkg_grades0_9_urd%d.fits" % urdn)
+
+def get_backprofile(urdfile):
+    return get_backprofile_by_urdn(urdfile["EVENTS"].header["URDN"])
+
 
 def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=indexfname):
     #print(caldb_entry_type, telescope)
