@@ -8,7 +8,7 @@ from .orientation import ART_det_QUAT, ART_det_mean_QUAT
 import numpy as np
 from math import log10
 
-TINY =1e-15
+TINY = 1e-15
 
 def make_vignetting_for_urdn(urdn, energy=6., phot_index=None,
                              useshadowmask=True, ignoreedgestrips=True):
@@ -63,7 +63,7 @@ def make_vignetting_for_urdn(urdn, energy=6., phot_index=None,
 
 
 def make_overall_vignetting(energy=6., phot_index=None, useshadowmask=True,
-                            subgrid=10, urdweights={urdn:1. for urdn in URDNS}):
+                            subgrid=20, urdweights={urdn:1. for urdn in URDNS}):
     if subgrid < 1:
         print("ahtung! subgrid defines splines of the translation of multiple vigneting file into one map")
         print("set subgrid to 2")
@@ -74,10 +74,12 @@ def make_overall_vignetting(energy=6., phot_index=None, useshadowmask=True,
 
     vecs = offset_to_vec(np.array([xmin, xmax, xmax, xmin]),
                          np.array([ymin, ymin, ymax, ymax]))
+
     iquat = ART_det_mean_QUAT.inv()
     vmaps = {}
     for urdn in URDNS:
-        quat = iquat*ART_det_QUAT[urdn]
+        #quat = iquat*ART_det_QUAT[urdn]
+        quat = ART_det_QUAT[urdn]*iquat #*ART_det_QUAT[urdn]
         xlim, ylim = vec_to_offset(quat.apply(vecs))
         xmin, xmax = min(xmin, xlim.min()), max(xmax, xlim.max())
         ymin, ymax = min(ymin, ylim.min()), max(ymax, ylim.max())
@@ -95,7 +97,7 @@ def make_overall_vignetting(energy=6., phot_index=None, useshadowmask=True,
 
     for urdn in URDNS:
         vmap = make_vignetting_for_urdn(urdn, energy, phot_index, useshadowmask)
-        quat = iquat*ART_det_QUAT[urdn]
+        quat = ART_det_QUAT[urdn]*iquat #*ART_det_QUAT[urdn]
         newvmap += vmap(vec_to_offset_pairs(quat.apply(vecs, inverse=True))).reshape(shape)*urdweights.get(urdn, 1.)
 
     vmap = RegularGridInterpolator((x[:, 0], y[0]), newvmap, bounds_error=False, fill_value=0)

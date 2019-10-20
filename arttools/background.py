@@ -33,7 +33,7 @@ def make_overall_background_map(subgrid=10, useshadowmask=True):
     iquat = ART_det_mean_QUAT.inv()
     vmaps = {}
     for urdn in URDNS:
-        quat = iquat*ART_det_QUAT[urdn]
+        quat = ART_det_QUAT[urdn]*iquat
         xlim, ylim = vec_to_offset(quat.apply(vecs))
         xmin, xmax = min(xmin, xlim.min()), max(xmax, xlim.max())
         ymin, ymax = min(ymin, ylim.min()), max(ymax, ylim.max())
@@ -51,7 +51,7 @@ def make_overall_background_map(subgrid=10, useshadowmask=True):
 
     for urdn in URDNS:
         vmap = make_background_det_map_for_urdn(urdn, useshadowmask)
-        quat = iquat*ART_det_QUAT[urdn]
+        quat = ART_det_QUAT[urdn]*iquat
         newvmap += vmap(vec_to_offset_pairs(quat.apply(vecs, inverse=True))).reshape(shape)
 
     bkgmap = RegularGridInterpolator((x[:, 0], y[0]), newvmap, bounds_error=False, fill_value=0)

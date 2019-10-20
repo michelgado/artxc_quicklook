@@ -14,6 +14,12 @@ def get_gti(ffile):
     gti = gti_union(gti + [-0.5, +0.5]) + [+0.5, -0.5]
     return gti_intersection(gti, make_hv_gti(ffile["HK"].data))
 
+def make_gti_mask(ttime, gti):
+    mask = np.zeros(ttime.size, np.bool)
+    for s, e in np.searchsorted(ttime, gti):
+        mask[s:e] = True
+    return mask
+
 def get_filtered_table(tabledata, gti):
     """
     tabledata - any numpy record like array, containing unique TIME value in each row

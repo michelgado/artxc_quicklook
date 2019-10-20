@@ -31,7 +31,7 @@ class NoDATA(Exception):
     pass
 
 def make_events_mask(minrawx = 0, minrawy=0, maxrawx=47, maxrawy=47,
-                     mingrade=-1, maxgrade=10, minenergy=4., maxenergy=16.):
+                     mingrade=-1, maxgrade=10, minenergy=4., maxenergy=12.):
     def mask_events(urddata, grade, energy):
         eventsmask = np.all([grade > mingrade, grade < maxgrade,
                             urddata["RAW_X"] > minrawx, urddata["RAW_X"] < maxrawx,
@@ -47,6 +47,8 @@ def make_image(urdfile, attdata, locwcs, gti=None, maskevents=standard_events_ma
     URDN = urdfile["EVENTS"].header["URDN"]
     caldbfile = get_energycal(urdfile)
     shadow = get_shadowmask(urdfile)
+    #shadow[[0, -1], :] = False
+    #shadow[:, [0, -1]] = False
 
     attgti = np.array([attdata["TIME"][[0, -1]]])
     gti = attgti if gti is None else gti_intersection(gti, attgti)
