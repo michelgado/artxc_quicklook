@@ -121,7 +121,6 @@ def wcs_for_vecs(vecs, pixsize=20./3600.):
     import matplotlib.pyplot as plt
     cvec = vecs.sum(axis=0)
     cvec = cvec/np.sqrt(np.sum(cvec**2.))
-    """
     r1 = np.cross(cvec, [0, 0, 1])
     r1 = r1/np.sqrt(np.sum(r1**2.))
     r2 = np.cross(cvec, r1)
@@ -129,7 +128,6 @@ def wcs_for_vecs(vecs, pixsize=20./3600.):
     plt.scatter(np.sum(vecs*r1, axis=1), np.sum(vecs*r2, axis=1))
     plt.show()
     print("cvec", cvec)
-    """
     vrot = np.cross(np.array([0., 0., 1.]), cvec)
     vrot = vrot/np.sqrt(np.sum(vrot**2.))
     #print("vrot", vrot)
@@ -143,11 +141,9 @@ def wcs_for_vecs(vecs, pixsize=20./3600.):
     l, b = np.sum(quat.apply(vecs)*r2, axis=1), vecn[:,2]
     ch = ConvexHull(np.array([l, b]).T)
     r, d = l[ch.vertices], b[ch.vertices]
-    """
     plt.scatter(l, b, color="r", marker="x")
     plt.scatter(r, d, color="g")
     print(r, d)
-    """
     def find_bbox(alpha):
         x = r*cos(alpha) - d*sin(alpha)
         y = r*sin(alpha) + d*cos(alpha)
@@ -163,13 +159,11 @@ def wcs_for_vecs(vecs, pixsize=20./3600.):
     dx = (xmax - xmin)
     dy = (ymax - ymin)
 
-    """
     plt.scatter([xc*cos(alpha) + yc*sin(alpha)], [-xc*sin(alpha) + yc*cos(alpha)], color="m", marker="+")
     ex = xmin*cos(alpha) + ymin*sin(alpha), xmin*cos(alpha) + ymax*sin(alpha), xmax*cos(alpha) + ymax*sin(alpha), xmax*cos(alpha) + ymin*sin(alpha), xmin*cos(alpha) + ymin*sin(alpha)
     ey = -xmin*sin(alpha) + ymin*cos(alpha), -xmin*sin(alpha) + ymax*cos(alpha), -xmax*sin(alpha) + ymax*cos(alpha), -xmax*sin(alpha) + ymin*cos(alpha), -xmin*sin(alpha) + ymin*cos(alpha)
     plt.plot(ex, ey)
     plt.show()
-    """
     vec1 = quat.apply(cvec) + (xc*cos(alpha) + yc*sin(alpha))*r2 + \
                   (-xc*sin(alpha) + yc*cos(alpha))*r1
     rac, decc = vec_to_pol(quat.apply(vec1, inverse=True))
@@ -210,22 +204,19 @@ def wcs_for_vecs(vecs, pixsize=20./3600.):
     plt.show()
     """
    
-    """
     r1 = np.cross(cvec, [0, 0, 1])
     r1 = r1/np.sqrt(np.sum(r1**2.))
     r2 = np.cross(cvec, r1)
     r2 = r2/np.sqrt(np.sum(r1**2.))
     plt.scatter(np.sum(vecs*r1, axis=1), np.sum(vecs*r2, axis=1))
-    """
 
+    xsize, ysize = locwcs.wcs.crpix[0]*2 + 1, locwcs.wcs.crpix[1]*2 + 1
+    edges = np.array([[1, xsize + 1, xsize + 1, 1, 1], [1, 1, ysize + 1, ysize + 1, 1]]).T
+    r, d = locwcs.all_pix2world(edges, 1).T
+    v1 = pol_to_vec(r*pi/180., d*pi/180.)
+    plt.plot(np.sum(v1*r1, axis=1), np.sum(v1*r2, axis=1))
 
-    #xsize, ysize = locwcs.wcs.crpix[0]*2 + 1, locwcs.wcs.crpix[1]*2 + 1
-    #edges = np.array([[1, xsize + 1, xsize + 1, 1, 1], [1, 1, ysize + 1, ysize + 1, 1]]).T
-    #r, d = locwcs.all_pix2world(edges, 1).T
-    #v1 = pol_to_vec(r*pi/180., d*pi/180.)
-    #plt.plot(np.sum(v1*r1, axis=1), np.sum(v1*r2, axis=1))
-
-    #plt.show()
+    plt.show()
 
     return locwcs
 
