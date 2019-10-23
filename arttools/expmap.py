@@ -19,21 +19,25 @@ def make_expmap_for_wcs(wcs, attdata, gti, mpnum=MPNUM, dtcorr={}):
     2) wcs is expected to be astropy.wcs.WCS class,
         crpix is expected to be exactly the central pixel of the image
     """
-    overall_gti = reduce(gti_intersection, gti.values())
+    if dtcorr:
+        overall_gti = np.empty((0, 2), np.double)
+        emap = 0
+    else:
+        overall_gti = reduce(gti_intersection, gti.values())
+        exptime, qval = hist_orientation_for_attdata(attdata, overall_gti)
+        vmap = make_overall_vignetting()
+        print("produce overall urds expmap")
+        emap = AttWCSHist.make_mp(vmap, exptime, qval, wcs, mpnum)
+        print("\ndone!")
 
-    exptime, qval = hist_orientation_for_attdata(attdata, overall_gti)
-    vmap = make_overall_vignetting()
-    print("produce overall urds expmap")
-    emap = AttWCSHist.make_mp(vmap, exptime, qval, wcs, mpnum)
-    print("\ndone!")
-    #emap = 0.
     for urd in gti:
         urdgti = gti_difference(overall_gti, gti[urd])
         if urdgti.size == 0:
             print("urd %d has no individual gti, continue" % urd)
             continue
         print("urd %d progress:" % urd)
-        exptime, qval = hist_orientation_for_attdata(attdata, urdgti, ART_det_QUAT[urd])
+        exptime, qval = hist_orientation_for_attdata(attdata, urdgti, ART_det_QUAT[urd],
+                                                     dtcorr.get(urd, lambda x: 1))
         vmap = make_vignetting_for_urdn(urd)
         emap = AttWCSHist.make_mp(vmap, exptime, qval, wcs,  mpnum) + emap
         print(" done!")

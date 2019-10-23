@@ -106,21 +106,36 @@ def hist_orientation_for_attdata_urdset(attdata, gti):
     dtn = np.concatenate(dtn)
     return hist_orientation(qtot, dtn)
 
-def make_wcs_for_radecs(ra, dec, pixsize=20./3600.):
-    radec = np.array([ra, dec]).T
-    ch = ConvexHull(radec)
-    r, d = radec[ch.vertices].T
+def wcs_for_vecs(vecs, pixsize=20./3600.):
     """
-    vecs = pol_to_vec(r*pi/180, d*pi/180.)
-    mvec = vecs.sum(axis=0)
+    produce wcs from a set of vectors, the wcs is intendet to cover this vectors
+    vecs are expected to be of shape Nx3
+    method:
+        find mean position vector
+        produce quaternion which put this vector at altitude 0, where metric is close to cartesian
+        find optimal rectangle
+        compute field rotation angle e.t.c.
+        fill wcs with rotation angle, field size, estimated image size
+        return wcs
     """
+    cvec = vecs.sum(axis=0)
+    cvec = cvec/np.sqrt(np.sum(cvec**2.))
+    vrot = np.cross(np.array([0., 0., 1.]), cvec)
+    vrot = vrot/np.sqrt(np.sum(vrot**2.))
+    alpha = pi/2. - np.arccos(cvec[2])
+    quat = Rotation([vrot[0]*sin(alpha/2.), vrot[1]*sin(alpha/2.), vrot[2]*sin(alpha/2.), cos(alpha/2.)])
+    r1 = np.array([0, 0, 1])
+    r2 = np.cross(quat.apply(cvec), r1)
+    vecn = quat.apply(vecs) - quat.apply(cvec)
+    l, b = np.sum(quat.apply(vecs)*r2, axis=1), vecn[:,2]
+    ch = ConvexHull(np.array([l, b]).T)
+    r, d = l[ch.vertices], b[ch.vertices]
+
     def find_bbox(alpha):
         x = r*cos(alpha) - d*sin(alpha)
         y = r*sin(alpha) + d*cos(alpha)
         return (x.max() - x.min())*(y.max() - y.min())
     res = minimize(find_bbox, [pi/4., ], method="Nelder-Mead")
-    #res = minimize(find_bbox, [0., ], method="Nelder-Mead")
-    #alpha = 0. #res.x
     alpha = res.x
     x, y = r*cos(alpha) - d*sin(alpha), r*sin(alpha) + d*cos(alpha)
     xmin, xmax = x.min(), x.max()
@@ -128,42 +143,37 @@ def make_wcs_for_radecs(ra, dec, pixsize=20./3600.):
     xc = (xmax + xmin)/2.
     yc = (ymax + ymin)/2.
 
+    dx = (xmax - xmin)
+    dy = (ymax - ymin)
+
+    vec1 = quat.apply(cvec) + (xc*cos(alpha) + yc*sin(alpha))*r2 + \
+                  (-xc*sin(alpha) + yc*cos(alpha))*r1
+    rac, decc = vec_to_pol(quat.apply(vec1, inverse=True))
+
+
     locwcs = WCS(naxis=2)
     locwcs.wcs.cdelt = [pixsize, pixsize]
-    cdmat = np.array([[cos(alpha), sin(alpha)], [-sin(alpha), cos(alpha)]])
+    cdmat = np.array([[cos(alpha), -sin(alpha)], [sin(alpha), cos(alpha)]])
     locwcs.wcs.cd = cdmat*pixsize
     locwcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
-    locwcs.wcs.crval = [xc*cos(alpha) + yc*sin(alpha), -xc*sin(alpha) + yc*cos(alpha)]
-    desize = int((ymax - ymin + 0.7)/pixsize)//2
+    locwcs.wcs.crval = [rac*180./pi, decc*180./pi]
+    locwcs.wcs.radesys = "FK5"
+    locwcs.wcs.cdelt = [pixsize, pixsize]
+    desize = int((ymax - ymin)*180./pi/pixsize)//2
     desize = desize + 1 - desize%2
-    rasize = int((xmax - xmin + 0.7)/pixsize)//2
+    rasize = int((xmax - xmin)*180./pi/pixsize)//2
     rasize = rasize + 1 - rasize%2
     locwcs.wcs.crpix = [rasize, desize]
-    #inspect obtained wcs region
-    import matplotlib.pyplot as plt
-    plt.scatter(ra, dec, color="g")
-    plt.scatter(r, d, color="m")
-    r1, d1 = locwcs.all_pix2world(np.array([np.arange(1, rasize*2 + 1), np.ones(rasize*2)]).T, 1).T
-    plt.scatter(r1, d1, color="b")
-    r1, d1 = locwcs.all_pix2world(np.array([np.arange(1, rasize*2 + 1), np.ones(rasize*2)*desize*2]).T, 1).T
-    plt.scatter(r1, d1, color="b")
-    r1, d1 = locwcs.all_pix2world(np.array([np.ones(desize*2), np.arange(1, desize*2 + 1)]).T, 1).T
-    plt.scatter(r1, d1, color="b")
-    r1, d1 = locwcs.all_pix2world(np.array([np.ones(desize*2)*rasize*2, np.arange(1, desize*2 + 1)]).T, 1).T
-    plt.scatter(r1, d1, color="b")
 
-    plt.scatter(*locwcs.all_pix2world([[1., 1.], [0., locwcs.wcs.crpix[1]*2 + 1],
-                                      [locwcs.wcs.crpix[0]*2 + 1, locwcs.wcs.crpix[1]*2 + 1],
-                                      [1., locwcs.wcs.crpix[1]*2 + 1]], 1).T, color="r")
-    plt.scatter([locwcs.wcs.crval[0],], [locwcs.wcs.crval[1],], color="k")
-    plt.show()
     return locwcs
 
+
 def make_wcs_for_quats(quats, pixsize=20./3600.):
-    opaxis = quats.apply(OPAX)
-    ra, dec = vec_to_pol(opaxis)
-    ra, dec = ra*180/pi, dec*180/pi
-    return make_wcs_for_radecs(ra, dec, pixsize)
+    vedges = offset_to_vec(np.array([-26.*DL, 26*DL, 26.*DL, -26.*DL]),
+                           np.array([-26.*DL, -26*DL, 26.*DL, 26.*DL]))
+    edges = np.concatenate([quats.apply(v) for v in vedges])
+    edges = edges/np.sqrt(np.sum(edges**2., axis=1))[:, np.newaxis]
+    return wcs_for_vecs(edges)
 
 def make_wcs_for_attdata(attdata, gti=None):
     if not gti is None:
@@ -272,9 +282,9 @@ class AttWCSHist(AttHist):
 
 
     def put_vmap_on_sky(self, quat, exp):
-        vec_icrs = quat.apply(self.vecs)
-        r, d = vec_to_pol(vec_icrs)
-        x, y = (self.wcs.all_world2pix(np.degrees(np.array([r, d]).T), 1) + 0.5).T.astype(np.int)
+        vec_fk5 = quat.apply(self.vecs)
+        r, d = vec_to_pol(vec_fk5)
+        x, y = (self.wcs.all_world2pix(np.degrees(np.array([r, d]).T), 1) - 0.5).T.astype(np.int)
         u, idx = np.unique(np.array([x, y]), return_index=True, axis=1)
         mask = np.all([u[0] > -1, u[1] > -1, u[0] < self.img.shape[1], u[1] < self.img.shape[0]], axis=0)
         u, idx = u[:, mask], idx[mask]
@@ -287,6 +297,17 @@ class AttWCSHist(AttHist):
         pool = [Process(target=cls(vmap, qin, qout, wcs=wcs)) for i in range(mpnum)]
         resimg = cls.trace_and_collect(exptime, qvals, qin, qout, pool, cls.accumulate)
         return resimg
+
+class AttWCSHistmean(AttWCSHist):
+
+    def put_vmap_on_sky(self, quat, exp):
+        vec_fk5 = quat.apply(self.vecs)
+        r, d = vec_to_pol(vec_fk5)
+        x, y = (self.wcs.all_world2pix(np.degrees(np.array([r, d]).T), 1) - 0.5).T.astype(np.int)
+        u, idx, cts = np.unique(np.array([x, y]), return_inverse=True, return_counts=True, axis=1)
+        np.add.at(self.img, (y, x), self.vmap*exp/cts[idx])
+
+
 
 class AttHealpixHist(AttHist):
     def __init__(self, *args, nside, **kwargs):

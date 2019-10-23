@@ -1,5 +1,5 @@
 from .orientation import ART_det_QUAT
-from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist
+from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttWCSHistmean
 from .vignetting import make_vignetting_for_urdn, make_overall_vignetting
 from .time import gti_intersection, gti_difference
 from .caldb import get_backprofile_by_urdn, get_shadowmask_by_urd
@@ -33,7 +33,7 @@ def make_overall_background_map(subgrid=10, useshadowmask=True):
     iquat = ART_det_mean_QUAT.inv()
     vmaps = {}
     for urdn in URDNS:
-        quat = iquat*ART_det_QUAT[urdn]
+        quat = ART_det_QUAT[urdn]*iquat
         xlim, ylim = vec_to_offset(quat.apply(vecs))
         xmin, xmax = min(xmin, xlim.min()), max(xmax, xlim.max())
         ymin, ymax = min(ymin, ylim.min()), max(ymax, ylim.max())
@@ -51,7 +51,7 @@ def make_overall_background_map(subgrid=10, useshadowmask=True):
 
     for urdn in URDNS:
         vmap = make_background_det_map_for_urdn(urdn, useshadowmask)
-        quat = iquat*ART_det_QUAT[urdn]
+        quat = ART_det_QUAT[urdn]*iquat
         newvmap += vmap(vec_to_offset_pairs(quat.apply(vecs, inverse=True))).reshape(shape)
 
     bkgmap = RegularGridInterpolator((x[:, 0], y[0]), newvmap, bounds_error=False, fill_value=0)
@@ -76,5 +76,5 @@ def make_bkgmap_for_wcs(wcs, attdata, gti, mpnum=MPNUM, time_corr={}):
         exptime, qval = hist_orientation_for_attdata(attdata, urdgti, ART_det_QUAT[urd], \
                                                      time_corr.get(urd, lambda x: 1.))
         bkgmap = make_background_det_map_for_urdn(urd)
-        bkg = AttWCSHist.make_mp(bkgmap, exptime, qval, wcs, mpnum) + bkg
+        bkg = AttWCSHistmean.make_mp(bkgmap, exptime, qval, wcs, mpnum) + bkg
     return bkg

@@ -38,21 +38,23 @@ def get_shadowmask_by_urd(urdn):
 def get_shadowmask(urdfile):
     return get_shadowmask_by_urd(urdfile["EVENTS"].header["URDN"])
 
-def get_energycal(urdfile):
-    fpath = get_relevat_file('TCOEF', URDTOTEL[urdfile["EVENTS"].header["URDN"]])
+def get_energycal_by_udr(urdn):
+    fpath = get_relevat_file('TCOEF', URDTOTEL[urdn])
     return fits.open(fpath)
 
+def get_energycal(urdfile):
+    return get_energycal_by_udr(urdfile["EVENTS"].header["URDN"])
 
 def get_backprofile_by_urdn(urdn):
-    return fits.getdata("/srg/a1/work/andrey/ART-XC/gc/bkg_grades0_9_urd%d.fits" % urdn)
+    #return fits.getdata("/srg/a1/work/andrey/ART-XC/gc/bkg_grades0_9_urd%d.fits" % urdn)
+    #return fits.getdata("/srg/a1/work/srg/ARTCALDB/caldb_files/BKG_URD%d.fits" % urdn)
+    return fits.getdata("/srg/a1/work/srg/ARTCALDB/caldb_files/urd%dbkg.fits" % urdn)
 
 def get_backprofile(urdfile):
     return get_backprofile_by_urdn(urdfile["EVENTS"].header["URDN"])
 
 
 def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=indexfname):
-    #print(caldb_entry_type, telescope)
-
     indexfile_path = os.path.join(CALDB_path, indexfile)
     try:
         caldbindx   = fits.open(indexfile_path)

@@ -9,7 +9,7 @@ def raw_xy_to_offset(rawx, rawy):
     return (rawx - 23.5)*DL, (rawy - 23.5)*DL
 
 def offset_to_raw_xy(x, y):
-    return np.array(x*DL + 24, np.int), np.array(y*DL + 24, np.int)
+    return np.array(x/DL + 24, np.int), np.array(y/DL + 24, np.int)
 
 def raw_xy_to_vec(rawx, rawy):
     """
