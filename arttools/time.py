@@ -20,6 +20,10 @@ def make_gti_mask(ttime, gti):
         mask[s:e] = True
     return mask
 
+def clean_timetable(tabledata):
+    u, idx = np.unique(tabledata["TIME"], return_index=True)
+    return tabledata[idx]
+
 def get_filtered_table(tabledata, gti):
     """
     tabledata - any numpy record like array, containing unique TIME value in each row

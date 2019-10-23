@@ -42,33 +42,30 @@ def make_events_mask(minrawx = 0, minrawy=0, maxrawx=47, maxrawy=47,
 
 standard_events_mask = make_events_mask()
 
+def wcs_image_from_radec(ra, dec, locwcs):
+    x, y = locwcs.all_world2pix(np.array([ra*180./pi, dec*180./pi]).T, 1.).T
+    img = np.histogram2d(x, y, [np.arange(locwcs.wcs.crpix[0]*2 + 2) + 0.5,
+                                np.arange(locwcs.wcs.crpix[1]*2 + 2) + 0.5])[0].T
+    return img
+
 def make_image(urdfile, attdata, locwcs, gti=None, maskevents=standard_events_mask):
     urddata = np.copy(urdfile["EVENTS"].data)
     URDN = urdfile["EVENTS"].header["URDN"]
     caldbfile = get_energycal(urdfile)
     shadow = get_shadowmask(urdfile)
-    #shadow[[0, -1], :] = False
-    #shadow[:, [0, -1]] = False
 
     attgti = np.array([attdata["TIME"][[0, -1]]])
     gti = attgti if gti is None else gti_intersection(gti, attgti)
     gti = gti_intersection(gti, get_gti(urdfile))
+    if gti.size == 0:
+        raise NoDATA("empty gti")
 
-    idx = np.searchsorted(urddata['TIME'], gti)
-    masktime = np.zeros(urddata.size, np.bool)
-    for s, e in idx:
-        masktime[s:e] = True
-
-    mask = np.copy(masktime)
-    urddata = urddata[masktime]
-
+    urddata = get_filtered_table(urddata, gti)
     maskshadow = get_shadowed_pix_mask_for_urddata(urddata, shadow)
     urddata = urddata[maskshadow]
-    mask[mask] = maskshadow
 
     energy, xc, yc, grade = get_events_energy(urddata, np.copy(urdfile["HK"].data), caldbfile)
     maskevents = standard_events_mask(urddata, grade, energy)
-    mask[mask] = maskevents
 
     if not np.any(maskevents):
         raise NoDATA("empty event list, after e filter")
@@ -77,10 +74,7 @@ def make_image(urdfile, attdata, locwcs, gti=None, maskevents=standard_events_ma
     print("events on image", urddata.size)
 
     r, d = get_photons_sky_coord(urddata, urdfile[1].header["URDN"], attdata, 10)
-    x, y = locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1.).T
-    img = np.histogram2d(x, y, [np.arange(locwcs.wcs.crpix[0]*2 + 2) + 0.5,
-                                np.arange(locwcs.wcs.crpix[1]*2 + 2) + 0.5])[0].T
-    return img
+    return wcs_image_from_radec(r, d, locwcs)
 
 
 def get_image(attname, urdname, locwcs, gti=None, maskevents=standard_events_mask):
