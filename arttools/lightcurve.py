@@ -5,6 +5,21 @@ from scipy.interpolate import interp1d
 import numpy as np
 
 
+
+def make_lightcurve(times, gti):
+    gti = get_gti(urdfile)
+
+    ts = np.concatenate([tarange(dtbkg, g) for g in gti])
+    tnew, maskgaps = make_ingti_times(ts, gti + [dtbkg*1e-6, -dtbkg*1e-6])
+    lcs = np.searchsorted(tevt, tnew)
+    lcs = lcs[1:] - lcs[:-1]
+    ts = ((tnew[1:] + tnew[:-1])/2.)[maskgaps]
+    dt = (tnew[1:] - tnew[:-1])[maskgaps]
+    maskzero = dt > 0
+    bkgrate = lcs[maskgaps][maskzero]/dt[maskzero]
+    return ts[maskzero], bkgrate
+
+
 def get_overall_countrate(urdfile, elow, ehigh, ingoreedgestrips=True):
     urddata = urdfile["EVENTS"].data
     energy, xc, yc, grade = get_events_energy(urddata, urdfile["HK"].data, get_energycal(urdfile))

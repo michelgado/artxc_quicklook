@@ -103,6 +103,51 @@ def gti_difference(gti1, gti2):
     gti3[[0, -1], [0, 1]] = gti2[[0, -1], [0, 1]]
     return gti_intersection(gti2, gti3)
 
+class GTI(np.ndarray):
+
+    def __new__(cls, arr):
+        """
+        read Nx2 array, which is assumed to be a set of 1D intervals
+        make a regularization of these intervals - they should be ordered in ascending order
+        and they should not be intersected
+        """
+        if arr.ndim != 2 or arr.shape[1] != 2:
+            raise ValueError("gti array should be of shape Nx2")
+        arr = arr[np.argsort(arr[:,0])]
+        arr = arr[arr[:,0] < arr[:,1]]
+        idx = np.argsort(np.ravel(arr))
+        gtis = np.ravel(arr)[idx]
+        mask = np.zeros(gtis.size, np.bool)
+        mask[::2] = idx[::2] == np.arange(0, idx.size, 2)
+        mask[1::2] = np.roll(mask[::2], -1)
+        return np.asarray(gtis[mask].reshape((-1, 2))).view(cls)
+
+    def from_hdu(self, gtihdu):
+        arr = np.array([gtihdu.data["START"], gtihdu["STOP"]]).T
+        self.__init__(arr)
+
+    def __and__(self, other):
+        idx = np.searchsorted(self[:,1], other[:,1])
+        idx[-1] = min(self.shape[0] - 1, idx[-1])
+        arr1 = np.array([np.maximum(self[idx,0], other[:,0]), other[:,1]]).T
+        arr1[-1, 1] = min(self[-1, 1], other[-1, 1])
+        idx = np.searchsorted(other[:,1], self[:,1])
+        idx[-1] = min(other.shape[0] - 1, idx[-1])
+        arr2 = np.array([np.maximum(other[idx,0], self[:,0]), self[:,1]]).T
+        arr2[-1, 1] = min(self[-1, 1], other[-1, 1])
+        return GTI(np.concatenate([arr1, arr2]))
+
+    def __neg__(self):
+        arr = np.empty((self.shape[0] + 1, 2), np.double)
+        arr[1:,0] = self[:, 1]
+        arr[:-1, 1] = self[:, 0]
+        arr[[0, -1], [0, 1]] = [-np.inf, np.inf]
+        return GTI(arr)
+
+    def __or__(self, other):
+        return GTI(np.concatenate([self, other]))
+
+
 def merge_consecutive_kvea_gtis(urdfile):
     pass
 
