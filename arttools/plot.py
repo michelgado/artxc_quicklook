@@ -31,7 +31,7 @@ class NoDATA(Exception):
     pass
 
 def make_events_mask(minrawx = 0, minrawy=0, maxrawx=47, maxrawy=47,
-                     mingrade=-1, maxgrade=10, minenergy=4., maxenergy=12.):
+                     mingrade=-1, maxgrade=10, minenergy=4., maxenergy=16.):
     def mask_events(urddata, grade, energy):
         eventsmask = np.all([grade > mingrade, grade < maxgrade,
                             urddata["RAW_X"] > minrawx, urddata["RAW_X"] < maxrawx,
@@ -40,13 +40,7 @@ def make_events_mask(minrawx = 0, minrawy=0, maxrawx=47, maxrawy=47,
         return eventsmask
     return mask_events
 
-standard_events_mask = make_events_mask()
-
-def wcs_image_from_radec(ra, dec, locwcs):
-    x, y = locwcs.all_world2pix(np.array([ra*180./pi, dec*180./pi]).T, 1.).T
-    img = np.histogram2d(x, y, [np.arange(locwcs.wcs.crpix[0]*2 + 2) + 0.5,
-                                np.arange(locwcs.wcs.crpix[1]*2 + 2) + 0.5])[0].T
-    return img
+standard_events_mask = make_events_mask(minenergy=4., maxenergy=16.)
 
 def make_image(urdfile, attdata, locwcs, gti=None, maskevents=standard_events_mask):
     urddata = np.copy(urdfile["EVENTS"].data)
@@ -57,15 +51,22 @@ def make_image(urdfile, attdata, locwcs, gti=None, maskevents=standard_events_ma
     attgti = np.array([attdata["TIME"][[0, -1]]])
     gti = attgti if gti is None else gti_intersection(gti, attgti)
     gti = gti_intersection(gti, get_gti(urdfile))
-    if gti.size == 0:
-        raise NoDATA("empty gti")
 
-    urddata = get_filtered_table(urddata, gti)
+    idx = np.searchsorted(urddata['TIME'], gti)
+    masktime = np.zeros(urddata.size, np.bool)
+    for s, e in idx:
+        masktime[s:e] = True
+
+    mask = np.copy(masktime)
+    urddata = urddata[masktime]
+
     maskshadow = get_shadowed_pix_mask_for_urddata(urddata, shadow)
     urddata = urddata[maskshadow]
+    mask[mask] = maskshadow
 
     energy, xc, yc, grade = get_events_energy(urddata, np.copy(urdfile["HK"].data), caldbfile)
-    maskevents = standard_events_mask(urddata, grade, energy)
+    emask = maskevents(urddata, grade, energy)
+    mask[mask] = emask
 
     if not np.any(maskevents):
         raise NoDATA("empty event list, after e filter")
@@ -74,7 +75,10 @@ def make_image(urdfile, attdata, locwcs, gti=None, maskevents=standard_events_ma
     print("events on image", urddata.size)
 
     r, d = get_photons_sky_coord(urddata, urdfile[1].header["URDN"], attdata, 10)
-    return wcs_image_from_radec(r, d, locwcs)
+    x, y = locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1.).T
+    img = np.histogram2d(x, y, [np.arange(locwcs.wcs.crpix[0]*2 + 2) + 0.5,
+                                np.arange(locwcs.wcs.crpix[1]*2 + 2) + 0.5])[0].T
+    return img
 
 
 def get_image(attname, urdname, locwcs, gti=None, maskevents=standard_events_mask):
@@ -116,7 +120,7 @@ def make_vec_to_sky_hist_fun(vecs, effarea, locwcs, img):
     def hist_vec_to_sky(quat, weight):
         vec_icrs = quat.apply(vecs)
         r, d = vec_to_pol(vec_icrs)
-        x, y = (locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1) + 0.5).T.astype(np.int)
+        x, y = locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1).T
         locweight = weight*effarea
         return np.add.at(img, [i, j], locweight)
     return hist_vec_to_sky
