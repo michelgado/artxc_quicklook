@@ -103,9 +103,11 @@ def gti_difference(gti1, gti2):
     gti3[[0, -1], [0, 1]] = gti2[[0, -1], [0, 1]]
     return gti_intersection(gti2, gti3)
 
-class GTI(np.ndarray):
+class GTI(object):
 
-    def __new__(cls, arr):
+    def _regularize(self, arr=None):
+        if arr is None:
+            arr = self.arr
         if arr.ndim != 2 or arr.shape[1] != 2:
             raise ValueError("gti array should be of shape Nx2")
         arr = arr[np.argsort(arr[:,0])]
@@ -115,7 +117,8 @@ class GTI(np.ndarray):
         mask = np.zeros(gtis.size, np.bool)
         mask[::2] = idx[::2] == np.arange(0, idx.size, 2)
         mask[1::2] = np.roll(mask[::2], -1)
-        return np.asarray(gtis[mask].reshape((-1, 2))).view(cls)
+        arr = np.asarray(gtis[mask].reshape((-1, 2)))
+        return arr
 
 
     def __init__(self, arr):
@@ -153,7 +156,14 @@ class GTI(np.ndarray):
                 gtinew = gti + [dt/2, - dt/2] + [-dt/2., dt/2]
                 first action will iliminate small intervals, second return bounds of left intervals to initial state
         """
+        self.arr = self._regularize(arr)
 
+    @property
+    def shape(self):
+        return self.arr.shape
+
+    def __repr__(self):
+        return self.arr.__repr__()
 
     @classmethod
     def from_hdu(cls, gtihdu):
@@ -171,6 +181,9 @@ class GTI(np.ndarray):
         arr2[-1, 1] = min(self[-1, 1], other[-1, 1])
         return GTI(np.concatenate([arr1, arr2]))
 
+    def exposure(self):
+        return np.sum(self.arr[:,1] - self.arr[:,0])
+
     def __neg__(self):
         arr = np.empty((self.shape[0] + 1, 2), np.double)
         arr[1:,0] = self[:, 1]
@@ -178,20 +191,34 @@ class GTI(np.ndarray):
         arr[[0, -1], [0, 1]] = [-np.inf, np.inf]
         return GTI(arr)
 
+    def __getitem__(self, *args):
+        return self.arr.__getitem__(*args)
+
     def __or__(self, other):
         return GTI(np.concatenate([self, other]))
 
     def __add__(self, val):
-        return GTI(super().__add__(val))
+        return GTI(self.arr + val)
 
     def __sub__(self, val):
-        return GTI(super().__sub__(val))
+        return GTI(self.arr - val)
 
     def __iadd__(self, val):
-        pass
+        self.arr = self._regularize(self.arr + val)
+        return self
+
+    def __isub__(self, val):
+        self.arr = self._regularize(self.arr - val)
+        return self
+
+    def __idiv__(self, val):
+        self.arr = self._regularize(self.arr/val)
+
+    def __imul__(self, val):
+        self.arr = self._regularize(self.arr*val)
 
     def __mul__(self, val):
-        return GTI(super().__mul__(val))
+        return GTI(self.arr + val)
 
     def __div__(self, val):
         return GTI(super().__div__(val))
