@@ -106,11 +106,6 @@ def gti_difference(gti1, gti2):
 class GTI(np.ndarray):
 
     def __new__(cls, arr):
-        """
-        read Nx2 array, which is assumed to be a set of 1D intervals
-        make a regularization of these intervals - they should be ordered in ascending order
-        and they should not be intersected
-        """
         if arr.ndim != 2 or arr.shape[1] != 2:
             raise ValueError("gti array should be of shape Nx2")
         arr = arr[np.argsort(arr[:,0])]
@@ -122,9 +117,48 @@ class GTI(np.ndarray):
         mask[1::2] = np.roll(mask[::2], -1)
         return np.asarray(gtis[mask].reshape((-1, 2))).view(cls)
 
-    def from_hdu(self, gtihdu):
+
+    def __init__(self, arr):
+        """
+        read Nx2 array, which is assumed to be a set of 1D intervals
+        make a regularization of these intervals - they should have ascending ordered
+        and not intersect each other
+
+        examples of usage:
+            cretion of GTI::
+                gti = GTI(np.array(Nx2)) produce
+                gti = GTI.from_hdu(fits["GTI"].data)
+
+            intersections of two gtis:
+                gti3 = gti1 & gti2
+
+            invert gti:
+                gti3 = -gti1
+
+            difference of gti1 relative to gti2
+                gti3 = gti1 & -gti2
+
+            sometime you want shift gtis, i.e. add mjdref etc
+            this can be doe with usuall and and sub operations
+            gti3 = gti1 +[-] floatval
+
+            the product of these operations is also GTI
+            you also can add different values to start and stop times
+            this feature (not a bug) can be used for two userfull tricks:
+                1) merge close intervals
+                gtinew = gti + [-dt/2, +dt/2] + [dt/2, - dt/2]
+                result of first sum is a new GTI instance with gti intervals close then dt is merged,
+                the bound of the new GTI unfortunately is shifted, therefore with second addition we return then back
+                2) iliminate small gti intervals
+                gtinew = gti + [dt/2, - dt/2] + [-dt/2., dt/2]
+                first action will iliminate small intervals, second return bounds of left intervals to initial state
+        """
+
+
+    @classmethod
+    def from_hdu(cls, gtihdu):
         arr = np.array([gtihdu.data["START"], gtihdu["STOP"]]).T
-        self.__init__(arr)
+        return clf(arr)
 
     def __and__(self, other):
         idx = np.searchsorted(self[:,1], other[:,1])
@@ -146,6 +180,21 @@ class GTI(np.ndarray):
 
     def __or__(self, other):
         return GTI(np.concatenate([self, other]))
+
+    def __add__(self, val):
+        return GTI(super().__add__(val))
+
+    def __sub__(self, val):
+        return GTI(super().__sub__(val))
+
+    def __iadd__(self, val):
+        pass
+
+    def __mul__(self, val):
+        return GTI(super().__mul__(val))
+
+    def __div__(self, val):
+        return GTI(super().__div__(val))
 
 
 def merge_consecutive_kvea_gtis(urdfile):
