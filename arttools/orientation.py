@@ -4,6 +4,7 @@ from math import pi, cos, sin
 from ._det_spatial import urd_to_vec
 
 qrot0 = Rotation([sin(15*pi/360.), 0., 0., cos(15*pi/360.)]) #ART detectors cs to the spasecraft cs
+qbokz0 = Rotattion([0., -0.707106781186548,  0., 0.707106781186548])
 OPAX = np.array([1, 0, 0])
 
 ART_det_QUAT = {
@@ -86,8 +87,12 @@ def nonzero_quaternions(quat):
 def get_gyro_quat_as_arr(gyrodata):
     return np.array([gyrodata["QORT_%d" % i] for i in [1,2,3,0]]).T
 
-def get_bokz_quat(quatdata):
-    pass
+def get_bokz_quat(bokzdata):
+    mat = np.array([[bokzdata["MOR%d%d" % (i, j)] for i in range(3)] for j in range(3)])
+    mat = np.copy(mat.swapaxes(2, 1).swapaxes(1, 0))
+    qbokz = Rotation.from_dcm(mat)
+    qfin = qbokz*qbokz0*qrot0
+    return qfin
 
 def quat_to_pol_and_roll(qfin, opaxis=[1, 0, 0], north=[0, 0, 1]):
     """

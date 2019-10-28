@@ -68,10 +68,10 @@ def make_image(urdfile, attdata, locwcs, gti=None, maskevents=standard_events_ma
     emask = maskevents(urddata, grade, energy)
     mask[mask] = emask
 
-    if not np.any(maskevents):
+    if not np.any(emask):
         raise NoDATA("empty event list, after e filter")
 
-    urddata = urddata[maskevents]
+    urddata = urddata[emask]
     print("events on image", urddata.size)
 
     r, d = get_photons_sky_coord(urddata, urdfile[1].header["URDN"], attdata, 10)
