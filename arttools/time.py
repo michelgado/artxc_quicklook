@@ -2,6 +2,7 @@ import numpy as np
 from .mask import edges as maskedges
 from math import pi
 from scipy.interpolate import interp1d
+import astropy.time as atime
 
 ARTDEADTIME = 770e-6 #seconds - ART-XC detector deadtime
 
@@ -156,11 +157,15 @@ class GTI(object):
                 gtinew = gti + [dt/2, - dt/2] + [-dt/2., dt/2]
                 first action will iliminate small intervals, second return bounds of left intervals to initial state
         """
-        self.arr = self._regularize(arr)
+        self.arr = self._regularize(np.asarray(arr).reshape((-1, 2)))
 
     @property
     def shape(self):
         return self.arr.shape
+
+    @property
+    def size(self):
+        return self.arr.size
 
     def __repr__(self):
         return self.arr.__repr__()
@@ -168,19 +173,46 @@ class GTI(object):
     @classmethod
     def from_hdu(cls, gtihdu):
         arr = np.array([gtihdu.data["START"], gtihdu["STOP"]]).T
-        return clf(arr)
+        return cls(arr)
+
+    @classmethod
+    def from_tedges(cls, ts):
+        arr = np.array([ts[:-1], ts[1:]]).T
+        return cls(arr)
+
+    def make_tedges(self, ts):
+        """
+        assuming that ts is a series of intervals edges,
+        produce new series of intervals edges, lying in the GTIs
+        """
+        gtloc = self & self.__class__(ts[[0, -1]])
+        ts = ts[gtloc.mask_outofgti_times(ts)]
+        ts = ts[gtloc.arr.ravel()[gtloc.arr.ravel().searchsorted(ts)] != ts]
+        newts = np.sort(np.concatenate([ts, gtloc.arr.ravel()]))
+        idxgaps = newts.searchsorted(gtloc.arr[:, 1])
+        maskgaps = np.ones(newts.size - 1, np.bool)
+        maskgaps[idxgaps[:-1]] = False
+        return newts, maskgaps
+
+    def mask_outofgti_times(self, ts):
+        """
+        creates bitwise mask for time series, mask is True for times located in any of good time intervals
+        """
+        return self.arr.ravel().searchsorted(ts)%2 == 1
 
     def __and__(self, other):
-        idx = np.searchsorted(self[:,1], other[:,1])
-        idx[-1] = min(self.shape[0] - 1, idx[-1])
-        arr1 = np.array([np.maximum(self[idx,0], other[:,0]), other[:,1]]).T
-        arr1[-1, 1] = min(self[-1, 1], other[-1, 1])
-        idx = np.searchsorted(other[:,1], self[:,1])
-        idx[-1] = min(other.shape[0] - 1, idx[-1])
-        arr2 = np.array([np.maximum(other[idx,0], self[:,0]), self[:,1]]).T
-        arr2[-1, 1] = min(self[-1, 1], other[-1, 1])
-        return GTI(np.concatenate([arr1, arr2]))
+        tt = np.concatenate([self.arr.ravel(), other.arr.ravel()])
+        ms = np.ones(tt.size, np.int8)
+        ms[1::2] = -1
+        idx = np.argsort(tt)
+        tt = tt[idx]
+        gti = np.lib.stride_tricks.as_strided(tt, (tt.size - 1, 2), tt.strides*2)
+        #make empty GTI instance, all condintion on GTI already fullfield, no regularization required
+        gres = self.__class__.__new__(self.__class__)
+        gres.arr = np.copy(gti[np.cumsum(ms[idx][:-1]) == 2])
+        return gres
 
+    @property
     def exposure(self):
         return np.sum(self.arr[:,1] - self.arr[:,0])
 
@@ -223,6 +255,25 @@ class GTI(object):
     def __div__(self, val):
         return GTI(super().__div__(val))
 
+    def merge_close_intervals(self, dt):
+        """
+        merge GTI intervals which separated by less then dt
+        """
+        self.arr = self._regularize(self.arr + [-dt/2., dt/2.]) - [-dt/2., dt/2.]
+
+    def remove_short_intervals(self, dt):
+        """
+        remove intervals shorter then dt
+        """
+        self.arr = self._regularize(self.arr + [dt/2., -dt/2.]) - [dt/2., + dt/2.]
+
+    def searchtimes(self, tseries):
+        return np.searchsorted(tseries, self.arr)
+
+
+tGTI = GTI([-np.inf, np.inf])
+emptyGTI = GTI([])
+
 
 def merge_consecutive_kvea_gtis(urdfile):
     pass
@@ -264,7 +315,9 @@ def deadtime_correction(urdhk):
                       bounds_error=False, fill_value=(1. - ARTDEADTIME*np.median(tcrate)))
     return dtcorr
 
-
+def get_hdu_times(hdu):
+    return atime.Time(hdu.header["MJDREF"], format="mjd") + \
+            atime.TimeDelta(hdu.data["TIME"], format="sec")
 
 def make_hv_gti(hkdata):
     '''

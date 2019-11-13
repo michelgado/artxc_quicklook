@@ -40,7 +40,7 @@ def make_events_mask(minrawx = 0, minrawy=0, maxrawx=47, maxrawy=47,
         return eventsmask
     return mask_events
 
-standard_events_mask = make_events_mask(minenergy=4., maxenergy=16.)
+standard_events_mask = make_events_mask(minenergy=4., maxenergy=12.)
 
 def make_image(urdfile, attdata, locwcs, gti=None, maskevents=standard_events_mask):
     urddata = np.copy(urdfile["EVENTS"].data)

@@ -10,3 +10,5 @@ URDTOTEL = {28: "T1",
             26: "T6",
             30: "T7"}
 
+TELTOURD = {v:k for k, v in URDTOTEL.items()}
+

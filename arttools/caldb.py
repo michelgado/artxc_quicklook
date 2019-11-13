@@ -5,14 +5,20 @@ from astropy.table import Table
 import datetime
 import numpy as np
 from .telescope import URDTOTEL
+from scipy.spatial.transform import Rotation
 
 ARTCALDBPATH = os.environ["ARTCALDB"]
 indexfname = "artxc_index.fits"
+
+TELTOURD = {v:k for k, v in URDTOTEL.items()}
 
 idxdata = fits.getdata(os.path.join(ARTCALDBPATH, indexfname), 1)
 idxtabl = Table(idxdata).to_pandas()
 idxtabl["CAL_DATE"] = pandas.to_datetime(idxtabl["CAL_DATE"])
 idxtabl.set_index("CAL_DATE", inplace=True)
+
+ARTQUATS = {row[0]:Rotation(row[1:]) for row in fits.getdata(os.path.join(ARTCALDBPATH, "artxc_quats_v001.fits"), 1)}
+ARTQUATS = {TELTOURD[row[0]]:Rotation(row[1:]) for row in fits.getdata(os.path.join(ARTCALDBPATH, "artxc_quats_v001.fits"), 1) if row[0] in TELTOURD}
 
 def get_cif(cal_cname, instrume):
     return idxtabl.query("INSTRUME=='%s' and CAL_CNAME=='%s'" %
@@ -42,13 +48,17 @@ def get_energycal_by_udr(urdn):
     fpath = get_relevat_file('TCOEF', URDTOTEL[urdn])
     return fits.open(fpath)
 
+
+def get_gyro_correctoin_quat():
+
+
 def get_energycal(urdfile):
     return get_energycal_by_udr(urdfile["EVENTS"].header["URDN"])
 
 def get_backprofile_by_urdn(urdn):
     #return fits.getdata("/srg/a1/work/andrey/ART-XC/gc/bkg_grades0_9_urd%d.fits" % urdn)
-    #return fits.getdata("/srg/a1/work/srg/ARTCALDB/caldb_files/BKG_URD%d.fits" % urdn)
-    return fits.getdata("/srg/a1/work/srg/ARTCALDB/caldb_files/urd%dbkg.fits" % urdn)
+    return fits.getdata("/srg/a1/work/srg/ARTCALDB/caldb_files/BKG_URD%d.fits" % urdn)
+    #return fits.getdata("/srg/a1/work/srg/ARTCALDB/caldb_files/urd%dbkg.fits" % urdn)
 
 def get_backprofile(urdfile):
     return get_backprofile_by_urdn(urdfile["EVENTS"].header["URDN"])

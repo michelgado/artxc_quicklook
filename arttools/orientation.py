@@ -2,9 +2,11 @@ from scipy.spatial.transform import Rotation, Slerp
 import numpy as np
 from math import pi, cos, sin
 from ._det_spatial import urd_to_vec
+from .time import get_hdu_times
+
 
 qrot0 = Rotation([sin(15*pi/360.), 0., 0., cos(15*pi/360.)]) #ART detectors cs to the spasecraft cs
-qbokz0 = Rotattion([0., -0.707106781186548,  0., 0.707106781186548])
+qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])
 OPAX = np.array([1, 0, 0])
 
 ART_det_QUAT = {
@@ -72,6 +74,7 @@ def get_gyro_quat(gyrodata):
     quat = Rotation(np.array([gyrodata["QORT_%d" % i] for i in [1,2,3,0]]).T)
     q0 = Rotation([0, 0, 0, 1]) #gyro axis initial rotattion in J2000 system
     qfin = q0*quat*qrot0
+    #qfin = Rotation(np.array([gyrodata["Q%d" % i] for i in range(4)]).T)
     return qfin
 
 def get_gyro_quat_for_urdn(urdn, gyrodata):
@@ -79,6 +82,7 @@ def get_gyro_quat_for_urdn(urdn, gyrodata):
 
 def filter_gyrodata(gyrodata):
     return np.copy(gyrodata)[nonzero_quaternions(np.array([gyrodata["QORT_%d" % i] for i in [1,2,3,0]]).T)]
+    #return np.copy(gyrodata)[nonzero_quaternions(np.array([gyrodata["Q%d" % i] for i in [0,1,2,3]]).T)]
 
 def nonzero_quaternions(quat):
     mask = np.sum(quat**2, axis=1) > 0
@@ -93,6 +97,11 @@ def get_bokz_quat(bokzdata):
     qbokz = Rotation.from_dcm(mat)
     qfin = qbokz*qbokz0*qrot0
     return qfin
+
+def get_ep_corrected_bokz_quat(hdu):
+    qbokz = get_bokz_quat(hdu.data)
+    jyear = get_hdu_times(hdu).jyear
+    return earth_precession_quat(jyear).inv()*qbokz
 
 def quat_to_pol_and_roll(qfin, opaxis=[1, 0, 0], north=[0, 0, 1]):
     """
@@ -122,6 +131,21 @@ def extract_raw_gyro(gyrodata, qadd=Rotation([0, 0, 0, 1])):
     return quat_to_pol_and_roll(qfin)
 
 
+def earth_precession_quat(jyear):
+    """
+    taken from astropy.coordinates.earth_orientation
+    contains standrard precession ephemerides, accepted at IAU 2006,
+    didn't check but should work better then IAU76 version, which provide several mas upto 2040
+    """
+    T = (jyear - 2000.0) / 100.0
+    pzeta = (-0.0000003173, -0.000005971, 0.01801828, 0.2988499, 2306.083227, 2.650545)
+    pz = (-0.0000002904, -0.000028596, 0.01826837, 1.0927348, 2306.077181, -2.650545)
+    ptheta = (-0.0000001274, -0.000007089, -0.04182264, -0.4294934, 2004.191903, 0)
+    zeta = np.polyval(pzeta, T) / 3600.0
+    z = np.polyval(pz, T) / 3600.0
+    theta = np.polyval(ptheta, T) / 3600.0
+    return Rotation.from_euler("ZYZ", np.array([z, -theta, zeta]).T, degrees=True)
+
 def get_axis_movement_speed(attdata):
     """
     for provided gyrodata computes angular speed
@@ -135,5 +159,12 @@ def get_axis_movement_speed(attdata):
     dt = (attdata["TIME"][1:] - attdata["TIME"][:-1])
     dalphadt = np.arccos(np.sum(vecs[:-1]*vecs[1:], axis=1))/dt*180./pi*3600.
     return (attdata["TIME"][1:] + attdata["TIME"][:-1])/2., dt, dalphadt
+
+def get_angular_speed(vecs, time):
+    dt = (time[1:] - time[:-1])
+    dalphadt = np.arccos(np.sum(vecs[:-1]*vecs[1:], axis=1))/dt*180./pi*3600.
+    return (time[1:] + time[:-1])/2., dt, dalphadt
+
+
 
 

@@ -1,4 +1,4 @@
-from .time import make_ingti_times, deadtime_correction
+from .time import make_ingti_times, deadtime_correction, GTI, tGTI
 from .orientation import get_gyro_quat, quat_to_pol_and_roll, pol_to_vec, \
     ART_det_QUAT, ART_det_mean_QUAT, vec_to_pol
 from ._det_spatial import DL, offset_to_vec
@@ -43,7 +43,7 @@ def hist_orientation(qval, dt):
 
 def make_small_steps_quats(times, quats, gti, timecorrection=lambda x: 1.):
     quatint = Slerp(times, quats)
-    tnew, maskgaps = make_ingti_times(times, gti)
+    tnew, maskgaps = gti.make_tedges(times)
     if tnew.size == 0:
         return Rotation(np.empty((0, 4), np.double)), np.array([])
     ts = ((tnew[1:] + tnew[:-1])/2.)[maskgaps]
@@ -91,14 +91,14 @@ def hist_orientation_for_attdata(attdata, gti, corr_quat=ART_det_mean_QUAT, time
     qval, dtn = make_small_steps_quats(attdata["TIME"], quats, gti, timecorrection)
     return hist_orientation(qval, dtn)
 
-def hist_orientation_for_attdata_urdset(attdata, gti):
+def hist_orientation_for_attdata_urdset(attdata, urdgtis):
     """
     gti is expected to be a dictionary with key is urdn and value - corresponding gti
     """
     qval = get_gyro_quat(attdata)
     qtot, dtn = [], []
 
-    for urdn in gti:
+    for urdn in urdgtis:
         q, dt = make_small_steps_quats(attdata["TIME"], qval*ART_det_QUAT[urdn], gti[urdn])
         qtot.append(q)
         dtn.append(dt)
@@ -175,30 +175,19 @@ def make_wcs_for_quats(quats, pixsize=20./3600.):
     edges = edges/np.sqrt(np.sum(edges**2., axis=1))[:, np.newaxis]
     return wcs_for_vecs(edges)
 
-def make_wcs_for_attdata(attdata, gti=None):
-    if not gti is None:
-        idx = np.searchsorted(attdata["TIME"], gti)
-        mask = np.zeros(attdata.size, np.bool)
-        for s, e in idx:
-            mask[s:e] = True
-        attdata = attdata[mask]
+def make_wcs_for_attdata(attdata, gti=tGTI):
+    attdata = attdata[gti.mask_outofgti_times(attdata["TIME"])]
     qvtot = get_gyro_quat(attdata)*ART_det_mean_QUAT
     return make_wcs_for_quats(qvtot)
 
-def make_wcs_for_attsets(attflist, gti=None):
+def make_wcs_for_attsets(attflist, gti=tGTI):
     qvtot = []
     for attname in attflist:
         attdata = np.copy(fits.getdata(attname, 1))
         attdata = clear_att(attdata)
-        if not gti is None:
-            lgti = gti_intersection(gti, np.array([attdata["TIME"][[0, -1]],]))
-            idx = np.searchsorted(attdata["TIME"], lgti)
-            mask = np.zeros(attdata.size, np.bool)
-            for s, e in idx:
-                mask[s:e] = True
-            attdata = attdata[mask]
+        attdata = attdata[gti.mask_outofgti_times(attdata["TIME"])]
         quats = get_gyro_quat(attdata)*ART_det_mean_QUAT
-        qvtot.append(quats) #qvals)
+        qvtot.append(quats)
 
     qvtot = Rotation(np.concatenate([q.as_quat() for q in qvtot]))
     return make_wcs_for_quats(qvtot)
@@ -264,7 +253,7 @@ class AttHist(object):
         raise NotImplementedError("need to be implemented")
         qin = Queue(100)
         qout = Queue(2)
-        pool = [Process(target=cls(vmap, qin, qout)) for i in range(mpnum)]
+        pool = [Process(target=cls(vmap, qin, qout, **kwargs)) for i in range(mpnum)]
         resimg = cls.trace_and_collect(exptime, qvals, qin, qout, pool, cls.accumulate, *args)
         return resimg
 
@@ -284,17 +273,17 @@ class AttWCSHist(AttHist):
     def put_vmap_on_sky(self, quat, exp):
         vec_fk5 = quat.apply(self.vecs)
         r, d = vec_to_pol(vec_fk5)
-        x, y = (self.wcs.all_world2pix(np.degrees(np.array([r, d]).T), 1) - 0.5).T.astype(np.int)
+        x, y = (self.wcs.all_world2pix(np.rad2deg(np.array([r, d]).T), 1) - 0.5).T.astype(np.int)
         u, idx = np.unique(np.array([x, y]), return_index=True, axis=1)
         mask = np.all([u[0] > -1, u[1] > -1, u[0] < self.img.shape[1], u[1] < self.img.shape[0]], axis=0)
         u, idx = u[:, mask], idx[mask]
         np.add.at(self.img, (u[1], u[0]), self.vmap[idx]*exp)
 
     @classmethod
-    def make_mp(cls, vmap, exptime, qvals, wcs, mpnum=MPNUM):
+    def make_mp(cls, vmap, exptime, qvals, wcs, mpnum=MPNUM, **kwargs):
         qin = Queue(100)
         qout = Queue(2)
-        pool = [Process(target=cls(vmap, qin, qout, wcs=wcs)) for i in range(mpnum)]
+        pool = [Process(target=cls(vmap, qin, qout, wcs=wcs, **kwargs)) for i in range(mpnum)]
         resimg = cls.trace_and_collect(exptime, qvals, qin, qout, pool, cls.accumulate)
         return resimg
 
@@ -303,9 +292,17 @@ class AttWCSHistmean(AttWCSHist):
     def put_vmap_on_sky(self, quat, exp):
         vec_fk5 = quat.apply(self.vecs)
         r, d = vec_to_pol(vec_fk5)
-        x, y = (self.wcs.all_world2pix(np.degrees(np.array([r, d]).T), 1) - 0.5).T.astype(np.int)
+        x, y = (self.wcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1) - 0.5).T.astype(np.int)
         u, idx, cts = np.unique(np.array([x, y]), return_inverse=True, return_counts=True, axis=1)
         np.add.at(self.img, (y, x), self.vmap*exp/cts[idx])
+
+class AttWCSHistinteg(AttWCSHist):
+
+    def put_vmap_on_sky(self, quat, exp):
+        vec_fk5 = quat.apply(self.vecs)
+        r, d = vec_to_pol(vec_fk5)
+        x, y = (self.wcs.all_world2pix(np.rad2deg(np.array([r, d]).T), 1) - 0.5).T.astype(np.int)
+        np.add.at(self.img, (y, x), self.vmap*exp)
 
 
 

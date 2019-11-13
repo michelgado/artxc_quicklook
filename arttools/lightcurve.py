@@ -22,6 +22,7 @@ def make_lightcurve(times, gti):
 
 def get_overall_countrate(urdfile, elow, ehigh, ingoreedgestrips=True):
     urddata = urdfile["EVENTS"].data
+    print(urddata.size)
     energy, xc, yc, grade = get_events_energy(urddata, urdfile["HK"].data, get_energycal(urdfile))
     if ingoreedgestrips:
         mask = np.all([energy > elow, energy < ehigh, urddata["RAW_X"] > 0, urddata["RAW_Y"] > 0, urddata["RAW_X"] < 47, urddata["RAW_X"] < 47, grade > -1, grade < 10], axis=0)
