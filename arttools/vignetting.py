@@ -4,7 +4,7 @@ from scipy.integrate import cumtrapz
 from ._det_spatial import get_shadowed_pix_mask, offset_to_raw_xy, DL, \
     offset_to_vec, vec_to_offset_pairs, vec_to_offset
 from .telescope import URDNS
-from .orientation import ART_det_QUAT, ART_det_mean_QUAT
+from .caldb import ARTQUATS
 import numpy as np
 from math import log10
 
@@ -75,11 +75,9 @@ def make_overall_vignetting(energy=6., phot_index=None, useshadowmask=True,
     vecs = offset_to_vec(np.array([xmin, xmax, xmax, xmin]),
                          np.array([ymin, ymin, ymax, ymax]))
 
-    iquat = ART_det_mean_QUAT.inv()
     vmaps = {}
     for urdn in URDNS:
-        #quat = iquat*ART_det_QUAT[urdn]
-        quat = ART_det_QUAT[urdn]*iquat #*ART_det_QUAT[urdn]
+        quat = ARTQUATS[urdn]
         xlim, ylim = vec_to_offset(quat.apply(vecs))
         xmin, xmax = min(xmin, xlim.min()), max(xmax, xlim.max())
         ymin, ymax = min(ymin, ylim.min()), max(ymax, ylim.max())
@@ -97,7 +95,7 @@ def make_overall_vignetting(energy=6., phot_index=None, useshadowmask=True,
 
     for urdn in URDNS:
         vmap = make_vignetting_for_urdn(urdn, energy, phot_index, useshadowmask)
-        quat = ART_det_QUAT[urdn]*iquat #*ART_det_QUAT[urdn]
+        quat = ARTQUATS[urdn]
         newvmap += vmap(vec_to_offset_pairs(quat.apply(vecs, inverse=True))).reshape(shape)*urdweights.get(urdn, 1.)
 
     vmap = RegularGridInterpolator((x[:, 0], y[0]), newvmap, bounds_error=False, fill_value=0)

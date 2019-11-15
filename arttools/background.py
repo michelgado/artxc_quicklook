@@ -1,4 +1,4 @@
-from .orientation import ART_det_QUAT
+from .caldb import ARTQUATS
 from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttWCSHistmean, AttWCSHistinteg
 from .vignetting import make_vignetting_for_urdn, make_overall_vignetting
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
@@ -30,10 +30,9 @@ def make_overall_background_map(subgrid=10, useshadowmask=True):
 
     vecs = offset_to_vec(np.array([xmin, xmax, xmax, xmin]),
                          np.array([ymin, ymin, ymax, ymax]))
-    iquat = ART_det_mean_QUAT.inv()
     vmaps = {}
     for urdn in URDNS:
-        quat = ART_det_QUAT[urdn]*iquat
+        quat = ARTQUATS[urdn]
         xlim, ylim = vec_to_offset(quat.apply(vecs))
         xmin, xmax = min(xmin, xlim.min()), max(xmax, xlim.max())
         ymin, ymax = min(ymin, ylim.min()), max(ymax, ylim.max())
@@ -51,7 +50,7 @@ def make_overall_background_map(subgrid=10, useshadowmask=True):
 
     for urdn in URDNS:
         vmap = make_background_det_map_for_urdn(urdn, useshadowmask)
-        quat = ART_det_QUAT[urdn]*iquat
+        quat = ARTQUATS[urdn]
         newvmap += vmap(vec_to_offset_pairs(quat.apply(vecs, inverse=True))).reshape(shape)
 
     bkgmap = RegularGridInterpolator((x[:, 0], y[0]), newvmap, bounds_error=False, fill_value=0)
@@ -73,7 +72,7 @@ def make_bkgmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, time_corr={}):
     else:
         overall_gti = reduce(lambda a, b: a & b, urdgtis.values())
         bkgmap = make_overall_background_map()
-        exptime, qval = hist_orientation_for_attdata(attdata, overall_gti, ART_det_mean_QUAT, \
+        exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti, \
                                                      time_corr.get(urd, lambda x: 1.))
         bkg = AttWCSHistinteg.make_mp(bkgmap, exptime, qval, wcs, mpnum, subscale=10)
 
@@ -83,7 +82,7 @@ def make_bkgmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, time_corr={}):
             print("urd %d has no individual gti, continue" % urd)
             continue
         print("urd %d progress:" % urd)
-        exptime, qval = hist_orientation_for_attdata(attdata, gti, ART_det_QUAT[urd], \
+        exptime, qval, locgti = hist_orientation_for_attdata(attdata*ARTQUATS[urd], gti, \
                                                      time_corr.get(urd, lambda x: 1.))
         bkgmap = make_background_det_map_for_urdn(urd)
         bkg = AttWCSHistinteg.make_mp(bkgmap, exptime, qval, wcs, mpnum, subscale=10) + bkg

@@ -1,4 +1,4 @@
-from .orientation import ART_det_QUAT
+from .caldb import ARTQUATS
 from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist
 from .vignetting import make_vignetting_for_urdn, make_overall_vignetting
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
@@ -24,7 +24,7 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}):
         emap = 0
     else:
         overall_gti = reduce(lambda a, b: a & b, urdgtis.values())
-        exptime, qval = hist_orientation_for_attdata(attdata, overall_gti)
+        exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti)
         vmap = make_overall_vignetting()
         print("produce overall urds expmap")
         emap = AttWCSHist.make_mp(vmap, exptime, qval, wcs, mpnum)
@@ -36,8 +36,8 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}):
             print("urd %d has no individual gti, continue" % urd)
             continue
         print("urd %d progress:" % urd)
-        exptime, qval = hist_orientation_for_attdata(attdata, gti, ART_det_QUAT[urd],
-                                                     dtcorr.get(urd, lambda x: 1))
+        exptime, qval, locgti = hist_orientation_for_attdata(attdata*ARTQUATS[urd], gti, \
+                                                             dtcorr.get(urd, lambda x: 1))
         vmap = make_vignetting_for_urdn(urd)
         emap = AttWCSHist.make_mp(vmap, exptime, qval, wcs,  mpnum) + emap
         print(" done!")
@@ -50,7 +50,7 @@ def make_expmap_for_healpix(attdata, urdgtis, mpnum=MPNUM, dtcorr={}):
         emap = 0.
     else:
         overall_gti = reduce(lambda a, b: a & b, urdgtis.values())
-        exptime, qval = hist_orientation_for_attdata(attdata, overall_gti)
+        exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti)
         vmap = make_overall_vignetting()
         print("produce overall urds expmap")
         emap = AttHealpixhist.make_mp(2048, vmap, exptime, qval, mpnum)
@@ -62,7 +62,7 @@ def make_expmap_for_healpix(attdata, urdgtis, mpnum=MPNUM, dtcorr={}):
             print("urd %d has no individual gti, continue" % urd)
             continue
         print("urd %d progress:" % urd)
-        exptime, qval = hist_orientation_for_attdata(attdata, gti, ART_det_QUAT[urd])
+        exptime, qval, locgti = hist_orientation_for_attdata(attdata*ARTQUATS[urd], gti)
         vmap = make_vignetting_for_urdn(urd)
         emap = AttHealpixHist.make_mp(2048, vmap, exptime, qval, mpnum) + emap
         print(" done!")

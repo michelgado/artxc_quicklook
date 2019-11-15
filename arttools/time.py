@@ -9,17 +9,190 @@ ARTDEADTIME = 770e-6 #seconds - ART-XC detector deadtime
 class ART_TIME_ERROR(ValueError):
     pass
 
+class GTI(object):
+
+    def _regularize(self, arr=None):
+        if arr is None:
+            arr = self.arr
+        if arr.ndim != 2 or arr.shape[1] != 2:
+            raise ValueError("gti array should be of shape Nx2")
+        arr = arr[np.argsort(arr[:,0])]
+        arr = arr[arr[:,0] < arr[:,1]]
+        idx = np.argsort(np.ravel(arr))
+        gtis = np.ravel(arr)[idx]
+        mask = np.zeros(gtis.size, np.bool)
+        mask[::2] = idx[::2] == np.arange(0, idx.size, 2)
+        mask[1::2] = np.roll(mask[::2], -1)
+        arr = np.asarray(gtis[mask].reshape((-1, 2)))
+        return arr
+
+
+    def __init__(self, arr):
+        """
+        read Nx2 array, which is assumed to be a set of 1D intervals
+        make a regularization of these intervals - they should have ascending ordered
+        and not intersect each other
+
+        examples of usage:
+            cretion of GTI::
+                gti = GTI(np.array(Nx2)) produce
+                gti = GTI.from_hdu(fits["GTI"].data)
+
+            intersections of two gtis:
+                gti3 = gti1 & gti2
+
+            invert gti:
+                gti3 = -gti1
+
+            difference of gti1 relative to gti2
+                gti3 = gti1 & -gti2
+
+            sometime you want shift gtis, i.e. add mjdref etc
+            this can be doe with usuall and and sub operations
+            gti3 = gti1 +[-] floatval
+
+            the product of these operations is also GTI
+            you also can add different values to start and stop times
+            this feature (not a bug) can be used for two userfull tricks:
+                1) merge close intervals
+                gtinew = gti + [-dt/2, +dt/2] + [dt/2, - dt/2]
+                result of first sum is a new GTI instance with gti intervals close then dt is merged,
+                the bound of the new GTI unfortunately is shifted, therefore with second addition we return then back
+                2) iliminate small gti intervals
+                gtinew = gti + [dt/2, - dt/2] + [-dt/2., dt/2]
+                first action will iliminate small intervals, second return bounds of left intervals to initial state
+        """
+        if issubclass(self.__class__, type(arr)):
+            self.arr = np.copy(arr.arr)
+        else:
+            self.arr = self._regularize(np.asarray(arr).reshape((-1, 2)))
+
+    @property
+    def shape(self):
+        return self.arr.shape
+
+    @property
+    def size(self):
+        return self.arr.size
+
+    def __repr__(self):
+        return self.arr.__repr__()
+
+    @classmethod
+    def from_hdu(cls, gtihdu):
+        arr = np.array([gtihdu.data["START"], gtihdu["STOP"]]).T
+        return cls(arr)
+
+    @classmethod
+    def from_tedges(cls, ts):
+        arr = np.array([ts[:-1], ts[1:]]).T
+        return cls(arr)
+
+    def make_tedges(self, ts):
+        """
+        assuming that ts is a series of intervals edges,
+        produce new series of intervals edges, lying in the GTIs
+        """
+        gtloc = self & self.__class__(ts[[0, -1]])
+        ts = ts[gtloc.mask_outofgti_times(ts)]
+        ts = ts[gtloc.arr.ravel()[gtloc.arr.ravel().searchsorted(ts)] != ts]
+        newts = np.sort(np.concatenate([ts, gtloc.arr.ravel()]))
+        idxgaps = newts.searchsorted(gtloc.arr[:, 1])
+        maskgaps = np.ones(newts.size - 1, np.bool)
+        maskgaps[idxgaps[:-1]] = False
+        return newts, maskgaps
+
+    def mask_outofgti_times(self, ts):
+        """
+        creates bitwise mask for time series, mask is True for times located in any of good time intervals
+        """
+        return self.arr.ravel().searchsorted(ts)%2 == 1
+
+    def __and__(self, other):
+        tt = np.concatenate([self.arr.ravel(), other.arr.ravel()])
+        ms = np.ones(tt.size, np.int8)
+        ms[1::2] = -1
+        idx = np.argsort(tt)
+        tt = tt[idx]
+        gti = np.lib.stride_tricks.as_strided(tt, (tt.size - 1, 2), tt.strides*2)
+        #make empty GTI instance, all condintion on GTI already fullfield, no regularization required
+        gres = self.__class__.__new__(self.__class__)
+        gres.arr = np.copy(gti[np.cumsum(ms[idx][:-1]) == 2])
+        return gres
+
+    @property
+    def exposure(self):
+        return np.sum(self.arr[:,1] - self.arr[:,0])
+
+    def __neg__(self):
+        arr = np.empty((self.shape[0] + 1, 2), np.double)
+        arr[1:,0] = self[:, 1]
+        arr[:-1, 1] = self[:, 0]
+        arr[[0, -1], [0, 1]] = [-np.inf, np.inf]
+        return GTI(arr)
+
+    def __getitem__(self, *args):
+        return self.arr.__getitem__(*args)
+
+    def __or__(self, other):
+        return GTI(np.concatenate([self.arr, other.arr]))
+
+    def __add__(self, val):
+        return GTI(self.arr + val)
+
+    def __sub__(self, val):
+        return GTI(self.arr - val)
+
+    def __iadd__(self, val):
+        self.arr = self._regularize(self.arr + val)
+        return self
+
+    def __isub__(self, val):
+        self.arr = self._regularize(self.arr - val)
+        return self
+
+    def __idiv__(self, val):
+        self.arr = self._regularize(self.arr/val)
+
+    def __imul__(self, val):
+        self.arr = self._regularize(self.arr*val)
+
+    def __mul__(self, val):
+        return GTI(self.arr + val)
+
+    def __div__(self, val):
+        return GTI(super().__div__(val))
+
+    def merge_close_intervals(self, dt):
+        """
+        merge GTI intervals which separated by less then dt
+        """
+        self.arr = self._regularize(self.arr + [-dt/2., dt/2.]) - [-dt/2., dt/2.]
+
+    def remove_short_intervals(self, dt):
+        """
+        remove intervals shorter then dt
+        """
+        self.arr = self._regularize(self.arr + [dt/2., -dt/2.]) - [dt/2., + dt/2.]
+
+    def searchtimes(self, tseries):
+        return np.searchsorted(tseries, self.arr)
+
+
+tGTI = GTI([-np.inf, np.inf])
+emptyGTI = GTI([])
+
 
 def get_gti(ffile):
-    gti = np.array([ffile["GTI"].data["START"], ffile["GTI"].data["STOP"]]).T
-    gti = gti_union(gti + [-0.5, +0.5]) + [+0.5, -0.5]
-    return gti_intersection(gti, make_hv_gti(ffile["HK"].data))
+    gti = GTI(np.array([ffile["GTI"].data["START"], ffile["GTI"].data["STOP"]]).T)
+    gti.merge_close_intervals(0.5)
+    return gti & make_hv_gti(ffile["HK"].data)
 
 def get_filtered_table(tabledata, gti):
     """
     tabledata - any numpy record like array, containing unique TIME value in each row
     """
-    return np.concatenate([tabledata[s:e] for s, e in np.searchsorted(tabledata["TIME"], gti)])
+    return tabledata[gti.mask_outofgti_times(tabledata["TIME"])]
 
 def check_gti_shape(gti):
     if gti.ndim != 2 or gti.shape[1] != 2:
@@ -104,183 +277,6 @@ def gti_difference(gti1, gti2):
     gti3[[0, -1], [0, 1]] = gti2[[0, -1], [0, 1]]
     return gti_intersection(gti2, gti3)
 
-class GTI(object):
-
-    def _regularize(self, arr=None):
-        if arr is None:
-            arr = self.arr
-        if arr.ndim != 2 or arr.shape[1] != 2:
-            raise ValueError("gti array should be of shape Nx2")
-        arr = arr[np.argsort(arr[:,0])]
-        arr = arr[arr[:,0] < arr[:,1]]
-        idx = np.argsort(np.ravel(arr))
-        gtis = np.ravel(arr)[idx]
-        mask = np.zeros(gtis.size, np.bool)
-        mask[::2] = idx[::2] == np.arange(0, idx.size, 2)
-        mask[1::2] = np.roll(mask[::2], -1)
-        arr = np.asarray(gtis[mask].reshape((-1, 2)))
-        return arr
-
-
-    def __init__(self, arr):
-        """
-        read Nx2 array, which is assumed to be a set of 1D intervals
-        make a regularization of these intervals - they should have ascending ordered
-        and not intersect each other
-
-        examples of usage:
-            cretion of GTI::
-                gti = GTI(np.array(Nx2)) produce
-                gti = GTI.from_hdu(fits["GTI"].data)
-
-            intersections of two gtis:
-                gti3 = gti1 & gti2
-
-            invert gti:
-                gti3 = -gti1
-
-            difference of gti1 relative to gti2
-                gti3 = gti1 & -gti2
-
-            sometime you want shift gtis, i.e. add mjdref etc
-            this can be doe with usuall and and sub operations
-            gti3 = gti1 +[-] floatval
-
-            the product of these operations is also GTI
-            you also can add different values to start and stop times
-            this feature (not a bug) can be used for two userfull tricks:
-                1) merge close intervals
-                gtinew = gti + [-dt/2, +dt/2] + [dt/2, - dt/2]
-                result of first sum is a new GTI instance with gti intervals close then dt is merged,
-                the bound of the new GTI unfortunately is shifted, therefore with second addition we return then back
-                2) iliminate small gti intervals
-                gtinew = gti + [dt/2, - dt/2] + [-dt/2., dt/2]
-                first action will iliminate small intervals, second return bounds of left intervals to initial state
-        """
-        self.arr = self._regularize(np.asarray(arr).reshape((-1, 2)))
-
-    @property
-    def shape(self):
-        return self.arr.shape
-
-    @property
-    def size(self):
-        return self.arr.size
-
-    def __repr__(self):
-        return self.arr.__repr__()
-
-    @classmethod
-    def from_hdu(cls, gtihdu):
-        arr = np.array([gtihdu.data["START"], gtihdu["STOP"]]).T
-        return cls(arr)
-
-    @classmethod
-    def from_tedges(cls, ts):
-        arr = np.array([ts[:-1], ts[1:]]).T
-        return cls(arr)
-
-    def make_tedges(self, ts):
-        """
-        assuming that ts is a series of intervals edges,
-        produce new series of intervals edges, lying in the GTIs
-        """
-        gtloc = self & self.__class__(ts[[0, -1]])
-        ts = ts[gtloc.mask_outofgti_times(ts)]
-        ts = ts[gtloc.arr.ravel()[gtloc.arr.ravel().searchsorted(ts)] != ts]
-        newts = np.sort(np.concatenate([ts, gtloc.arr.ravel()]))
-        idxgaps = newts.searchsorted(gtloc.arr[:, 1])
-        maskgaps = np.ones(newts.size - 1, np.bool)
-        maskgaps[idxgaps[:-1]] = False
-        return newts, maskgaps
-
-    def mask_outofgti_times(self, ts):
-        """
-        creates bitwise mask for time series, mask is True for times located in any of good time intervals
-        """
-        return self.arr.ravel().searchsorted(ts)%2 == 1
-
-    def __and__(self, other):
-        tt = np.concatenate([self.arr.ravel(), other.arr.ravel()])
-        ms = np.ones(tt.size, np.int8)
-        ms[1::2] = -1
-        idx = np.argsort(tt)
-        tt = tt[idx]
-        gti = np.lib.stride_tricks.as_strided(tt, (tt.size - 1, 2), tt.strides*2)
-        #make empty GTI instance, all condintion on GTI already fullfield, no regularization required
-        gres = self.__class__.__new__(self.__class__)
-        gres.arr = np.copy(gti[np.cumsum(ms[idx][:-1]) == 2])
-        return gres
-
-    @property
-    def exposure(self):
-        return np.sum(self.arr[:,1] - self.arr[:,0])
-
-    def __neg__(self):
-        arr = np.empty((self.shape[0] + 1, 2), np.double)
-        arr[1:,0] = self[:, 1]
-        arr[:-1, 1] = self[:, 0]
-        arr[[0, -1], [0, 1]] = [-np.inf, np.inf]
-        return GTI(arr)
-
-    def __getitem__(self, *args):
-        return self.arr.__getitem__(*args)
-
-    def __or__(self, other):
-        return GTI(np.concatenate([self, other]))
-
-    def __add__(self, val):
-        return GTI(self.arr + val)
-
-    def __sub__(self, val):
-        return GTI(self.arr - val)
-
-    def __iadd__(self, val):
-        self.arr = self._regularize(self.arr + val)
-        return self
-
-    def __isub__(self, val):
-        self.arr = self._regularize(self.arr - val)
-        return self
-
-    def __idiv__(self, val):
-        self.arr = self._regularize(self.arr/val)
-
-    def __imul__(self, val):
-        self.arr = self._regularize(self.arr*val)
-
-    def __mul__(self, val):
-        return GTI(self.arr + val)
-
-    def __div__(self, val):
-        return GTI(super().__div__(val))
-
-    def merge_close_intervals(self, dt):
-        """
-        merge GTI intervals which separated by less then dt
-        """
-        self.arr = self._regularize(self.arr + [-dt/2., dt/2.]) - [-dt/2., dt/2.]
-
-    def remove_short_intervals(self, dt):
-        """
-        remove intervals shorter then dt
-        """
-        self.arr = self._regularize(self.arr + [dt/2., -dt/2.]) - [dt/2., + dt/2.]
-
-    def searchtimes(self, tseries):
-        return np.searchsorted(tseries, self.arr)
-
-
-tGTI = GTI([-np.inf, np.inf])
-emptyGTI = GTI([])
-
-
-def merge_consecutive_kvea_gtis(urdfile):
-    pass
-
-def fill_att_gaps(attdata):
-    pass
-
 def mkgtimask(time, gti):
     mask = np.zeros(time.size, np.bool)
     idx = np.searchsorted(time, gti)
@@ -323,4 +319,4 @@ def make_hv_gti(hkdata):
     '''
     input: HK hdu extention of an L0 events fits file
     '''
-    return hkdata["TIME"][maskedges(hkdata["HV"] < -95.) + [0, -1]]
+    return GTI(hkdata["TIME"][maskedges(hkdata["HV"] < -95.) + [0, -1]])

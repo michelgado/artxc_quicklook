@@ -1,6 +1,6 @@
 from .time import make_ingti_times, deadtime_correction, GTI, tGTI
-from .orientation import get_gyro_quat, quat_to_pol_and_roll, pol_to_vec, \
-    ART_det_QUAT, ART_det_mean_QUAT, vec_to_pol
+from .orientation import quat_to_pol_and_roll, pol_to_vec, vec_to_pol
+from .caldb import ARTQUATS
 from ._det_spatial import DL, offset_to_vec
 from .telescope import OPAX
 import healpy
@@ -17,6 +17,8 @@ import sys
 from multiprocessing import Pool, cpu_count, Queue, Process
 
 MPNUM = cpu_count()
+
+r0 = Rotation([0, 0, 0, 1])
 
 
 DELTASKY = 15./3600./180.*pi #previously I set it to be 5''
@@ -41,16 +43,16 @@ def hist_orientation(qval, dt):
     np.add.at(exptime, invidx, dt)
     return exptime, qval[uidx]
 
-def make_small_steps_quats(times, quats, gti, timecorrection=lambda x: 1.):
-    quatint = Slerp(times, quats)
-    tnew, maskgaps = gti.make_tedges(times)
+def make_small_steps_quats(attdata, gti=tGTI, timecorrection=lambda x: 1.):
+    locgti = gti & attdata.gti
+    tnew, maskgaps = locgti.make_tedges(attdata.times)
     if tnew.size == 0:
         return Rotation(np.empty((0, 4), np.double)), np.array([])
     ts = ((tnew[1:] + tnew[:-1])/2.)[maskgaps]
     dt = (tnew[1:] - tnew[:-1])[maskgaps]
 
-    qval = quatint(ts)
-    ra, dec, roll = quat_to_pol_and_roll(quatint(tnew))
+    qval = attdata(ts)
+    ra, dec, roll = quat_to_pol_and_roll(attdata(tnew))
 
     """
     to do:
@@ -84,27 +86,12 @@ def make_small_steps_quats(times, quats, gti, timecorrection=lambda x: 1.):
         qval = quatint(ts)
     else:
         dtn = dt
-    return qval, dtn*timecorrection(ts)
+    return qval, dtn*timecorrection(ts), locgti
 
-def hist_orientation_for_attdata(attdata, gti, corr_quat=ART_det_mean_QUAT, timecorrection=lambda x:1.):
-    quats = get_gyro_quat(attdata)*corr_quat
-    qval, dtn = make_small_steps_quats(attdata["TIME"], quats, gti, timecorrection)
-    return hist_orientation(qval, dtn)
-
-def hist_orientation_for_attdata_urdset(attdata, urdgtis):
-    """
-    gti is expected to be a dictionary with key is urdn and value - corresponding gti
-    """
-    qval = get_gyro_quat(attdata)
-    qtot, dtn = [], []
-
-    for urdn in urdgtis:
-        q, dt = make_small_steps_quats(attdata["TIME"], qval*ART_det_QUAT[urdn], gti[urdn])
-        qtot.append(q)
-        dtn.append(dt)
-    qtot = Rotation(np.concatenate([q.as_quat() for q in qtot]))
-    dtn = np.concatenate(dtn)
-    return hist_orientation(qtot, dtn)
+def hist_orientation_for_attdata(attdata, gti=tGTI, timecorrection=lambda x:1.):
+    qval, dtn, locgti = make_small_steps_quats(attdata, gti, timecorrection)
+    exptime, qhist = hist_orientation(qval, dtn)
+    return exptime, qhist, locgti
 
 def wcs_for_vecs(vecs, pixsize=20./3600.):
     """
@@ -176,20 +163,8 @@ def make_wcs_for_quats(quats, pixsize=20./3600.):
     return wcs_for_vecs(edges)
 
 def make_wcs_for_attdata(attdata, gti=tGTI):
-    attdata = attdata[gti.mask_outofgti_times(attdata["TIME"])]
-    qvtot = get_gyro_quat(attdata)*ART_det_mean_QUAT
-    return make_wcs_for_quats(qvtot)
-
-def make_wcs_for_attsets(attflist, gti=tGTI):
-    qvtot = []
-    for attname in attflist:
-        attdata = np.copy(fits.getdata(attname, 1))
-        attdata = clear_att(attdata)
-        attdata = attdata[gti.mask_outofgti_times(attdata["TIME"])]
-        quats = get_gyro_quat(attdata)*ART_det_mean_QUAT
-        qvtot.append(quats)
-
-    qvtot = Rotation(np.concatenate([q.as_quat() for q in qvtot]))
+    locgti = gti & attdata.gti
+    qvtot = attdata(attdata.times[locgti.mask_outofgti_times(attdata.times)])
     return make_wcs_for_quats(qvtot)
 
 
@@ -307,6 +282,7 @@ class AttWCSHistinteg(AttWCSHist):
 
 
 class AttHealpixHist(AttHist):
+
     def __init__(self, *args, nside, **kwargs):
         super().__init__(*args, **kwargs)
         self.nside = nside

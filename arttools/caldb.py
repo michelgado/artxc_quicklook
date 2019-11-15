@@ -49,9 +49,6 @@ def get_energycal_by_udr(urdn):
     return fits.open(fpath)
 
 
-def get_gyro_correctoin_quat():
-
-
 def get_energycal(urdfile):
     return get_energycal_by_udr(urdfile["EVENTS"].header["URDN"])
 
