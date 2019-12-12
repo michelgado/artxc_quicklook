@@ -95,11 +95,11 @@ class GTI(object):
         """
         gtloc = self & self.__class__(ts[[0, -1]])
         ts = ts[gtloc.mask_outofgti_times(ts)]
-        ts = ts[gtloc.arr.ravel()[gtloc.arr.ravel().searchsorted(ts)] != ts]
-        newts = np.sort(np.concatenate([ts, gtloc.arr.ravel()]))
-        idxgaps = newts.searchsorted(gtloc.arr[:, 1])
-        maskgaps = np.ones(newts.size - 1, np.bool)
-        maskgaps[idxgaps[:-1]] = False
+        newts = np.unique(np.concatenate([ts, gtloc.arr.ravel()]))
+        idxgaps = newts.searchsorted((gtloc.arr[:-1, 1] + gtloc.arr[1:, 0])/2.)
+        maskgaps = np.ones(newts.size - 1 if newts.size else 0, np.bool)
+        maskgaps[idxgaps - 1] = False
+
         return newts, maskgaps
 
     def mask_outofgti_times(self, ts):
@@ -109,6 +109,8 @@ class GTI(object):
         return self.arr.ravel().searchsorted(ts)%2 == 1
 
     def __and__(self, other):
+        if self.size == 0 or other.size == 0:
+            return emptyGTI
         tt = np.concatenate([self.arr.ravel(), other.arr.ravel()])
         ms = np.ones(tt.size, np.int8)
         ms[1::2] = -1
@@ -119,6 +121,12 @@ class GTI(object):
         gres = self.__class__.__new__(self.__class__)
         gres.arr = np.copy(gti[np.cumsum(ms[idx][:-1]) == 2])
         return gres
+
+    def merge_joint(self):
+        mask = np.ones(self.arr.shape[0] + 1, np.bool)
+        mask[1:-1] = self.arr[1:, 0] != self.arr[:-1, 1]
+        mask = np.lib.stride_tricks.as_strided(mask, (mask.size - 1, 2), mask.strides*2)
+        self.arr = self.arr[mask].reshape((-1, 2))
 
     @property
     def exposure(self):
@@ -158,7 +166,7 @@ class GTI(object):
         self.arr = self._regularize(self.arr*val)
 
     def __mul__(self, val):
-        return GTI(self.arr + val)
+        return GTI(self.arr*val)
 
     def __div__(self, val):
         return GTI(super().__div__(val))
@@ -305,6 +313,20 @@ def make_ingti_times(time, ggti):
     return tnew, maskgaps
 
 def deadtime_correction(urdhk):
+    """
+    produces effectivenesess of the events registration depending on overall countrate
+
+    ART-XC detectors have deadtime. Therefore photons which reach detectors instantly after previous are not registered.
+    if the overall countrate in the decector is k events per second, we want to know real expected countrate n
+    if real count rate is n then expectration time for the next photon is distributed
+    as n exp(-tn), probability to lost l events during the deadtime P(l) = (n\tau)^l/l! exp(-n\tau)
+    mean number of lost events per event: n\tau
+    therefore if the are k eventin during T then real expected countrate n = k*(1 + ntau)/T
+    k/T = c - observed countrate
+    n = c(1 + n \tau)
+    n(1 - c\tau) = c
+    n = c/(1 - c\tau)
+    """
     ts = urdhk["TIME"]
     tcrate = (urdhk["EVENTS"][1:] - urdhk["EVENTS"][:-1])/(ts[1:] - ts[:-1])
     dtcorr = interp1d((ts[1:] + ts[:-1])/2., (1. - ARTDEADTIME*tcrate),

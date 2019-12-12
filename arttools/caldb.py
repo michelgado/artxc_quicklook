@@ -18,7 +18,7 @@ idxtabl["CAL_DATE"] = pandas.to_datetime(idxtabl["CAL_DATE"])
 idxtabl.set_index("CAL_DATE", inplace=True)
 
 ARTQUATS = {row[0]:Rotation(row[1:]) for row in fits.getdata(os.path.join(ARTCALDBPATH, "artxc_quats_v001.fits"), 1)}
-ARTQUATS = {TELTOURD[row[0]]:Rotation(row[1:]) for row in fits.getdata(os.path.join(ARTCALDBPATH, "artxc_quats_v001.fits"), 1) if row[0] in TELTOURD}
+ARTQUATS.update({TELTOURD[row[0]]:Rotation(row[1:]) for row in fits.getdata(os.path.join(ARTCALDBPATH, "artxc_quats_v001.fits"), 1) if row[0] in TELTOURD})
 
 def get_cif(cal_cname, instrume):
     return idxtabl.query("INSTRUME=='%s' and CAL_CNAME=='%s'" %
@@ -38,24 +38,33 @@ def get_vigneting_by_urd(urdn):
     return fits.open("/srg/a1/work/andrey/art-xc_vignea.fits")
 
 def get_shadowmask_by_urd(urdn):
+    """
     fpath = get_relevat_file('OOFPIX', URDTOTEL[urdn])
+    return np.logical_not(fits.getdata(fpath, 1).astype(np.bool))
+    """
+    #temporal patch
+    urdtobit = {28:2, 22:4, 23:8, 24:10, 25:20, 26:40, 30:80}
+    fpath = "/home/andrey/ART-XC/sandbox/artxc_quicklook/newshadowmask/newopenpix%02d.fits" % urdtobit[urdn]
     return np.logical_not(fits.getdata(fpath, 1).astype(np.bool))
 
 def get_shadowmask(urdfile):
     return get_shadowmask_by_urd(urdfile["EVENTS"].header["URDN"])
 
-def get_energycal_by_udr(urdn):
+def get_energycal_by_urd(urdn):
     fpath = get_relevat_file('TCOEF', URDTOTEL[urdn])
     return fits.open(fpath)
 
 
 def get_energycal(urdfile):
-    return get_energycal_by_udr(urdfile["EVENTS"].header["URDN"])
+    return get_energycal_by_urd(urdfile["EVENTS"].header["URDN"])
 
 def get_backprofile_by_urdn(urdn):
     #return fits.getdata("/srg/a1/work/andrey/ART-XC/gc/bkg_grades0_9_urd%d.fits" % urdn)
-    return fits.getdata("/srg/a1/work/srg/ARTCALDB/caldb_files/BKG_URD%d.fits" % urdn)
+    #return fits.getdata("/srg/a1/work/srg/ARTCALDB/caldb_files/BKG_URD%d.fits" % urdn)
+    #return np.ones((48, 48), np.double)
     #return fits.getdata("/srg/a1/work/srg/ARTCALDB/caldb_files/urd%dbkg.fits" % urdn)
+    #temporal patch
+    return fits.getdata("/srg/a1/work/andrey/ART-XC/gc/urd%dbkg2.fits" % urdn, 0)
 
 def get_backprofile(urdfile):
     return get_backprofile_by_urdn(urdfile["EVENTS"].header["URDN"])

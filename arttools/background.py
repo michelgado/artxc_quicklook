@@ -3,11 +3,12 @@ from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, A
 from .vignetting import make_vignetting_for_urdn, make_overall_vignetting
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from .caldb import get_backprofile_by_urdn, get_shadowmask_by_urd
-from ._det_spatial import DL
+from ._det_spatial import DL, offset_to_vec, vec_to_offset, vec_to_offset_pairs
+from .telescope import URDNS
 from functools import reduce
 from multiprocessing import cpu_count
 import numpy as np
-from scipy.interpolate import RegularGridInterpolator
+from scipy.interpolate import RegularGridInterpolator, interp1d
 import matplotlib.pyplot as plt
 
 MPNUM = cpu_count()
@@ -21,7 +22,7 @@ def make_background_det_map_for_urdn(urdn, useshadowmask=True, ignoreedgestrips=
     bkgmap = RegularGridInterpolator(((np.arange(-24, 24) + 0.5)*DL,
                                       (np.arange(-24, 24) + 0.5)*DL),
                                         bkgprofile*shmask/bkgprofile.sum(),
-                                        method="nearest")
+                                        method="nearest", bounds_error=False, fill_value=0)
     return bkgmap
 
 def make_overall_background_map(subgrid=10, useshadowmask=True):
@@ -44,6 +45,7 @@ def make_overall_background_map(subgrid=10, useshadowmask=True):
     ymin, ymax = ymin - dy/2., ymax + dy
 
     x, y = np.mgrid[xmin:xmax:dd, ymin:ymax:dd]
+    print(x.shape)
     shape = x.shape
     newvmap = np.zeros(shape, np.double)
     vecs = offset_to_vec(np.ravel(x), np.ravel(y))
@@ -51,7 +53,7 @@ def make_overall_background_map(subgrid=10, useshadowmask=True):
     for urdn in URDNS:
         vmap = make_background_det_map_for_urdn(urdn, useshadowmask)
         quat = ARTQUATS[urdn]
-        newvmap += vmap(vec_to_offset_pairs(quat.apply(vecs, inverse=True))).reshape(shape)
+        newvmap += vmap(vec_to_offset_pairs(quat.apply(vecs))).reshape(shape)
 
     bkgmap = RegularGridInterpolator((x[:, 0], y[0]), newvmap, bounds_error=False, fill_value=0)
     return bkgmap
@@ -66,15 +68,19 @@ def make_bkgmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, time_corr={}):
     2) wcs is expected to be astropy.wcs.WCS class,
         crpix is expected to be exactly the central pixel of the image
     """
+    bkg = 0
+    overall_gti = emptyGTI
+    """
     if time_corr:
-        overall_gti = emptyGTI
-        bkg = 0.
-    else:
         overall_gti = reduce(lambda a, b: a & b, urdgtis.values())
+        tcorr = np.sort(np.concatenate([t.x for t in time_corr.values()]))
+        ts = np.sum([time_corr.get(urdn, lambda x: np.ones(x.size))(tcorr) for urdn in URDNS], axis=0)
+        tcorrf = interp1d(tcorr, ts, bounds_error=False, fill_value = np.median(ts))
         bkgmap = make_overall_background_map()
-        exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti, \
-                                                     time_corr.get(urd, lambda x: 1.))
+        exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti, tcorrf)
+        print(exptime.sum(), locgti.exposure, overall_gti.exposure)
         bkg = AttWCSHistinteg.make_mp(bkgmap, exptime, qval, wcs, mpnum, subscale=10)
+    """
 
     for urd in urdgtis:
         gti = urdgtis[urd] & -overall_gti
@@ -84,6 +90,8 @@ def make_bkgmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, time_corr={}):
         print("urd %d progress:" % urd)
         exptime, qval, locgti = hist_orientation_for_attdata(attdata*ARTQUATS[urd], gti, \
                                                      time_corr.get(urd, lambda x: 1.))
+        print("processed exposure", gti.exposure, exptime.sum())
         bkgmap = make_background_det_map_for_urdn(urd)
-        bkg = AttWCSHistinteg.make_mp(bkgmap, exptime, qval, wcs, mpnum, subscale=10) + bkg
+        bkg = AttWCSHistinteg.make_mp(bkgmap, exptime, qval, wcs, mpnum, subscale=6) + bkg
+        print("done!")
     return bkg

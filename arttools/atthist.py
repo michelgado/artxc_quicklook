@@ -33,7 +33,7 @@ def hist_quat(quat):
     ra, dec, roll = quat_to_pol_and_roll(quat)
     orhist = np.empty((ra.size, 3), np.int)
     orhist[:, 0] = np.asarray((dec + pi/2.)/DELTASKY, np.int)
-    orhist[:, 1] = np.asarray(np.cos(dec - dec%(pi/180.*15./3600))*ra/DELTASKY, np.int)
+    orhist[:, 1] = np.asarray(np.cos(dec - dec%DELTASKY)*ra/DELTASKY, np.int)
     orhist[:, 2] = np.asarray(roll/DELTAROLL, np.int)
     return np.unique(orhist, return_index=True, return_inverse=True, axis=0)
 
@@ -83,7 +83,7 @@ def make_small_steps_quats(attdata, gti=tGTI, timecorrection=lambda x: 1.):
         tnew = np.repeat(tsm, size) + ar*dtm
         dtn = np.concatenate([dt[maskmoving], dtm]) #*timecorrection(ts[maskmoving]), dtm*timecorrection(tnew)])
         ts = np.concatenate([ts[maskmoving], tnew])
-        qval = quatint(ts)
+        qval = attdata(ts)
     else:
         dtn = dt
     return qval, dtn*timecorrection(ts), locgti

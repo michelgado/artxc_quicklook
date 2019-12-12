@@ -2,6 +2,7 @@ from .caldb import ARTQUATS
 from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist
 from .vignetting import make_vignetting_for_urdn, make_overall_vignetting
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
+from .telescope import URDNS
 from functools import reduce
 from multiprocessing import cpu_count
 import numpy as np
@@ -19,20 +20,20 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}):
     2) wcs is expected to be astropy.wcs.WCS class,
         crpix is expected to be exactly the central pixel of the image
     """
+    emap = 0
     if dtcorr:
         overall_gti = emptyGTI
-        emap = 0
     else:
-        overall_gti = reduce(lambda a, b: a & b, urdgtis.values())
-        exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti)
-        vmap = make_overall_vignetting()
-        print("produce overall urds expmap")
-        emap = AttWCSHist.make_mp(vmap, exptime, qval, wcs, mpnum)
-        print("\ndone!")
-
+        overall_gti = reduce(lambda a, b: a & b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
+        if overall_gti.exposure > 0:
+            exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti)
+            vmap = make_overall_vignetting()
+            print("produce overall urds expmap")
+            emap = AttWCSHist.make_mp(vmap, exptime, qval, wcs, mpnum)
+            print("\ndone!")
     for urd in urdgtis:
         gti = urdgtis[urd] & -overall_gti
-        if urdgti.size == 0:
+        if gti.size == 0:
             print("urd %d has no individual gti, continue" % urd)
             continue
         print("urd %d progress:" % urd)
@@ -49,7 +50,7 @@ def make_expmap_for_healpix(attdata, urdgtis, mpnum=MPNUM, dtcorr={}):
         overall_gti = emptyGTI
         emap = 0.
     else:
-        overall_gti = reduce(lambda a, b: a & b, urdgtis.values())
+        overall_gti = reduce(lambda a, b: a & b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
         exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti)
         vmap = make_overall_vignetting()
         print("produce overall urds expmap")

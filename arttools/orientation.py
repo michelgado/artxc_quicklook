@@ -4,6 +4,7 @@ from math import pi, cos, sin
 from ._det_spatial import urd_to_vec
 from .time import get_hdu_times, GTI
 from .caldb import ARTQUATS
+from functools import reduce
 
 T0 = 617228538.1056 #first day of ART-XC work
 
@@ -65,10 +66,9 @@ class AttDATA(SlerpWithNaiveIndexing):
     def apply_gti(self, gti):
         gti = GTI(gti)
         gti = gti & self.gti
-        print(gti)
-        mask = gti.mask_outofgti_times(self.times)
-        quats = self(self.times[mask])
-        self.__init__(self.times[mask], quats, gti=gti)
+        ts, mgaps = gti.make_tedges(self.times)
+        quats = self(ts)
+        return self.__class__(ts, quats, gti=gti)
 
     def get_optical_axis_movement_speed(self):
         """
@@ -85,6 +85,28 @@ class AttDATA(SlerpWithNaiveIndexing):
         dalphadt = np.arccos(np.sum(vecs[:-1]*vecs[1:], axis=1))/dt*180./pi*3600.
         return tc, dt, dalphadt
 
+    def __mul__(self, val):
+        return self.__class__(self.times, self(self.times)*val, gti=self.gti)
+
+    def __rmul__(self, val):
+        """
+        ahtung!!! scipy Rotations defines mul itself,
+        so this method should be used explicitly in case
+        if applied rotation is consequtive to one stored in attdata
+        """
+        return self.__class__(self.times, val*self(self.times), gti=self.gti)
+
+    @classmethod
+    def concatenate(cls, attlist):
+        qlist = np.concatenate([att(att.times).as_quat() for att in attlist], axis=0)
+        tlist = np.concatenate([att.times for att in attlist])
+        tgti = reduce(lambda a, b: a | b, [att.gti for att in attlist])
+        ut, uidx = np.unique(tlist, return_index=True)
+        return cls(ut, Rotation(qlist[uidx]), gti=tgti)
+
+
+
+
 def read_gyro_fits(gyrohdu):
     gyrodata = gyrohdu.data
     quats = np.array([gyrodata["QORT_%d" % i] for i in [1,2,3,0]]).T
@@ -92,7 +114,9 @@ def read_gyro_fits(gyrohdu):
     masktimes = times > T0
     mask0quats = np.sum(quats**2, axis=1) > 0.
     mask = np.logical_and(masktimes, mask0quats)
-    return AttDATA(times[mask], qgyro0*Rotation(quats[mask])*qrot0)
+    times, quats = times[mask], quats[mask]
+    ts, uidx = np.unique(times, return_index=True)
+    return AttDATA(ts, Rotation(quats[uidx])*qgyro0*qrot0*ARTQUATS["GYRO"])
 
 def read_bokz_fits(bokzhdu):
     bokzdata = bokzhdu.data
@@ -101,9 +125,22 @@ def read_bokz_fits(bokzhdu):
     mask0quats = np.linalg.det(mat) != 0.
     masktimes = bokzdata["TIME"] > T0
     mask = np.logical_and(mask0quats, masktimes)
-    qbokz = qbokz0*Rotation.from_dcm(mat[mask])*qrot0
-    jyear = get_hdu_times(hdu).jyear
-    return AttDATA(bokzdata["TIME"][mask], earth_precession_quat(jyear).inv()*qbokz)
+    jyear = get_hdu_times(bokzhdu).jyear[mask]
+    qbokz = earth_precession_quat(jyear).inv()*Rotation.from_dcm(mat[mask])*qbokz0*qrot0*ARTQUATS["BOKZ"]
+    ts, uidx = np.unique(bokzdata["TIME"][mask], return_index=True)
+    return AttDATA(ts, qbokz[uidx])
+
+def get_raw_bokz(bokzhdu):
+    bokzdata = bokzhdu.data
+    mat = np.array([[bokzdata["MOR%d%d" % (i, j)] for i in range(3)] for j in range(3)])
+    mat = np.copy(mat.swapaxes(2, 1).swapaxes(1, 0))
+    mask0quats = np.linalg.det(mat) != 0.
+    masktimes = bokzdata["TIME"] > T0
+    mask = np.logical_and(mask0quats, masktimes)
+    qbokz = Rotation.from_dcm(mat[mask])*qbokz0*qrot0
+    jyear = get_hdu_times(bokzhdu).jyear[mask]
+    return bokzdata["TIME"][mask], earth_precession_quat(jyear).inv()*qbokz
+
 
 def get_photons_vectors(urddata, URDN, attdata, subscale=1):
     if not np.all(attdata.gti.mask_outofgti_times(urddata["TIME"])):
@@ -134,10 +171,10 @@ def quat_to_pol_and_roll(qfin, opaxis=[1, 0, 0], north=[0, 0, 1]):
     ra = np.arctan2(opticaxis[:,1], opticaxis[:,0])%(2.*pi)
 
     yzprojection = np.cross(opticaxis, north)
-    vort = np.cross(north, opaxis)
+    yzprojection = yzprojection/np.sqrt(np.sum(yzprojection**2., axis=1))[:, np.newaxis]
 
-    rollangle = np.arctan2(np.sum(yzprojection*qfin.apply(vort), axis=1),
-                           np.sum(yzprojection*qfin.apply(north), axis=1))
+    rollangle = np.arctan2(np.sum(yzprojection*qfin.apply([0, 1, 0]), axis=1),
+                           np.sum(yzprojection*qfin.apply([0, 0, 1]), axis=1))
     return ra, dec, rollangle
 
 def extract_raw_gyro(gyrodata, qadd=Rotation([0, 0, 0, 1])):
@@ -176,7 +213,7 @@ def get_axis_movement_speed(attdata):
     te, mgaps = attdata.gti.make_tedges(attdata.times)
     tc = ((te[1:] + te[:-1])/2.)[mgaps]
     dt = (te[1:] - te[:-1])[mgaps]
-    vecs = attdata(tc).apply(OPAX)
+    vecs = attdata(te).apply(OPAX)
     dalphadt = np.arccos(np.sum(vecs[:-1]*vecs[1:], axis=1))/dt*180./pi*3600.
     return tc, dt, dalphadt
 
