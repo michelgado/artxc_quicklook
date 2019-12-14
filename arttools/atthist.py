@@ -12,6 +12,7 @@ from astropy.coordinates import SkyCoord
 from astropy.wcs import WCS
 from math import cos, sin, pi
 import numpy as np
+from scipy import ndimage
 import sys
 
 from multiprocessing import Pool, cpu_count, Queue, Process
@@ -86,12 +87,46 @@ def make_small_steps_quats(attdata, gti=tGTI, timecorrection=lambda x: 1.):
         qval = attdata(ts)
     else:
         dtn = dt
+    print("check exposure", dt.sum(), gti.exposure)
     return qval, dtn*timecorrection(ts), locgti
 
 def hist_orientation_for_attdata(attdata, gti=tGTI, timecorrection=lambda x:1.):
     qval, dtn, locgti = make_small_steps_quats(attdata, gti, timecorrection)
     exptime, qhist = hist_orientation(qval, dtn)
     return exptime, qhist, locgti
+
+def hist_by_roll_for_attdata(attdata, gti=tGTI, timecorrection=lambda x:1., wcsax=[0, 0, 1]):
+    qval, dtn, locgti = make_small_steps_quats(attdata, gti, timecorrection)
+    ra, dec, roll = quat_to_pol_and_roll(qval, north=wcsax)
+    idx = np.argsort(roll)
+    ra, dec, qval, dtn, roll = ra[idx], dec[idx], qval[idx], dtn[idx], roll[idx]
+    segments = roll.searchsorted(np.linspace(0., 2.*pi, 721))
+    return [(ra[s:e], dec[s:e], dtn[s:e]) for s, e in zip(segments[:-1], segments[1:])]
+
+def convolve_profile(attdata, locwcs, profile, gti=tGTI, timecorrection=lambda x: 1.):
+    r, d = locwcs.all_pix2world([[locwcs.wcs.crpix[0], 0], [locwcs.wcs.crpix[0], locwcs.wcs.crpix[1]*2]], 1).T
+    vecs = pol_to_vec(r*pi/180., d*pi/180.)
+    wcsax = vecs[1, :] - vecs[0, :]
+    wcsax = wcsax/np.sqrt(np.sum(wcsax**2.))
+    rolls = hist_by_roll_for_attdata(attdata, gti, timecorrection, wcsax)
+    xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
+    img = 0.
+    for i in range(len(rolls)):
+        ra, dec, dt = rolls[i]
+        if ra.size == 0:
+            continue
+        roll = i + 0.25
+        print("roll %d exptimes %.2f" % (roll, dt.sum()))
+        x, y = locwcs.all_world2pix(np.array([ra*180./pi, dec*180./pi]).T, 1.).T
+        timg = np.histogram2d(x, y, [np.arange(locwcs.wcs.crpix[0]*2 + 2) + 0.5,
+                                     np.arange(locwcs.wcs.crpix[1]*2 + 2) + 0.5])[0].T
+        locbkg = ndimage.rotate(profile, roll)
+        print(locbkg.shape)
+        timg = ndimage.convolve(timg, locbkg)
+        print(timg.shape)
+        print(img)
+        img = timg + img
+    return img
 
 def wcs_for_vecs(vecs, pixsize=20./3600.):
     """
@@ -139,16 +174,16 @@ def wcs_for_vecs(vecs, pixsize=20./3600.):
 
 
     locwcs = WCS(naxis=2)
-    locwcs.wcs.cdelt = [pixsize, pixsize]
+    #locwcs.wcs.cdelt = [pixsize, pixsize]
     cdmat = np.array([[cos(alpha), -sin(alpha)], [sin(alpha), cos(alpha)]])
-    locwcs.wcs.cd = cdmat*pixsize
+    locwcs.wcs.pc = cdmat*pixsize
     locwcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
     locwcs.wcs.crval = [rac*180./pi, decc*180./pi]
     locwcs.wcs.radesys = "FK5"
-    locwcs.wcs.cdelt = [pixsize, pixsize]
-    desize = int((ymax - ymin)*180./pi/pixsize)//2
+    #locwcs.wcs.cdelt = [pixsize, pixsize]
+    desize = int((ymax - ymin + 0.2*pi/180.)*180./pi/pixsize)//2
     desize = desize + 1 - desize%2
-    rasize = int((xmax - xmin)*180./pi/pixsize)//2
+    rasize = int((xmax - xmin + 0.2*pi/180.)*180./pi/pixsize)//2
     rasize = rasize + 1 - rasize%2
     locwcs.wcs.crpix = [rasize, desize]
 
@@ -268,8 +303,12 @@ class AttWCSHistmean(AttWCSHist):
         vec_fk5 = quat.apply(self.vecs)
         r, d = vec_to_pol(vec_fk5)
         x, y = (self.wcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1) - 0.5).T.astype(np.int)
+        mask = np.all([x > -1, y > -1, x < self.img.shape[1], y < self.img.shape[0]], axis=0)
+        x, y, vmap = x[mask], y[mask], self.vmap[mask]
         u, idx, cts = np.unique(np.array([x, y]), return_inverse=True, return_counts=True, axis=1)
-        np.add.at(self.img, (y, x), self.vmap*exp/cts[idx])
+        #mask = np.all([u[0] > -1, u[1] > -1, u[0] < self.img.shape[1], u[1] < self.img.shape[0]], axis=0)
+        #u, idx = u[:, mask], idx[mask]
+        np.add.at(self.img, (y, x), vmap*exp/cts[idx])
 
 class AttWCSHistinteg(AttWCSHist):
 

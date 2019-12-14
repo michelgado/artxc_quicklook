@@ -1,12 +1,12 @@
-from .caldb import get_shadowmask_by_urd, get_vigneting_by_urd
+from .caldb import get_shadowmask_by_urd, get_vigneting_by_urd, OPAXOFFSET
 from scipy.interpolate import interp1d, RegularGridInterpolator
 from scipy.integrate import cumtrapz
-from ._det_spatial import get_shadowed_pix_mask, offset_to_raw_xy, DL, \
+from ._det_spatial import get_shadowed_pix_mask, offset_to_raw_xy, DL, F, \
     offset_to_vec, vec_to_offset_pairs, vec_to_offset
 from .telescope import URDNS
 from .caldb import ARTQUATS
 import numpy as np
-from math import log10
+from math import log10, pi, sin, cos
 
 TINY = 1e-15
 
@@ -14,51 +14,35 @@ def make_vignetting_for_urdn(urdn, energy=6., phot_index=None,
                              useshadowmask=True, ignoreedgestrips=True):
     vignfile = get_vigneting_by_urd(urdn)
 
-    """
-    efintlog = interp1d(np.log10(vignfile["Vign_EA"].data["E"]),
-                     np.log10(np.maximum(vignfile["Vign_EA"].data["EFFAREA"], TINY)),
+    efint = interp1d(vignfile["5 arcmin PSF"].data["E"],
+                     vignfile["5 arcmin PSF"].data["EFFAREA"],
                      axis=0)
-    efint = lambda E: 10.**efintlog(log10(E))
-    """
-    efint = interp1d(vignfile["Vign_EA"].data["E"],
-                     vignfile["Vign_EA"].data["EFFAREA"],
-                     axis=0)
-
 
     if not phot_index is None:
-        vignmap = cumtrapz(vignfile["Vign_EA"].data["EFFAREA"]*\
-                           vignfile["Vign_EA"].data["E"]**(-phot_index),
-                           vignfile["Vign_EA"].data["E"],
+        vignmap = cumtrapz(vignfile["5 arcmin PSF"].data["EFFAREA"]*\
+                           vignfile["5 arcmin PSF"].data["E"]**(-phot_index),
+                           vignfile["5 arcmin PSF"].data["E"],
                            axis=0)
-        """
-        vignmap = quad(lambda E: efint(E)*E**(-phot_index),
-                       vignfile["Vign_EA"].data["E"][0],
-                       vignfile["Vign_EA"].data["E"][-1])
-        """
     else:
         vignmap = efint(energy)
 
+    vignmap = vignmap/vignmap.max()
+
+    x = np.tan(vignfile["Offset angles"].data["X"]*pi/180/60.)*F + (24. - OPAXOFFSET[urdn][0])*DL
+    y = np.tan(vignfile["Offset angles"].data["Y"]*pi/180/60.)*F + (24. - OPAXOFFSET[urdn][1])*DL
+
+    shmask = get_shadowmask_by_urd(urdn).astype(np.uint8) if useshadowmask else np.ones((48, 48), np.uint8)
     if ignoreedgestrips:
-        x, y = np.meshgrid(vignfile["Coord"].data["X"], vignfile["Coord"].data["Y"])
-        rawx, rawy = offset_to_raw_xy(x.ravel(), y.ravel())
-        centralstrips = np.ones((48, 48), np.bool)
-        centralstrips[[0, -1], :] = False
-        centralstrips[:, [0, -1]] = False
-        esmask = get_shadowed_pix_mask(rawx, rawy, centralstrips).reshape(vignmap.shape)
-        vignmap = vignmap*esmask
+        shmask[[0, -1], :] = 0
+        shmask[:, [0, -1]] = 0
 
-    if useshadowmask:
-        x, y = np.meshgrid(vignfile["Coord"].data["X"], vignfile["Coord"].data["Y"])
-        rawx, rawy = offset_to_raw_xy(x.ravel(), y.ravel())
-        shadow = get_shadowmask_by_urd(urdn)
-        shmask = get_shadowed_pix_mask(rawx, rawy, shadow).reshape(vignmap.shape)
-        vignmap = vignmap*shmask
+    X, Y = np.meshgrid(x, y)
+    rawx, rawy = offset_to_raw_xy(X.ravel(), Y.ravel())
+    mask = np.all([rawx > -1, rawx < 48, rawy > -1, rawy < 48], axis=0)
+    vignmap[np.logical_not(mask).reshape(vignmap.shape)] = 0.
+    vignmap[mask.reshape(vignmap.shape)] *= shmask[rawx[mask], rawy[mask]]
 
-    vmap = RegularGridInterpolator((vignfile["Coord"].data["X"],
-                                    vignfile["Coord"].data["Y"]),
-                                    vignmap/vignmap.max(),
-                                    bounds_error=False,
-                                    fill_value=0.)
+    vmap = RegularGridInterpolator((x, y), vignmap, bounds_error=False, fill_value=0.)
     return vmap
 
 
