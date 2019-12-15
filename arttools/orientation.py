@@ -201,6 +201,17 @@ def earth_precession_quat(jyear):
     theta = np.polyval(ptheta, T) / 3600.0
     return Rotation.from_euler("ZYZ", np.array([z, -theta, zeta]).T, degrees=True)
 
+def get_wcs_roll_for_qval(wcs, qval):
+    ra, dec = vec_to_pol(qval.apply([1, 0, 0]))
+    x, y = wcs.all_world2pix(np.array([ra, dec]).T*180./pi, 1).T
+    r1, d1 = (wcs.all_pix2world(np.array([x, y - 50.]).T, 1)).T
+    r2, d2 = (wcs.all_pix2world(np.array([x, y + 50.]).T, 1)).T
+    vbot = pol_to_vec(r1*pi/180., d1*pi/180.)
+    vtop = pol_to_vec(r2*pi/180., d2*pi/180.)
+    vimgyax = vbot - vtop
+    vimgyax = qval.apply(vimgyax, inverse=True)
+    return (np.arctan2(vimgyax[:, 2], vimgyax[:, 1])*180./pi)%360.
+
 
 def get_axis_movement_speed(attdata):
     """

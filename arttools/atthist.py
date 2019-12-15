@@ -1,5 +1,5 @@
 from .time import make_ingti_times, deadtime_correction, GTI, tGTI
-from .orientation import quat_to_pol_and_roll, pol_to_vec, vec_to_pol
+from .orientation import quat_to_pol_and_roll, pol_to_vec, vec_to_pol, get_wcs_roll_for_qval
 from .caldb import ARTQUATS
 from ._det_spatial import DL, offset_to_vec
 from .telescope import OPAX
@@ -103,8 +103,10 @@ def hist_by_roll_for_attdata(attdata, gti=tGTI, timecorrection=lambda x:1., wcsa
     segments = roll.searchsorted(np.linspace(0., 2.*pi, 721))
     return [(ra[s:e], dec[s:e], dtn[s:e]) for s, e in zip(segments[:-1], segments[1:])]
 
+
 def convolve_profile(attdata, locwcs, profile, gti=tGTI, timecorrection=lambda x: 1.):
-    r, d = locwcs.all_pix2world([[locwcs.wcs.crpix[0], 0], [locwcs.wcs.crpix[0], locwcs.wcs.crpix[1]*2]], 1).T
+    #r, d = locwcs.all_pix2world([[0, locwcs.wcs.crpix[1]], [2*locwcs.wcs.crpix[0], locwcs.wcs.crpix[1]]], 1).T
+    r, d = locwcs.all_pix2world([[locwcs.wcs.crpix[0], locwcs.wcs.crpix[1]*2], [locwcs.wcs.crpix[0], 0]], 1).T
     vecs = pol_to_vec(r*pi/180., d*pi/180.)
     wcsax = vecs[1, :] - vecs[0, :]
     wcsax = wcsax/np.sqrt(np.sum(wcsax**2.))
@@ -128,17 +130,11 @@ def convolve_profile(attdata, locwcs, profile, gti=tGTI, timecorrection=lambda x
         img = timg + img
     return img
 
-def wcs_for_vecs(vecs, pixsize=20./3600.):
+
+def get_vecs_convex(vecs):
     """
-    produce wcs from a set of vectors, the wcs is intendet to cover this vectors
-    vecs are expected to be of shape Nx3
-    method:
-        find mean position vector
-        produce quaternion which put this vector at altitude 0, where metric is close to cartesian
-        find optimal rectangle
-        compute field rotation angle e.t.c.
-        fill wcs with rotation angle, field size, estimated image size
-        return wcs
+    for a set of vectors (which assumed to cover less the pi along any direction)
+    produces set of vectors which is verteces of convex figure, incapsulating all other vectors on  sphere
     """
     cvec = vecs.sum(axis=0)
     cvec = cvec/np.sqrt(np.sum(cvec**2.))
@@ -152,12 +148,28 @@ def wcs_for_vecs(vecs, pixsize=20./3600.):
     l, b = np.sum(quat.apply(vecs)*r2, axis=1), vecn[:,2]
     ch = ConvexHull(np.array([l, b]).T)
     r, d = l[ch.vertices], b[ch.vertices]
+    return cvec, r1, r2, quat, vecs[ch.vertices], r, d
+
+
+def min_area_wcs_for_vecs(vecs, pixsize=20./3600.):
+    """
+    produce wcs from a set of vectors, the wcs is intendet to cover this vectors
+    vecs are expected to be of shape Nx3
+    method:
+        find mean position vector
+        produce quaternion which put this vector at altitude 0, where metric is close to cartesian
+        find optimal rectangle
+        compute field rotation angle e.t.c.
+        fill wcs with rotation angle, field size, estimated image size
+        return wcs
+    """
+    cvec, r1, r2, eqquat, cv_vecs, r, d = get_vecs_convex(vecs)
 
     def find_bbox(alpha):
         x = r*cos(alpha) - d*sin(alpha)
         y = r*sin(alpha) + d*cos(alpha)
         return (x.max() - x.min())*(y.max() - y.min())
-    res = minimize(find_bbox, [pi/4., ], method="Nelder-Mead")
+    res = minimize(find_bbox, [pi/8., ], method="Nelder-Mead")
     alpha = res.x
     x, y = r*cos(alpha) - d*sin(alpha), r*sin(alpha) + d*cos(alpha)
     xmin, xmax = x.min(), x.max()
@@ -168,19 +180,18 @@ def wcs_for_vecs(vecs, pixsize=20./3600.):
     dx = (xmax - xmin)
     dy = (ymax - ymin)
 
-    vec1 = quat.apply(cvec) + (xc*cos(alpha) + yc*sin(alpha))*r2 + \
+    vec1 = eqquat.apply(cvec) + (xc*cos(alpha) + yc*sin(alpha))*r2 + \
                   (-xc*sin(alpha) + yc*cos(alpha))*r1
-    rac, decc = vec_to_pol(quat.apply(vec1, inverse=True))
+    rac, decc = vec_to_pol(eqquat.apply(vec1, inverse=True))
 
 
     locwcs = WCS(naxis=2)
-    #locwcs.wcs.cdelt = [pixsize, pixsize]
     cdmat = np.array([[cos(alpha), -sin(alpha)], [sin(alpha), cos(alpha)]])
-    locwcs.wcs.pc = cdmat*pixsize
+    locwcs.wcs.pc = cdmat
+    locwcs.wcs.cdelt = [pixsize, pixsize]
     locwcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
     locwcs.wcs.crval = [rac*180./pi, decc*180./pi]
     locwcs.wcs.radesys = "FK5"
-    #locwcs.wcs.cdelt = [pixsize, pixsize]
     desize = int((ymax - ymin + 0.2*pi/180.)*180./pi/pixsize)//2
     desize = desize + 1 - desize%2
     rasize = int((xmax - xmin + 0.2*pi/180.)*180./pi/pixsize)//2
@@ -189,13 +200,48 @@ def wcs_for_vecs(vecs, pixsize=20./3600.):
 
     return locwcs
 
+def min_roll_wcs_for_quats(quats, pixsize=20./3600.):
+    """
+    now we want to find coordinate system on the sphere surface, in which most of the attitudes would have 0 roll angle
+    """
+
+    vecs = quats.apply([1, 0, 0])
+    cvec, r1, r2, eqquat, cv_vecs, r, d = get_vecs_convex(vecs)
+    rac, decc = vec_to_pol(cvec)
+    """
+    r11, d11 = vec_to_pol(vecs)
+    plt.scatter(r11, d11)
+    plt.scatter(rac, decc)
+    plt.show()
+    """
+
+    locwcs = WCS(naxis=2)
+    locwcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    locwcs.wcs.crval = [rac*180./pi, decc*180./pi]
+    locwcs.wcs.cdelt = [pixsize, pixsize]
+    locwcs.wcs.radesys = "FK5"
+    crsize = int(np.max(np.arccos(np.sum(cvec*cv_vecs, axis=1)))*180./pi/pixsize)
+    locwcs.wcs.crpix = [crsize, crsize]
+    roll = get_wcs_roll_for_qval(locwcs, quats)
+    mroll = np.median(roll)*pi/180.
+    locwcs.wcs.pc = np.array([[cos(mroll), sin(mroll)], [-sin(mroll), cos(mroll)]])
+    rav, decv = vec_to_pol(cv_vecs)
+    xy = locwcs.all_world2pix(np.array([rav, decv]).T*180./pi, 1)
+    xmax, ymax = np.max(xy, axis=0)
+    xmin, ymin = np.min(xy, axis=0)
+    locwcs.wcs.crval = locwcs.all_pix2world([[(xmax + xmin + 1)//2, (ymax + ymin + 1)//2],], 1)[0]
+    locwcs.wcs.crpix = [(xmax - xmin)//2 + 0.7/pixsize, (ymax - ymin)//2 + 0.7/pixsize]
+    return locwcs
+
+
+
 
 def make_wcs_for_quats(quats, pixsize=20./3600.):
     vedges = offset_to_vec(np.array([-26.*DL, 26*DL, 26.*DL, -26.*DL]),
                            np.array([-26.*DL, -26*DL, 26.*DL, 26.*DL]))
     edges = np.concatenate([quats.apply(v) for v in vedges])
     edges = edges/np.sqrt(np.sum(edges**2., axis=1))[:, np.newaxis]
-    return wcs_for_vecs(edges)
+    return min_area_wcs_for_vecs(edges)
 
 def make_wcs_for_attdata(attdata, gti=tGTI):
     locgti = gti & attdata.gti
