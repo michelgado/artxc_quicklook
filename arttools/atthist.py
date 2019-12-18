@@ -95,39 +95,64 @@ def hist_orientation_for_attdata(attdata, gti=tGTI, timecorrection=lambda x:1.):
     exptime, qhist = hist_orientation(qval, dtn)
     return exptime, qhist, locgti
 
-def hist_by_roll_for_attdata(attdata, gti=tGTI, timecorrection=lambda x:1., wcsax=[0, 0, 1]):
+def hist_by_roll_for_attdata(attdata, gti=tGTI, timecorrection=lambda x:1., wcs=None): #wcsax=[0, 0, 1]):
     qval, dtn, locgti = make_small_steps_quats(attdata, gti, timecorrection)
-    ra, dec, roll = quat_to_pol_and_roll(qval, north=wcsax)
+    if wcs is None:
+        ra, dec, roll = quat_to_pol_and_roll(qval)
+        roll = (roll*180./pi)%360
+    else:
+        roll = get_wcs_roll_for_qval(wcs, qval)
+        ra, dec = vec_to_pol(qval.apply([1, 0, 0]))
+
     idx = np.argsort(roll)
     ra, dec, qval, dtn, roll = ra[idx], dec[idx], qval[idx], dtn[idx], roll[idx]
-    segments = roll.searchsorted(np.linspace(0., 2.*pi, 721))
+    import matplotlib.pyplot as plt
+    plt.hist(roll, 128)
+    plt.show()
+    segments = roll.searchsorted(np.linspace(0., 360., 721))
     return [(ra[s:e], dec[s:e], dtn[s:e]) for s, e in zip(segments[:-1], segments[1:])]
 
 
 def convolve_profile(attdata, locwcs, profile, gti=tGTI, timecorrection=lambda x: 1.):
+    import matplotlib.pyplot as plt
     #r, d = locwcs.all_pix2world([[0, locwcs.wcs.crpix[1]], [2*locwcs.wcs.crpix[0], locwcs.wcs.crpix[1]]], 1).T
+    """
     r, d = locwcs.all_pix2world([[locwcs.wcs.crpix[0], locwcs.wcs.crpix[1]*2], [locwcs.wcs.crpix[0], 0]], 1).T
     vecs = pol_to_vec(r*pi/180., d*pi/180.)
     wcsax = vecs[1, :] - vecs[0, :]
     wcsax = wcsax/np.sqrt(np.sum(wcsax**2.))
-    rolls = hist_by_roll_for_attdata(attdata, gti, timecorrection, wcsax)
+    """
+    rolls = hist_by_roll_for_attdata(attdata, gti, timecorrection, locwcs)
+    print("llength of roll", len(rolls))
     xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
     img = 0.
     for i in range(len(rolls)):
         ra, dec, dt = rolls[i]
         if ra.size == 0:
             continue
+        print(ra.size)
         roll = i + 0.25
         print("roll %d exptimes %.2f" % (roll, dt.sum()))
         x, y = locwcs.all_world2pix(np.array([ra*180./pi, dec*180./pi]).T, 1.).T
+        print(x, y)
         timg = np.histogram2d(x, y, [np.arange(locwcs.wcs.crpix[0]*2 + 2) + 0.5,
                                      np.arange(locwcs.wcs.crpix[1]*2 + 2) + 0.5])[0].T
+        #return timg
+        print("timg sum", timg.sum())
+        #plt.imshow(timg)
+        #plt.show()
+
+
+
+        print("rotate on roll angle", roll)
         locbkg = ndimage.rotate(profile, roll)
-        print(locbkg.shape)
-        timg = ndimage.convolve(timg, locbkg)
+        print("rotate image")
+        print("locbkg shape", locbkg.shape)
+        #timg = ndimage.convolve(timg, locbkg)
         print(timg.shape)
         print(img)
-        img = timg + img
+        img = ndimage.convolve(timg, locbkg) + img
+        print("affter adding convolve", img)
     return img
 
 
@@ -208,13 +233,6 @@ def min_roll_wcs_for_quats(quats, pixsize=20./3600.):
     vecs = quats.apply([1, 0, 0])
     cvec, r1, r2, eqquat, cv_vecs, r, d = get_vecs_convex(vecs)
     rac, decc = vec_to_pol(cvec)
-    """
-    r11, d11 = vec_to_pol(vecs)
-    plt.scatter(r11, d11)
-    plt.scatter(rac, decc)
-    plt.show()
-    """
-
     locwcs = WCS(naxis=2)
     locwcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
     locwcs.wcs.crval = [rac*180./pi, decc*180./pi]
@@ -232,8 +250,6 @@ def min_roll_wcs_for_quats(quats, pixsize=20./3600.):
     locwcs.wcs.crval = locwcs.all_pix2world([[(xmax + xmin + 1)//2, (ymax + ymin + 1)//2],], 1)[0]
     locwcs.wcs.crpix = [(xmax - xmin)//2 + 0.7/pixsize, (ymax - ymin)//2 + 0.7/pixsize]
     return locwcs
-
-
 
 
 def make_wcs_for_quats(quats, pixsize=20./3600.):

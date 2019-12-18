@@ -42,7 +42,7 @@ def make_vignetting_for_urdn(urdn, energy=6., phot_index=None,
     vignmap[np.logical_not(mask).reshape(vignmap.shape)] = 0.
     vignmap[mask.reshape(vignmap.shape)] *= shmask[rawx[mask], rawy[mask]]
 
-    vmap = RegularGridInterpolator((x, y), vignmap, bounds_error=False, fill_value=0.)
+    vmap = RegularGridInterpolator((x, y), vignmap[:, ::-1], bounds_error=False, fill_value=0.)
     return vmap
 
 

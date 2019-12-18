@@ -3,7 +3,7 @@ from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, A
 from .vignetting import make_vignetting_for_urdn, make_overall_vignetting
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from .caldb import get_backprofile_by_urdn, get_shadowmask_by_urd
-from ._det_spatial import DL, offset_to_vec, vec_to_offset, vec_to_offset_pairs
+from ._det_spatial import DL, dxya, offset_to_vec, vec_to_offset, vec_to_offset_pairs
 from .telescope import URDNS
 from functools import reduce
 from multiprocessing import cpu_count
@@ -59,7 +59,7 @@ def make_overall_background_map(subgrid=10, useshadowmask=True):
     bkgmap = RegularGridInterpolator((x[:, 0], y[0]), newvmap, bounds_error=False, fill_value=0)
     return bkgmap
 
-def make_bkgmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, time_corr={}):
+def make_bkgmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, time_corr={}, subscale=6):
     """
     produce exposure map on the provided wcs area, with provided GTI and attitude data
 
@@ -93,7 +93,7 @@ def make_bkgmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, time_corr={}):
                                                      time_corr.get(urd, lambda x: 1.))
         print("processed exposure", gti.exposure, exptime.sum())
         bkgmap = make_background_det_map_for_urdn(urd)
-        bkg = AttWCSHistmean.make_mp(bkgmap, exptime, qval, wcs, mpnum, subscale=6) + bkg
+        bkg = AttWCSHistmean.make_mp(bkgmap, exptime, qval, wcs, mpnum, subscale=subscale) + bkg
         print("done!")
 
     if wcs.wcs.has_cd():
@@ -103,12 +103,20 @@ def make_bkgmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, time_corr={}):
     return bkg*scale
 
 def make_quick_bkgmap_for_wcs(wcs, attdata, urdgtis, time_corr={}):
-    pixsize = sqrt(np.linalg.det(wcs.wcs.pc))
+    pixsize = wcs.wcs.cdelt[0] #sqrt(np.linalg.det(wcs.wcs.pc))
     bkgimg = 0.
+
+    dp = pixsize/dxya
+    grid = np.arange(dp/2., 24 + dp*0.9, dp)
+    grid = np.concatenate([-grid[::-1], grid])
+    mgrid = np.meshgrid(grid, grid)
+
     for urd in urdgtis:
         bkgmap = make_background_det_map_for_urdn(urd)
-        bkg = bkgmap(tuple(np.mgrid[-24.*DL: 24.0001*DL: pixsize*DL/(45./3600.),
-                                    -24.*DL: 24.0001*DL: pixsize*DL/(45./3600.)]))
+        bkg = bkgmap(tuple(mgrid))
+        bkg = sum(bkg[i%5::5,i//5::5] for i in range(25))/25.
+        print(bkg.shape)
+        print("run convolve")
         bkgimg = convolve_profile(attdata, wcs, bkg, urdgtis[urd], time_corr.get(urd, lambda x: 1.)) + bkgimg
     return bkgimg
 
