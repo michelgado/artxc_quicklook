@@ -1,8 +1,9 @@
 import numpy as np
+from math import pi
 
 DL = 0.595 # distance between strips in mm
 F = 2693. # focal length in mm
-dxya = np.arctan(DL/F) #0.595 - distance between strips, 2693 - ART-XC focal length
+dxya = np.arctan(DL/F)*180./pi #0.595 - distance between strips, 2693 - ART-XC focal length
 
 
 def raw_xy_to_offset(rawx, rawy):

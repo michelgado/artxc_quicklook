@@ -108,12 +108,16 @@ def make_quick_bkgmap_for_wcs(wcs, attdata, urdgtis, time_corr={}):
 
     dp = pixsize/dxya
     grid = np.arange(dp/2., 24 + dp*0.9, dp)
-    grid = np.concatenate([-grid[::-1], grid])
+    grid = np.repeat(grid, 5) + np.tile(np.arange(-4, 1)*dp/5., grid.size)
+    grid = grid[2:]
+    grid = np.concatenate([-grid[::-1], grid])*DL
+    grid = (grid[1:] + grid[:-1])/2.
     mgrid = np.meshgrid(grid, grid)
 
     for urd in urdgtis:
         bkgmap = make_background_det_map_for_urdn(urd)
-        bkg = bkgmap(tuple(mgrid))
+        bkg = bkgmap((mgrid[1], mgrid[0]))
+        print(bkg.shape)
         bkg = sum(bkg[i%5::5,i//5::5] for i in range(25))/25.
         print(bkg.shape)
         print("run convolve")

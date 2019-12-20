@@ -131,7 +131,7 @@ def convolve_profile(attdata, locwcs, profile, gti=tGTI, timecorrection=lambda x
         if ra.size == 0:
             continue
         print(ra.size)
-        roll = i + 0.25
+        roll = i*0.5 + 0.25
         print("roll %d exptimes %.2f" % (roll, dt.sum()))
         x, y = locwcs.all_world2pix(np.array([ra*180./pi, dec*180./pi]).T, 1.).T
         print(x, y)
