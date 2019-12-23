@@ -50,8 +50,8 @@ def make_energies_flags_and_grades(urdfile):
     energy, xc, yc, grade = get_events_energy(urddata, np.copy(urdfile["HK"].data), caldbfile)
     return urddata, energy, grade, flag
 
-def make_sky_image(urddata, urdn, attdata, locwcs):
-    r, d = get_photons_sky_coord(urddata, urdn, attdata, 10)
+def make_sky_image(urddata, urdn, attdata, locwcs, photsplitside=10):
+    r, d = get_photons_sky_coord(urddata, urdn, attdata, photsplitside)
     x, y = locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1.).T
     img = np.histogram2d(x, y, [np.arange(locwcs.wcs.crpix[0]*2 + 2) + 0.5,
                                 np.arange(locwcs.wcs.crpix[1]*2 + 2) + 0.5])[0].T

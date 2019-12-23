@@ -19,6 +19,8 @@ idxtabl.set_index("CAL_DATE", inplace=True)
 
 ARTQUATS = {row[0]:Rotation(row[1:]) for row in fits.getdata(os.path.join(ARTCALDBPATH, "artxc_quats_v001.fits"), 1)}
 ARTQUATS.update({TELTOURD[row[0]]:Rotation(row[1:]) for row in fits.getdata(os.path.join(ARTCALDBPATH, "artxc_quats_v001.fits"), 1) if row[0] in TELTOURD})
+CUTAPP = None
+FLATBKG = False
 
 
 def get_cif(cal_cname, instrume):
@@ -41,10 +43,17 @@ def get_vigneting_by_urd(urdn):
     return fits.open("/srg/a1/work/ayut/art-xc_vignea_q200_191210.fits")
 
 def get_shadowmask_by_urd(urdn):
+    global CUTAPP
     #temporal patch
+    print(CUTAPP)
     urdtobit = {28:2, 22:4, 23:8, 24:10, 25:20, 26:40, 30:80}
     fpath = "/home/andrey/ART-XC/sandbox/artxc_quicklook/newshadowmask/newopenpix%02d.fits" % urdtobit[urdn]
-    return np.logical_not(fits.getdata(fpath, 1).astype(np.bool))
+    mask = np.logical_not(fits.getdata(fpath, 1).astype(np.bool))
+    if not CUTAPP is None:
+        x, y = np.mgrid[0:48:1, 0:48:1] + 0.5
+        maskapp = (OPAXOFFSET[urdn][0] - x)**2. + (OPAXOFFSET[urdn][1] - y)**2. < CUTAPP**2.
+        mask = np.logical_and(mask, maskapp)
+    return mask
 
 def get_shadowmask(urdfile):
     return get_shadowmask_by_urd(urdfile["EVENTS"].header["URDN"])
@@ -57,7 +66,11 @@ def get_energycal(urdfile):
     return get_energycal_by_urd(urdfile["EVENTS"].header["URDN"])
 
 def get_backprofile_by_urdn(urdn):
-    return fits.getdata(get_relevat_file("BKG", URDTOTEL[urdn]), 0)
+    global FLATBKG
+    bkg = fits.getdata(get_relevat_file("BKG", URDTOTEL[urdn]), 0)
+    if FLATBKG:
+        bkg = np.ones(bkg.shape)*bkg.mean()
+    return bkg
 
 def get_backprofile(urdfile):
     return get_backprofile_by_urdn(urdfile["EVENTS"].header["URDN"])

@@ -1,5 +1,5 @@
 from .caldb import ARTQUATS
-from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist
+from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttInvHist
 from .vignetting import make_vignetting_for_urdn, make_overall_vignetting
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from .telescope import URDNS
@@ -29,7 +29,8 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}):
             exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti)
             vmap = make_overall_vignetting()
             print("produce overall urds expmap")
-            emap = AttWCSHist.make_mp(vmap, exptime, qval, wcs, mpnum)
+            #emap = AttWCSHist.make_mp(vmap, exptime, qval, wcs, mpnum)
+            emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum)
             print("\ndone!")
     for urd in urdgtis:
         gti = urdgtis[urd] & -overall_gti
@@ -40,7 +41,9 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}):
         exptime, qval, locgti = hist_orientation_for_attdata(attdata*ARTQUATS[urd], gti, \
                                                              dtcorr.get(urd, lambda x: 1))
         vmap = make_vignetting_for_urdn(urd)
-        emap = AttWCSHist.make_mp(vmap, exptime, qval, wcs,  mpnum) + emap
+        #emap = AttWCSHist.make_mp(vmap, exptime, qval, wcs,  mpnum) + emap
+        emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum) + emap
+        #emap = AttWCSHist.make_mp(vmap, exptime, qval, wcs,  mpnum) + emap
         print(" done!")
     return emap
 

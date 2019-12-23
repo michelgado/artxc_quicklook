@@ -1,5 +1,5 @@
 from .caldb import ARTQUATS
-from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttWCSHistmean, AttWCSHistinteg, convolve_profile
+from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttWCSHistmean, AttWCSHistinteg, convolve_profile, AttInvHist
 from .vignetting import make_vignetting_for_urdn, make_overall_vignetting
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from .caldb import get_backprofile_by_urdn, get_shadowmask_by_urd
@@ -59,7 +59,7 @@ def make_overall_background_map(subgrid=10, useshadowmask=True):
     bkgmap = RegularGridInterpolator((x[:, 0], y[0]), newvmap, bounds_error=False, fill_value=0)
     return bkgmap
 
-def make_bkgmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, time_corr={}, subscale=6):
+def make_bkgmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, time_corr={}, subscale=10):
     """
     produce exposure map on the provided wcs area, with provided GTI and attitude data
 
@@ -93,13 +93,14 @@ def make_bkgmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, time_corr={}, subsca
                                                      time_corr.get(urd, lambda x: 1.))
         print("processed exposure", gti.exposure, exptime.sum())
         bkgmap = make_background_det_map_for_urdn(urd)
-        bkg = AttWCSHistmean.make_mp(bkgmap, exptime, qval, wcs, mpnum, subscale=subscale) + bkg
+        #bkg = AttWCSHistmean.make_mp(bkgmap, exptime, qval, wcs, mpnum, subscale=subscale) + bkg
+        bkg = AttInvHist.make_mp(wcs, bkgmap, exptime, qval,  mpnum) + bkg
         print("done!")
 
     if wcs.wcs.has_cd():
-        scale = np.linalg.det(wcs.wcs.cd)/(45./3600.)**2.
+        scale = np.linalg.det(wcs.wcs.cd)/dxya**2.
     else:
-        scale = wcs.wcs.cdelt[0]*wcs.wcs.cdelt[1]/(45./3600.)**2.
+        scale = wcs.wcs.cdelt[0]*wcs.wcs.cdelt[1]/dxya**2.
     return bkg*scale
 
 def make_quick_bkgmap_for_wcs(wcs, attdata, urdgtis, time_corr={}):

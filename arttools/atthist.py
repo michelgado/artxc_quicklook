@@ -1,7 +1,7 @@
 from .time import make_ingti_times, deadtime_correction, GTI, tGTI
 from .orientation import quat_to_pol_and_roll, pol_to_vec, vec_to_pol, get_wcs_roll_for_qval
 from .caldb import ARTQUATS
-from ._det_spatial import DL, offset_to_vec
+from ._det_spatial import DL, offset_to_vec, vec_to_offset_pairs, vec_to_offset
 from .telescope import OPAX
 import healpy
 
@@ -106,11 +106,19 @@ def hist_by_roll_for_attdata(attdata, gti=tGTI, timecorrection=lambda x:1., wcs=
 
     idx = np.argsort(roll)
     ra, dec, qval, dtn, roll = ra[idx], dec[idx], qval[idx], dtn[idx], roll[idx]
-    import matplotlib.pyplot as plt
-    plt.hist(roll, 128)
-    plt.show()
-    segments = roll.searchsorted(np.linspace(0., 360., 721))
-    return [(ra[s:e], dec[s:e], dtn[s:e]) for s, e in zip(segments[:-1], segments[1:])]
+    rs = np.linspace(0., 360., 721)
+    rsc = (rs[1:] + rs[:-1])/2.
+    se = roll.searchsorted(rs)
+    return [(ra[se[i]:se[i+1]], dec[se[i]:se[i+1]], dtn[se[i]:se[i+1]], rsc[i]) for i in range(rsc.size) if se[i] != se[i + 1]]
+
+
+def make_convolve_with_roll(*args):
+    ra, dec, dt, roll, profile, locwcs = args
+    x, y = locwcs.all_world2pix(np.array([ra*180./pi, dec*180./pi]).T, 1.).T
+    timg = np.histogram2d(x, y, [np.arange(locwcs.wcs.crpix[0]*2 + 2) + 0.5,
+                                 np.arange(locwcs.wcs.crpix[1]*2 + 2) + 0.5])[0].T
+    locbkg = ndimage.rotate(profile, roll)
+    img = ndimage.convolve(timg, locbkg) + img
 
 
 def convolve_profile(attdata, locwcs, profile, gti=tGTI, timecorrection=lambda x: 1.):
@@ -123,7 +131,6 @@ def convolve_profile(attdata, locwcs, profile, gti=tGTI, timecorrection=lambda x
     wcsax = wcsax/np.sqrt(np.sum(wcsax**2.))
     """
     rolls = hist_by_roll_for_attdata(attdata, gti, timecorrection, locwcs)
-    print("llength of roll", len(rolls))
     xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
     img = 0.
     for i in range(len(rolls)):
@@ -437,4 +444,67 @@ class AttCircHist(AttHist):
         qout = Queue(2)
         pool = [Process(target=cls(vmap, qin, qout, dvec=dvec, rapp=rapp)) for i in range(mpnum)]
         resimg = cls.trace_and_collect(exptime, qvals, qin, qout, pool, cls.accumulate)
+        return resimg
+
+
+class AttInvHist(object):
+
+    def __init__(self, vmap, qin, qout, locwcs):
+        self.qin = qin
+        self.qout = qout
+        self.vmap = vmap
+        self.locwcs = locwcs
+        corners = np.array([-24, 24, 24, -24])*DL
+        self.corners = offset_to_vec(corners, np.roll(corners, 1))
+        self.corners = self.corners/np.sqrt(np.sum(self.corners**2., axis=1))[:, np.newaxis]
+        self.img = np.zeros((int(self.locwcs.wcs.crpix[1]*2 + 1),
+                             int(self.locwcs.wcs.crpix[0]*2 + 1)), np.double)
+        self.y, self.x = np.mgrid[1:self.img.shape[0] + 1:1, 1:self.img.shape[1] + 1:1]
+
+    def __call__(self):
+        while True:
+            vals = self.qin.get()
+            if vals == -1:
+                break
+            qval, exptime = vals
+            ra, dec = vec_to_pol(qval.apply(self.corners))
+            x, y = self.locwcs.all_world2pix(np.array([ra, dec]).T*180./pi, 1).T
+            jl, jr = max(int(x.min()), 0), min(self.img.shape[1], int(x.max()+1))
+            il, ir = max(int(y.min()), 0), min(self.img.shape[0], int(y.max()+1))
+            x, y = self.x[il:ir + 1, jl: jr + 1], self.y[il: ir + 1, jl: jr + 1]
+            ra, dec = self.locwcs.all_pix2world(np.array([x.ravel(), y.ravel()]).T, 1).T
+            vecs = pol_to_vec(ra*pi/180., dec*pi/180.)
+            xl, yl = vec_to_offset(qval.apply(vecs, inverse=True))
+            self.img[il:ir+1, jl:jr+1] += self.vmap((xl, yl)).reshape(x.shape)*exptime
+
+        self.qout.put(self.img)
+
+    @staticmethod
+    def trace_and_collect(exptime, qvals, qin, qout, pool, accumulate, *args):
+        for proc in pool:
+            proc.start()
+
+        for i in range(exptime.size):
+            qin.put([qvals[i], exptime[i]])
+            sys.stderr.write('\rdone {0:%}'.format(i/exptime.size))
+
+        for p in pool:
+            qin.put(-1)
+
+        res = accumulate(qout, len(pool), *args)
+
+        for p in pool:
+            p.join()
+        return res
+
+    @staticmethod
+    def accumulate(qout, size, *args):
+        return sum(qout.get() for i in range(size))
+
+    @classmethod
+    def make_mp(cls, locwcs, vmap, exptime, qvals, *args, mpnum=MPNUM, **kwargs):
+        qin = Queue(100)
+        qout = Queue(2)
+        pool = [Process(target=cls(vmap, qin, qout, locwcs, **kwargs)) for i in range(mpnum)]
+        resimg = cls.trace_and_collect(exptime, qvals, qin, qout, pool, cls.accumulate, *args)
         return resimg

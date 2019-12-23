@@ -15,13 +15,15 @@ OPAX = np.array([1, 0, 0])
 
 def to_2pi_range(val): return val%(2.*pi)
 
+
 def vec_to_pol(phvec):
     dec = np.arctan(phvec[...,2]/np.sqrt(phvec[...,0]**2. + phvec[...,1]**2.))
     ra = (np.arctan2(phvec[...,1], phvec[...,0])%(2.*pi))
     return ra, dec
 
+
 def pol_to_vec(phi, theta):
-    vec = np.empty(theta.shape + (3,), np.double)
+    vec = np.empty((tuple() if not type(theta) is np.ndarray else theta.shape) + (3,), np.double)
     vec[..., 0] = np.cos(theta)*np.cos(phi)
     vec[..., 1] = np.cos(theta)*np.sin(phi)
     vec[..., 2] = np.sin(theta)
@@ -104,9 +106,6 @@ class AttDATA(SlerpWithNaiveIndexing):
         ut, uidx = np.unique(tlist, return_index=True)
         return cls(ut, Rotation(qlist[uidx]), gti=tgti)
 
-
-
-
 def read_gyro_fits(gyrohdu):
     gyrodata = gyrohdu.data
     quats = np.array([gyrodata["QORT_%d" % i] for i in [1,2,3,0]]).T
@@ -140,7 +139,6 @@ def get_raw_bokz(bokzhdu):
     qbokz = Rotation.from_dcm(mat[mask])*qbokz0*qrot0
     jyear = get_hdu_times(bokzhdu).jyear[mask]
     return bokzdata["TIME"][mask], earth_precession_quat(jyear).inv()*qbokz
-
 
 def get_photons_vectors(urddata, URDN, attdata, subscale=1):
     if not np.all(attdata.gti.mask_outofgti_times(urddata["TIME"])):
@@ -185,7 +183,6 @@ def extract_raw_gyro(gyrodata, qadd=Rotation([0, 0, 0, 1])):
     qfin = get_gyro_quat(gyrodata)*qadd
     return quat_to_pol_and_roll(qfin)
 
-
 def earth_precession_quat(jyear):
     """
     taken from astropy.coordinates.earth_orientation
@@ -227,7 +224,6 @@ def get_axis_movement_speed(attdata):
     vecs = attdata(te).apply(OPAX)
     dalphadt = np.arccos(np.sum(vecs[:-1]*vecs[1:], axis=1))/dt*180./pi*3600.
     return tc, dt, dalphadt
-
 
 def get_angular_speed(vecs, time):
     dt = (time[1:] - time[:-1])
