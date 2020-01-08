@@ -191,8 +191,8 @@ tGTI = GTI([-np.inf, np.inf])
 emptyGTI = GTI([])
 
 
-def get_gti(ffile):
-    gti = GTI(np.array([ffile["GTI"].data["START"], ffile["GTI"].data["STOP"]]).T)
+def get_gti(ffile, gtiextname="GTI"):
+    gti = GTI(np.array([ffile[gtiextname].data["START"], ffile[gtiextname].data["STOP"]]).T)
     gti.merge_close_intervals(0.5)
     return gti & make_hv_gti(ffile["HK"].data)
 
@@ -328,8 +328,10 @@ def deadtime_correction(urdhk):
     n = c/(1 - c\tau)
     """
     ts = urdhk["TIME"]
-    tcrate = (urdhk["EVENTS"][1:] - urdhk["EVENTS"][:-1])/(ts[1:] - ts[:-1])
-    dtcorr = interp1d((ts[1:] + ts[:-1])/2., (1. - ARTDEADTIME*tcrate),
+    dt = (ts[1:] - ts[:-1])
+    mask = (dt > 1.) & (urdhk["EVENTS"][1:] > urdhk["EVENTS"][:-1])
+    tcrate = (urdhk["EVENTS"][1:] - urdhk["EVENTS"][:-1])/dt
+    dtcorr = interp1d((ts[1:] + ts[:-1])[mask]/2., (1. - ARTDEADTIME*tcrate[mask]),
                       bounds_error=False, fill_value=(1. - ARTDEADTIME*np.median(tcrate)))
     return dtcorr
 

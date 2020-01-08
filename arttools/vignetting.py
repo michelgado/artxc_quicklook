@@ -10,23 +10,37 @@ from math import log10, pi, sin, cos
 
 TINY = 1e-15
 
-def make_vignetting_for_urdn(urdn, energy=6., phot_index=None,
-                             useshadowmask=True, ignoreedgestrips=True):
+def make_vignetting_for_urdn(urdn, energy=7.2001, phot_index=None,
+                             useshadowmask=True, ignoreedgestrips=True,
+                             emin=0, emax=np.inf):
     vignfile = get_vigneting_by_urd(urdn)
+    #TO DO: put max eff area in CALDB
+    norm = 65.71259133631082 # = np.max(vignfile["5 arcmin PSF"].data["EFFAREA"])
+
 
     efint = interp1d(vignfile["5 arcmin PSF"].data["E"],
                      vignfile["5 arcmin PSF"].data["EFFAREA"],
                      axis=0)
 
     if not phot_index is None:
-        vignmap = cumtrapz(vignfile["5 arcmin PSF"].data["EFFAREA"]*\
-                           vignfile["5 arcmin PSF"].data["E"]**(-phot_index),
-                           vignfile["5 arcmin PSF"].data["E"],
-                           axis=0)
+        s, e = np.searchsorted(vignfile["5 arcmin PSF"].data["E"], [emin, emax])
+        es = np.copy(vignfile["5 arcmin PSF"].data["E"][s: e])
+        vmap = np.copy(vignfile["5 arcmin PSF"].data["EFFAREA"][s:e])
+        de = es[1:] - es[:-1]
+        if phot_index != 1:
+            vignmap = np.sum(vmap[:-1] - vmap[1:]*(es[:-1]/de)[:, np.newaxis, np.newaxis] + \
+                             vmap[1:]/(2. - phot_index)*\
+                             ((es[1:]**(2. - phot_index) - es[:-1]**(2. - phot_index))/de)[:, np.newaxis, np.newaxis], axis=0)*\
+                            (1. - phot_index)/(es[-1]**(1. - phot_index) - es[0]**(1. - phot_index))
+        else:
+            vignmap = np.sum(vmap[:-1] - vmap[1:]*(es[:-1]/de)[:, np.newaxis, np.newaxis] + \
+                             vmap[1:], axis=0)/np.log(es[-1]/es[0])
+
     else:
         vignmap = efint(energy)
 
-    vignmap = vignmap/vignmap.max()
+    vignmap = vignmap/norm
+    print("check vignetting map:", vignmap.max())
 
     x = np.tan(vignfile["Offset angles"].data["X"]*pi/180/60.)*F + (24. - OPAXOFFSET[urdn][0])*DL
     y = np.tan(vignfile["Offset angles"].data["Y"]*pi/180/60.)*F + (24. - OPAXOFFSET[urdn][1])*DL
@@ -46,8 +60,9 @@ def make_vignetting_for_urdn(urdn, energy=6., phot_index=None,
     return vmap
 
 
-def make_overall_vignetting(energy=6., phot_index=None, useshadowmask=True,
-                            subgrid=20, urdweights={urdn:1. for urdn in URDNS}):
+def make_overall_vignetting(energy=6., *args,
+                            subgrid=20, urdweights={urdn:1. for urdn in URDNS},
+                            **kwargs):
     if subgrid < 1:
         print("ahtung! subgrid defines splines of the translation of multiple vigneting file into one map")
         print("set subgrid to 2")
@@ -78,7 +93,7 @@ def make_overall_vignetting(energy=6., phot_index=None, useshadowmask=True,
     vecs = offset_to_vec(np.ravel(x), np.ravel(y))
 
     for urdn in URDNS:
-        vmap = make_vignetting_for_urdn(urdn, energy, phot_index, useshadowmask)
+        vmap = make_vignetting_for_urdn(urdn, energy, *args, **kwargs)
         quat = ARTQUATS[urdn]
         newvmap += vmap(vec_to_offset_pairs(quat.apply(vecs, inverse=True))).reshape(shape)*urdweights.get(urdn, 1.)
 

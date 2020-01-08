@@ -1,8 +1,10 @@
 from .time import make_ingti_times, deadtime_correction, GTI, tGTI
-from .orientation import quat_to_pol_and_roll, pol_to_vec, vec_to_pol, get_wcs_roll_for_qval
+from .orientation import quat_to_pol_and_roll, pol_to_vec, \
+    vec_to_pol, get_wcs_roll_for_qval, get_survey_mode_rotation_plane, align_with_z_quat
 from .caldb import ARTQUATS
 from ._det_spatial import DL, offset_to_vec, vec_to_offset_pairs, vec_to_offset
 from .telescope import OPAX
+from .mask import edges as medges
 import healpy
 
 from scipy.spatial.transform import Rotation, Slerp
@@ -10,7 +12,7 @@ from scipy.spatial import ConvexHull
 from scipy.optimize import minimize
 from astropy.coordinates import SkyCoord
 from astropy.wcs import WCS
-from math import cos, sin, pi
+from math import cos, sin, pi, sqrt
 import numpy as np
 from scipy import ndimage
 import sys
@@ -149,8 +151,6 @@ def convolve_profile(attdata, locwcs, profile, gti=tGTI, timecorrection=lambda x
         #plt.imshow(timg)
         #plt.show()
 
-
-
         print("rotate on roll angle", roll)
         locbkg = ndimage.rotate(profile, roll)
         print("rotate image")
@@ -270,6 +270,72 @@ def make_wcs_for_attdata(attdata, gti=tGTI):
     locgti = gti & attdata.gti
     qvtot = attdata(attdata.times[locgti.mask_outofgti_times(attdata.times)])
     return make_wcs_for_quats(qvtot)
+
+def split_survey_mode(attdata, gti=tGTI):
+    aloc = attdata.apply_gti(gti)
+    rpvec = get_survey_mode_rotation_plane(aloc)
+    rquat = align_with_z_quat(rpvec)
+    amin = np.argmin(vec_to_pol(aloc(aloc.times).apply([1, 0, 0]))[0])
+    print(amin)
+    """
+    zeropoint = [1, 0, 0] - rpvec*rpvec[0]
+    print(zeropoint)
+    #zeropoint = np.cross(rpvec, [0, 1, 0])
+    zeropoint = zeropoint/sqrt(np.sum(zeropoint**2.))
+    """
+    zeropoint = rquat.apply(aloc([aloc.times[amin],])[0].apply([1, 0, 0]))
+    alpha0 = np.arctan2(zeropoint[1], zeropoint[0])
+
+    vecs = aloc(aloc.times).apply([1, 0, 0])
+    vecsz = rquat.apply(vecs)
+    alpha = (np.arctan2(vecsz[:, 1], vecsz[:, 0]) - alpha0)%(2.*pi)
+    edges = np.linspace(0., 2.*pi, 37)
+    gtis = [medges((alpha > e1) & (alpha < e2)) + [0, -1] for e1, e2 in zip(edges[:-1], edges[1:])]
+    return [GTI(aloc.times[m]) for m in gtis]
+
+
+def make_wcs_for_survey(attdata, gti=tGTI, pixsize=20./3600.):
+    rpvec = get_survey_mode_rotation_plane(attdata, gti)
+
+def make_wcs_for_survey_mode(attdata, gti=None, rpvec=None, pixsize=20./3600.):
+    aloc = attdata.apply_gti(gti) if not gti is None else attdata
+
+    if rpvec is None: rpvec = get_survey_mode_rotation_plane(aloc)
+
+    cvec = aloc(aloc.times).apply([1, 0, 0])
+    cvec = cvec.mean(axis=0)
+    cvec = cvec/np.sqrt(np.sum(cvec**2.))
+    xvec = np.cross(cvec, rpvec)
+    xvec = xvec/np.sqrt(np.sum(xvec**2.))
+
+    alpha = np.arctan2(xvec[2], rpvec[2])
+
+    locwcs = WCS(naxis=2)
+    cdmat = np.array([[cos(alpha), -sin(alpha)], [sin(alpha), cos(alpha)]])
+    locwcs.wcs.pc = cdmat
+    locwcs.wcs.cdelt = [pixsize, pixsize]
+    locwcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    rac, decc = vec_to_pol(cvec)
+    locwcs.wcs.crval = [rac*180./pi, decc*180./pi]
+
+    vecs = aloc(aloc.times).apply([1, 0, 0])
+    yproj = np.sum(rpvec*vecs, axis=1)
+    yangles = np.arcsin(yproj)*pi/180./pixsize
+    xangles = np.arccos(np.sum(cvec*(vecs - yproj[:, np.newaxis]*rpvec[np.newaxis, :]), axis=1))/pi*180./pixsize
+    yangles = np.arccos(np.sum(rpvec*vecs, axis=1))/pi*180./pixsize
+    xmin, xmax = xangles.min(), xangles.max()
+    ymin, ymax = yangles.min(), yangles.max()
+    print(xmin, xmax, ymin, ymax)
+    rasize = max(abs(xmin), abs(xmax))
+    desize = max(abs(ymin), abs(ymax))
+    rasize = rasize - rasize%2 + 1
+    desize = desize - desize%2 + 1
+
+    locwcs.wcs.radesys = "FK5"
+    locwcs.wcs.crpix = [rasize, desize]
+
+    return locwcs
+
 
 
 class AttHist(object):

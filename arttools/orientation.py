@@ -1,9 +1,10 @@
 from scipy.spatial.transform import Rotation, Slerp
 import numpy as np
-from math import pi, cos, sin
+from math import pi, cos, sin, sqrt
 from ._det_spatial import urd_to_vec
-from .time import get_hdu_times, GTI
+from .time import get_hdu_times, GTI, tGTI
 from .caldb import ARTQUATS
+from .mask import edges as medges
 from functools import reduce
 
 T0 = 617228538.1056 #first day of ART-XC work
@@ -140,6 +141,7 @@ def get_raw_bokz(bokzhdu):
     jyear = get_hdu_times(bokzhdu).jyear[mask]
     return bokzdata["TIME"][mask], earth_precession_quat(jyear).inv()*qbokz
 
+
 def get_photons_vectors(urddata, URDN, attdata, subscale=1):
     if not np.all(attdata.gti.mask_outofgti_times(urddata["TIME"])):
         raise ValueError("some events are our of att gti")
@@ -222,10 +224,35 @@ def get_axis_movement_speed(attdata):
     tc = ((te[1:] + te[:-1])/2.)[mgaps]
     dt = (te[1:] - te[:-1])[mgaps]
     vecs = attdata(te).apply(OPAX)
-    dalphadt = np.arccos(np.sum(vecs[:-1]*vecs[1:], axis=1))/dt*180./pi*3600.
+    dalphadt = np.arccos(np.sum(vecs[:-1]*vecs[1:], axis=1))[mgaps]/dt*180./pi*3600.
     return tc, dt, dalphadt
 
 def get_angular_speed(vecs, time):
     dt = (time[1:] - time[:-1])
     dalphadt = np.arccos(np.sum(vecs[:-1]*vecs[1:], axis=1))/dt*180./pi*3600.
     return (time[1:] + time[:-1])/2., dt, dalphadt
+
+def get_survey_mode_rotation_plane(attdata, gti=None): #tGTI):
+    aloc = attdata.apply_gti(gti) if not gti is None else attdata
+    tc, dt, dalphadt = get_axis_movement_speed(aloc)
+    me = medges((dalphadt > 60) & (dalphadt < 100)) + [0, -1]
+    gtisurv = GTI(tc[me] + dt[me]*[-0.5, 0.5])
+    te, mgaps = gtisurv.make_tedges(np.arange(aloc.times[0], aloc.times[-1] + 299.999, 300))
+    mask = np.ones(te.size)
+    vecs = aloc(te).apply(OPAX)
+    #mp = np.sum(vecs[1:]*vecs[:-1], axis=1) < cos(pi/180.)
+    vort = np.cross(vecs[1:], vecs[:-1]) #[mp]
+    vort = vort/np.sqrt(np.sum(vort**2, axis=1))[:, np.newaxis]
+    vortmean = np.mean(vort, axis=0)
+    vortmean = vortmean/sqrt(np.sum(vortmean**2))
+    return vortmean
+
+def align_with_z_quat(vec):
+    vec = vec/sqrt(np.sum(vec**2.))
+    vrot = np.cross(vec, [0, 0, 1])
+    vrot = vrot/sqrt(np.sum(vrot**2.))
+    alpha = np.arccos(vec[2])
+    q = np.empty(4, np.double)
+    q[:3] = vrot*sin(alpha/2.)
+    q[3] = cos(alpha/2.)
+    return Rotation(q)

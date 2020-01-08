@@ -10,7 +10,7 @@ import numpy as np
 MPNUM = cpu_count()
 
 
-def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}):
+def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs):
     """
     produce exposure map on the provided wcs area, with provided GTI and attitude data
 
@@ -40,10 +40,8 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}):
         print("urd %d progress:" % urd)
         exptime, qval, locgti = hist_orientation_for_attdata(attdata*ARTQUATS[urd], gti, \
                                                              dtcorr.get(urd, lambda x: 1))
-        vmap = make_vignetting_for_urdn(urd)
-        #emap = AttWCSHist.make_mp(vmap, exptime, qval, wcs,  mpnum) + emap
+        vmap = make_vignetting_for_urdn(urd, **kwargs)
         emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum) + emap
-        #emap = AttWCSHist.make_mp(vmap, exptime, qval, wcs,  mpnum) + emap
         print(" done!")
     return emap
 

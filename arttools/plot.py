@@ -1,12 +1,12 @@
 import numpy as np
 from astropy.wcs import WCS
 from ._det_spatial import get_shadowed_pix_mask_for_urddata
-from .time import get_gti, GTI, tGTI, emptyGTI
+from .time import get_gti, GTI, tGTI, emptyGTI, deadtime_correction
 from .atthist import hist_orientation_for_attdata, make_wcs_for_attdata
-from .caldb import get_energycal, get_shadowmask
+from .caldb import get_energycal, get_shadowmask, get_energycal_by_urd, get_shadowmask_by_urd
 from .energy import get_events_energy
 from .telescope import URDNS
-from .orientation import get_photons_sky_coord
+from .orientation import get_photons_sky_coord, read_gyro_fits, read_bokz_fits, AttDATA
 from astropy.io import fits
 from math import pi, cos, sin
 from multiprocessing import Pool, cpu_count, Queue, Process, Pipe
@@ -20,6 +20,15 @@ from .lightcurve import get_overall_countrate
 from .background import make_bkgmap_for_wcs
 from scipy.interpolate import interp1d
 from matplotlib.colors import LogNorm
+from functools import reduce
+
+urdbkgsc = {28: 1.0269982359153347,
+            22: 0.9461951470620872,
+            23: 1.029129860773177,
+            24: 1.0385034889253482,
+            25: 0.9769294100898714,
+            26: 1.0047417556512688,
+            30: 0.9775021015829128}
 
 
 class NoDATA(Exception):
@@ -36,26 +45,25 @@ def make_events_mask(minenergy=4., maxenergy=12., minflag=-1, ):
 
 standard_events_mask = make_events_mask(minenergy=4., maxenergy=12.)
 
-
-def make_energies_flags_and_grades(urdfile):
-    urddata = np.copy(urdfile["EVENTS"].data)
+def make_energies_flags_and_grades(urddata, urdhk, urdn):
     flag = np.zeros(urddata.size, np.uint8)
-    URDN = urdfile["EVENTS"].header["URDN"]
-    caldbfile = get_energycal(urdfile)
-    shadow = get_shadowmask(urdfile)
+    shadow = get_shadowmask_by_urd(urdn)
+    caldbfile = get_energycal_by_urd(urdn)
     maskshadow = get_shadowed_pix_mask_for_urddata(urddata, shadow)
     flag[np.logical_not(maskshadow)] = 2
     flag[np.any([urddata["RAW_X"] == 0, urddata["RAW_X"] == 47, \
                  urddata["RAW_Y"] == 0, urddata["RAW_Y"] == 47], axis=0)] = 3
-    energy, xc, yc, grade = get_events_energy(urddata, np.copy(urdfile["HK"].data), caldbfile)
-    return urddata, energy, grade, flag
+    energy, xc, yc, grade = get_events_energy(urddata, urdhk, caldbfile)
+    return energy, grade, flag
+
 
 def make_sky_image(urddata, urdn, attdata, locwcs, photsplitside=10):
     r, d = get_photons_sky_coord(urddata, urdn, attdata, photsplitside)
     x, y = locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1.).T
     img = np.histogram2d(x, y, [np.arange(locwcs.wcs.crpix[0]*2 + 2) + 0.5,
                                 np.arange(locwcs.wcs.crpix[1]*2 + 2) + 0.5])[0].T
-    return img/100.
+    print("divide by", photsplitside)
+    return img/photsplitside/photsplitside
 
 
 def make_efg_mask(gmin=-1, gmax=0, fmin=-1, fmax=1, emin=4., emax=12.):
@@ -66,85 +74,119 @@ def make_efg_mask(gmin=-1, gmax=0, fmin=-1, fmax=1, emin=4., emax=12.):
         return mask
     return make_mask
 
-def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti):
+
+def get_attdata(fname):
+    ffile = fits.open(fname)
+    attdata = read_gyro_fits(ffile["ORIENTATION"]) if "gyro" in fname else read_bokz_fits(ffile["ORIENTATION"])
+    attdata.times = attdata.times - (0.97 if "gyro" in fname else 1.55)
+    attdata.gti.arr = attdata.gti.arr - (0.97 if "gyro" in fname else 1.55)
+    return attdata
+
+def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti, outctsname, outbkgname, outexpmapname):
     """
     given two sets with paths to the urdfiles and corresponding attfiles,
     and gti as a dictionary, each key contains gti for particular urd
     the program produces overall count map and exposition map for this urdfiles set
     the wcs is produced automatically to cover nonzero exposition area with some margin
     """
-    attdata = sum(read_gyro_fits(fits.open(fname)["ORIENTATION"]) for fname in set(attflist))
-    attdata.apply_gti(gti + [-2, 2])
-    gti = attdata.gti - [-2, 2]
 
-    locwcs = make_wcs_for_attdata(attdata, gti)
+    attdata = AttDATA.concatenate([get_attdata(fname) for fname in set(attflist)])
+    #attdata usually has data points stored each 3 seconds so try here to obtaind attitude information for slightly longer time span
+    attdata.apply_gti(gti + [-3, 3])
+    gti = attdata.gti - [-3, 3]
+
+    locwcs = make_wcs_for_attdata(attdata, gti) #produce wcs for accumulated atitude information
     xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
     imgdata = np.zeros((ysize, xsize), np.double)
-    urdgtis = {URDN:emptyGTI for URDN in URDNS}
-    tetot = []
-    mgapstot = []
+    urdgti = {URDN:emptyGTI for URDN in URDNS}
+    urdhk = {}
+    urdbkg = {}
+    urdbkge = {}
 
     for urdfname in urdflist[:]:
-        try:
-            urdfile = fits.open(urdfname)
-            urdn = urdfile["EVENTS"].header["URDN"]
-            urdgti = get_gti(urdfile)
-            urdgti = (urdgti & -urdgtis[urdn]) & attdata.gti
-            urddata, energy, grade, flag = make_energies_flags_and_grades(urdfile)
-            stdmask = make_efg_mask()
-            gtimask = urdgti.mask_outofgti_times(urddata["TIME"])
-            imgdata = urddata[stdmask(urddata, energy, grade, flag) & gtimask]
-            timg = make_sky_image(urddata, urdn, attdata, locwcs)
-            """
-            bkgmask = make_efg_mask(emin=40., emax=100., fmax=3)
-            bkgts = urddata["TIME"][bkgmask & gtimask]
-            idx = bkgts.searchsorted(urdgti.arr)
-            cloc = (idx[:, 1] - idx[:, 0])//1000 + 2
-            te = np.concatenate([np.linspace(gti[i, 0], gti[i, 1], cloc[i]) for i in range(cloc.size)])
-            """
-            urdgtis[urdn] = urdgtis[urdn] & urdgti
-        except NoDATA as nd:
-            print(nd)
-        else:
-            imgdata += timg
-            img = fits.ImageHDU(data=imgdata, header=locwcs.to_header())
-            h1 = fits.PrimaryHDU(header=locwcs.to_header())
-            lhdu = fits.HDUList([h1, img])
-            lhdu.writeto("tmpctmap.fits.gz", overwrite=True)
-            urdgti[urdn] = np.concatenate([urdgti.get(urdn, np.empty((0, 2), np.double)), locgti])
+        urdfile = fits.open(urdfname)
+        urdn = urdfile["EVENTS"].header["URDN"]
+        print("processing:", urdfname)
+        #print("overall urd exposure", get_gti(urdfile, "STDGTI").exposure)
+        locgti = (get_gti(urdfile, "STDGTI") if "STDGTI" in urdfile else get_gti(urdfile)) & gti & attdata.gti & -urdgti.get(urdn, emptyGTI)
+        locgti.merge_joint()
+        print("exposure in GTI:", locgti.exposure)
+        if locgti.exposure == 0.:
+            continue
+        urdgti[urdn] = urdgti.get(urdn, emptyGTI) | locgti
 
-    emap = make_expmap_for_wcs(locwcs, attall, urdgti)
-    emap = fits.ImageHDU(data=emap, header=locwcs.to_header())
-    h1 = fits.PrimaryHDU(header=locwcs.to_header())
-    ehdu = fits.HDUList([h1, emap])
-    ehdu.writeto("tmpemap.fits.gz", overwrite=True)
+        urddata = np.copy(urdfile["EVENTS"].data) #hint: do not apply bool mask to a fitsrec - it's a stright way to the memory leak :)
+        urddata = urddata[locgti.mask_outofgti_times(urddata["TIME"])]
 
+        hkdata = np.copy(urdfile["HK"].data)
+        hkdata = hkdata[(locgti + [-30, 30]).mask_outofgti_times(hkdata["TIME"])]
+        urdhk[urdn] = urdhk.get(urdn, []) + [hkdata,]
 
-def make_expmap_for_urd(urdfile, attfile, locwcs, agti=None):
+        energy, grade, flag = make_energies_flags_and_grades(urddata, hkdata, urdn)
+        pickimg = np.all([energy > 4., energy < 11.2, grade > -1, grade < 10, flag == 0], axis=0)
+        timg = make_sky_image(urddata[pickimg], urdn, attdata, locwcs, 1)
+        imgdata += timg
+
+        pickbkg = np.all([energy > 40., energy < 100., grade > -1, grade < 10, flag < 3], axis=0)
+        bkgevts = urddata["TIME"][pickbkg]
+        """
+        tsr = np.arange(locgti.arr[0, 0], locgti.arr[-1, 1] + 150., 200.)
+        te, mgaps = locgti.make_tedges(tsr)
+        dt = (te[1:] - te[:-1])[mgaps]
+        mgaps[mgaps] = dt > 50.
+        tse = (te[1:] + te[:-1])[mgaps]/2.
+        cs = bkgevts.searchsorted(te)
+        cr = (cs[1:] - cs[:-1])[mgaps]/(te[1:] - te[:-1])[mgaps]
+        urdbkg[urdn] = urdbkg.get(urdn, []) + [(tse, cr)]
+        """
+        urdbkge[urdn] = urdbkge.get(urdn, []) + [bkgevts,]
+
+    for urdn in urdgti:
+        print(urdn, urdgti[urdn].exposure)
+
+    img = fits.PrimaryHDU(header=locwcs.to_header(), data=imgdata)
+    img.writeto(outctsname, overwrite=True)
+
+    urdhk = {urdn:np.unique(np.concatenate(hklist)) for urdn, hklist in urdhk.items()}
+    urddtc = {urdn: deadtime_correction(hk) for urdn, hk in urdhk.items()}
+    tgti = reduce(lambda a, b: a & b, urdgti.values())
+    #print("tgti.exposure", tgti.exposure)
+    #print(tgti.arr)
+    te = np.concatenate([np.linspace(s, e, int((e-s)//100.) + 2) for s, e in tgti.arr])
+    #print(te.size)
+    mgaps = np.ones(te.size - 1, np.bool)
+    if tgti.arr.size > 2:
+        #print(np.cumsum([(int((e-s)//100.) + 2) for s, e in tgti.arr[:-1]]) - 1)
+        mgaps[np.cumsum([(int((e-s)//100.) + 2) for s, e in tgti.arr[:-1]]) - 1] = False
+        mgaps[te[1:] - te[:-1] < 10] = False
+
+    tevts = np.sort(np.concatenate([np.concatenate(e) for e in urdbkge.values()]))
+    rate = tevts.searchsorted(te)
+    rate = (rate[1:] - rate[:-1])[mgaps]/(te[1:] - te[:-1])[mgaps]
+    tc = (te[1:] + te[:-1])[mgaps]/2.
+    tm = np.sum(tgti.mask_outofgti_times(tevts))/tgti.exposure
+
+    urdbkg = {urdn: interp1d(tc, rate*urdbkgsc[urdn]/7.61, bounds_error=False, fill_value=tm*urdbkgsc[urdn]/7.62) for urdn in urdbkgsc}
+    #import pickle
+    #pickle.dump([tc, rate,  urdgti, urddtc], open("checkexp.pickle", "wb"))
+
     """
-    given the urdfile, attfile, wcs and gti produces exposition map in the wcs coordinates.
-    gti is generated from as an intesection of agti and urdfile gti
-    it is assumed implicitly, that locwcs crpix is a precise center of the produced exposition map
-    therefore the size of produced image is locwcs.wcs.crpix*2 + 1 (assuming crpix is odd)
+    for urdn in urdbkg:
+        tse, rate = zip(*urdbkg[urdn])
+        tse = np.concatenate(tse)
+        rate = np.concatenate(rate)
+        idx = np.argsort(tse)
+        tse = np.copy(tse[idx])
+        rate = np.copy(rate[idx])
+        urdbkg[urdn] = lambda x: np.ones(np.asarray(x).size, np.double) #interp1d(tse, rate, bounds_error=False, fill_value=np.median(rate))
     """
-    gti = np.array([urdfile["GTI"].data["START"], urdfile["GTI"].data["STOP"]]).T
-    gtiatt = np.array([attfile["ORIENTATION"].data["TIME"][[0, -1]]])
-    if not agti is None: gtiatt = gti_intersection(gtiatt, agti)
-    gti = gti_intersection(gtiatt, gti)
-    exptime, qval, gti = hist_orientation_for_attdata(attfile["ORIENTATION"].data, gti)
-    qval = qval*ART_det_QUAT[urdfile["EVENTS"].header["URDN"]]
-    """
-    to do: implement vignmap in caldb
-    """
-    vignfilename = "/srg/a1/work/andrey/art-xc_vignea.fits"
-    xsize = int(locwcs.wcs.crpix[0]*2 - 1)
-    ysize = int(locwcs.wcs.crpix[1]*2 - 1)
 
-    pool = Pool(24)
-    emap = sum(pool.imap_unordered(make_vignmap_mp,
-                [(locwcs, xsize, ysize, qval[i::50], exptime[i::50], vignfilename) for i in range(50)]))
-    return emap
-
+    emap = make_expmap_for_wcs(locwcs, attdata, urdgti, dtcorr=urddtc)
+    emap = fits.PrimaryHDU(data=emap, header=locwcs.to_header())
+    emap.writeto(outexpmapname, overwrite=True)
+    bmap = make_bkgmap_for_wcs(locwcs, attdata, urdgti, time_corr=urdbkg)
+    bmap = fits.PrimaryHDU(data=bmap, header=locwcs.to_header())
+    bmap.writeto(outbkgname, overwrite=True)
 
 if __name__ == "__main__":
     pass
