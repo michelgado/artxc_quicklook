@@ -30,7 +30,6 @@ urdbkgsc = {28: 1.0269982359153347,
             26: 1.0047417556512688,
             30: 0.9775021015829128}
 
-
 class NoDATA(Exception):
     pass
 
@@ -56,7 +55,6 @@ def make_energies_flags_and_grades(urddata, urdhk, urdn):
     energy, xc, yc, grade = get_events_energy(urddata, urdhk, caldbfile)
     return energy, grade, flag
 
-
 def make_sky_image(urddata, urdn, attdata, locwcs, photsplitside=10):
     r, d = get_photons_sky_coord(urddata, urdn, attdata, photsplitside)
     x, y = locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1.).T
@@ -64,7 +62,6 @@ def make_sky_image(urddata, urdn, attdata, locwcs, photsplitside=10):
                                 np.arange(locwcs.wcs.crpix[1]*2 + 2) + 0.5])[0].T
     print("divide by", photsplitside)
     return img/photsplitside/photsplitside
-
 
 def make_efg_mask(gmin=-1, gmax=0, fmin=-1, fmax=1, emin=4., emax=12.):
     def make_mask(urddata, energy, grade, flag):
@@ -74,7 +71,6 @@ def make_efg_mask(gmin=-1, gmax=0, fmin=-1, fmax=1, emin=4., emax=12.):
         return mask
     return make_mask
 
-
 def get_attdata(fname):
     ffile = fits.open(fname)
     attdata = read_gyro_fits(ffile["ORIENTATION"]) if "gyro" in fname else read_bokz_fits(ffile["ORIENTATION"])
@@ -82,20 +78,31 @@ def get_attdata(fname):
     attdata.gti.arr = attdata.gti.arr - (0.97 if "gyro" in fname else 1.55)
     return attdata
 
-def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti, outctsname, outbkgname, outexpmapname):
+def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
+                                  outctsname, outbkgname, outexpmapname,
+                                  urdbti = {}):
     """
     given two sets with paths to the urdfiles and corresponding attfiles,
     and gti as a dictionary, each key contains gti for particular urd
     the program produces overall count map and exposition map for this urdfiles set
     the wcs is produced automatically to cover nonzero exposition area with some margin
     """
-
     attdata = AttDATA.concatenate([get_attdata(fname) for fname in set(attflist)])
     #attdata usually has data points stored each 3 seconds so try here to obtaind attitude information for slightly longer time span
-    attdata.apply_gti(gti + [-3, 3])
-    gti = attdata.gti - [-3, 3]
+    attdata = attdata.apply_gti(gti + [-30, 30])
+    gti = attdata.gti & gti
 
     locwcs = make_wcs_for_attdata(attdata, gti) #produce wcs for accumulated atitude information
+    """
+    if locwcs.wcs.crpix[1] > locwcs.wcs.crpix[0]:
+        locwcs.wcs.crpix = locwcs.wcs.crpix[[1, 0]]
+        locwcs.wcs.pc = np.array(locwcs.wcs.pc)[:, ::-1]
+    """
+    print("locwcs", locwcs)
+    #lside = np.argmin(locwcs.wcs.crpix)
+    #locwcs.wcs.crpix[lside] = locwcs.wcs.crpix[lside]//2
+    #locwcs.wcs.crpix[lside] = locwcs.wcs.crpix[lside] + 1 - locwcs.wcs.crpix[lside]%2
+
     xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
     imgdata = np.zeros((ysize, xsize), np.double)
     urdgti = {URDN:emptyGTI for URDN in URDNS}
@@ -106,26 +113,41 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti, outctsname, outbkgnam
     for urdfname in urdflist[:]:
         urdfile = fits.open(urdfname)
         urdn = urdfile["EVENTS"].header["URDN"]
+        crate = (urdfile['HK'].data["EVENTS"][1:] - urdfile['HK'].data["EVENTS"][1:])/\
+            (urdfile["HK"].data["TIME"][1:] - urdfile['HK'].data["TIME"][:-1])
+
+        tchk = (urdfile["HK"].data["TIME"][1:] + urdfile['HK'].data["TIME"][:-1])/2.
+
         print("processing:", urdfname)
         #print("overall urd exposure", get_gti(urdfile, "STDGTI").exposure)
-        locgti = (get_gti(urdfile, "STDGTI") if "STDGTI" in urdfile else get_gti(urdfile)) & gti & attdata.gti & -urdgti.get(urdn, emptyGTI)
+        locgti = (get_gti(urdfile, "STDGTI") if "STDGTI" in urdfile else get_gti(urdfile)) & gti & -urdgti.get(urdn, emptyGTI) # & -urdbti.get(urdn, emptyGTI)
         locgti.merge_joint()
         print("exposure in GTI:", locgti.exposure)
+        locgti = locgti & -urdbti.get(urdn, emptyGTI)
+        if np.any(crate[(locgti + [-30, 30]).mask_outofgti_times(tchk)] > 200.):
+            print("skip due to bki")
+            continue
+
+        print("exposure after excluding BTI", locgti.exposure)
         if locgti.exposure == 0.:
             continue
+        print("Tstart, Tstop:", locgti.arr[[0, -1], [0, 1]])
         urdgti[urdn] = urdgti.get(urdn, emptyGTI) | locgti
 
         urddata = np.copy(urdfile["EVENTS"].data) #hint: do not apply bool mask to a fitsrec - it's a stright way to the memory leak :)
-        urddata = urddata[locgti.mask_outofgti_times(urddata["TIME"])]
+        urddata = urddata[(locgti + [-1000, 1000]).mask_outofgti_times(urddata["TIME"])]
 
         hkdata = np.copy(urdfile["HK"].data)
         hkdata = hkdata[(locgti + [-30, 30]).mask_outofgti_times(hkdata["TIME"])]
         urdhk[urdn] = urdhk.get(urdn, []) + [hkdata,]
 
         energy, grade, flag = make_energies_flags_and_grades(urddata, hkdata, urdn)
-        pickimg = np.all([energy > 4., energy < 11.2, grade > -1, grade < 10, flag == 0], axis=0)
-        timg = make_sky_image(urddata[pickimg], urdn, attdata, locwcs, 1)
-        imgdata += timg
+        pickimg = np.all([energy > 4., energy < 11.2, grade > -1, grade < 10, flag == 0, locgti.mask_outofgti_times(urddata["TIME"])], axis=0)
+        print(urdfname, "used events", pickimg.sum())
+        if np.any(pickimg):
+            timg = make_sky_image(urddata[pickimg], urdn, attdata, locwcs, 1)
+            print("total photon on img", timg.sum(), "selected events", pickimg.sum())
+            imgdata += timg
 
         pickbkg = np.all([energy > 40., energy < 100., grade > -1, grade < 10, flag < 3], axis=0)
         bkgevts = urddata["TIME"][pickbkg]
@@ -142,7 +164,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti, outctsname, outbkgnam
         urdbkge[urdn] = urdbkge.get(urdn, []) + [bkgevts,]
 
     for urdn in urdgti:
-        print(urdn, urdgti[urdn].exposure)
+        print("real time exposure", urdn, urdgti[urdn].exposure)
 
     img = fits.PrimaryHDU(header=locwcs.to_header(), data=imgdata)
     img.writeto(outctsname, overwrite=True)
@@ -166,7 +188,11 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti, outctsname, outbkgnam
     tc = (te[1:] + te[:-1])[mgaps]/2.
     tm = np.sum(tgti.mask_outofgti_times(tevts))/tgti.exposure
 
-    urdbkg = {urdn: interp1d(tc, rate*urdbkgsc[urdn]/7.61, bounds_error=False, fill_value=tm*urdbkgsc[urdn]/7.62) for urdn in urdbkgsc}
+
+    if tc.size == 0:
+        urdbkg = {urdn: lambda x: np.ones(x.size)*tm*urdbkgsc[urdn]/7.62 for urdn in urdbkgsc}
+    else:
+        urdbkg = {urdn: interp1d(tc, rate*urdbkgsc[urdn]/7.61, bounds_error=False, fill_value=tm*urdbkgsc[urdn]/7.62) for urdn in urdbkgsc}
     #import pickle
     #pickle.dump([tc, rate,  urdgti, urddtc], open("checkexp.pickle", "wb"))
 

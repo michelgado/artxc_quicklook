@@ -1,6 +1,6 @@
 from .time import make_ingti_times, deadtime_correction, GTI, tGTI
 from .orientation import quat_to_pol_and_roll, pol_to_vec, \
-    vec_to_pol, get_wcs_roll_for_qval, get_survey_mode_rotation_plane, align_with_z_quat
+    vec_to_pol, get_wcs_roll_for_qval, get_survey_mode_rotation_plane, align_with_z_quat, minimize_norm_to_survey
 from .caldb import ARTQUATS
 from ._det_spatial import DL, offset_to_vec, vec_to_offset_pairs, vec_to_offset
 from .telescope import OPAX
@@ -216,7 +216,6 @@ def min_area_wcs_for_vecs(vecs, pixsize=20./3600.):
                   (-xc*sin(alpha) + yc*cos(alpha))*r1
     rac, decc = vec_to_pol(eqquat.apply(vec1, inverse=True))
 
-
     locwcs = WCS(naxis=2)
     cdmat = np.array([[cos(alpha), -sin(alpha)], [sin(alpha), cos(alpha)]])
     locwcs.wcs.pc = cdmat
@@ -229,14 +228,13 @@ def min_area_wcs_for_vecs(vecs, pixsize=20./3600.):
     rasize = int((xmax - xmin + 0.2*pi/180.)*180./pi/pixsize)//2
     rasize = rasize + 1 - rasize%2
     locwcs.wcs.crpix = [rasize, desize]
-
     return locwcs
+
 
 def min_roll_wcs_for_quats(quats, pixsize=20./3600.):
     """
     now we want to find coordinate system on the sphere surface, in which most of the attitudes would have 0 roll angle
     """
-
     vecs = quats.apply([1, 0, 0])
     cvec, r1, r2, eqquat, cv_vecs, r, d = get_vecs_convex(vecs)
     rac, decc = vec_to_pol(cvec)
@@ -274,6 +272,7 @@ def make_wcs_for_attdata(attdata, gti=tGTI):
 def split_survey_mode(attdata, gti=tGTI):
     aloc = attdata.apply_gti(gti)
     rpvec = get_survey_mode_rotation_plane(aloc)
+    rpvec = minimize_norm_to_survey(aloc, rpvec)
     rquat = align_with_z_quat(rpvec)
     amin = np.argmin(vec_to_pol(aloc(aloc.times).apply([1, 0, 0]))[0])
     print(amin)
@@ -283,7 +282,10 @@ def split_survey_mode(attdata, gti=tGTI):
     #zeropoint = np.cross(rpvec, [0, 1, 0])
     zeropoint = zeropoint/sqrt(np.sum(zeropoint**2.))
     """
-    zeropoint = rquat.apply(aloc([aloc.times[amin],])[0].apply([1, 0, 0]))
+    zeropoint = aloc([aloc.times[amin],])[0].apply([1, 0, 0])
+    print(zeropoint, vec_to_pol(zeropoint), np.arctan2(zeropoint[1], zeropoint[0]))
+    zeropoint = rquat.apply(zeropoint)
+    print(zeropoint)
     alpha0 = np.arctan2(zeropoint[1], zeropoint[0])
 
     vecs = aloc(aloc.times).apply([1, 0, 0])
@@ -292,7 +294,6 @@ def split_survey_mode(attdata, gti=tGTI):
     edges = np.linspace(0., 2.*pi, 37)
     gtis = [medges((alpha > e1) & (alpha < e2)) + [0, -1] for e1, e2 in zip(edges[:-1], edges[1:])]
     return [GTI(aloc.times[m]) for m in gtis]
-
 
 def make_wcs_for_survey(attdata, gti=tGTI, pixsize=20./3600.):
     rpvec = get_survey_mode_rotation_plane(attdata, gti)

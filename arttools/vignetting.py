@@ -1,7 +1,7 @@
 from .caldb import get_shadowmask_by_urd, get_vigneting_by_urd, OPAXOFFSET
 from scipy.interpolate import interp1d, RegularGridInterpolator
 from scipy.integrate import cumtrapz
-from ._det_spatial import get_shadowed_pix_mask, offset_to_raw_xy, DL, F, \
+from ._det_spatial import offset_to_raw_xy, DL, F, \
     offset_to_vec, vec_to_offset_pairs, vec_to_offset
 from .telescope import URDNS
 from .caldb import ARTQUATS

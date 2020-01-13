@@ -1,11 +1,12 @@
 from scipy.spatial.transform import Rotation, Slerp
 import numpy as np
 from math import pi, cos, sin, sqrt
-from ._det_spatial import urd_to_vec
+from ._det_spatial import urd_to_vec, F, DL
 from .time import get_hdu_times, GTI, tGTI
 from .caldb import ARTQUATS
 from .mask import edges as medges
 from functools import reduce
+from scipy.optimize import minimize
 
 T0 = 617228538.1056 #first day of ART-XC work
 
@@ -16,12 +17,10 @@ OPAX = np.array([1, 0, 0])
 
 def to_2pi_range(val): return val%(2.*pi)
 
-
 def vec_to_pol(phvec):
     dec = np.arctan(phvec[...,2]/np.sqrt(phvec[...,0]**2. + phvec[...,1]**2.))
     ra = (np.arctan2(phvec[...,1], phvec[...,0])%(2.*pi))
     return ra, dec
-
 
 def pol_to_vec(phi, theta):
     vec = np.empty((tuple() if not type(theta) is np.ndarray else theta.shape) + (3,), np.double)
@@ -29,7 +28,6 @@ def pol_to_vec(phi, theta):
     vec[..., 1] = np.cos(theta)*np.sin(phi)
     vec[..., 2] = np.sin(theta)
     return vec
-
 
 class SlerpWithNaiveIndexing(Slerp):
     def __getitem__(self, idx):
@@ -141,7 +139,6 @@ def get_raw_bokz(bokzhdu):
     jyear = get_hdu_times(bokzhdu).jyear[mask]
     return bokzdata["TIME"][mask], earth_precession_quat(jyear).inv()*qbokz
 
-
 def get_photons_vectors(urddata, URDN, attdata, subscale=1):
     if not np.all(attdata.gti.mask_outofgti_times(urddata["TIME"])):
         raise ValueError("some events are our of att gti")
@@ -247,6 +244,12 @@ def get_survey_mode_rotation_plane(attdata, gti=None): #tGTI):
     vortmean = vortmean/sqrt(np.sum(vortmean**2))
     return vortmean
 
+def minimize_norm_to_survey(attdata, rpvec):
+    phi, theta = vec_to_pol(rpvec)
+    vecs = attdata(attdata.times).apply(OPAX)
+    res = minimize(lambda val: np.sum(np.sum(vecs*[cos(val[1])*cos(val[0]), cos(val[1])*sin(val[0]), sin(val[1])], axis=1)**2), [phi, theta])
+    return pol_to_vec(*res.x)
+
 def align_with_z_quat(vec):
     vec = vec/sqrt(np.sum(vec**2.))
     vrot = np.cross(vec, [0, 0, 1])
@@ -256,3 +259,18 @@ def align_with_z_quat(vec):
     q[:3] = vrot*sin(alpha/2.)
     q[3] = cos(alpha/2.)
     return Rotation(q)
+
+def condence_attdata(attdata, maxoffset=5.):
+    breakidx = [0, ]
+    testvec = np.array([F, DL*25, DL*25])
+    testvec = testvec/sqrt(sum(testvec**2.))
+    vecs = attdata(attdata.times).apply(testvec)
+    for i in range(2, attdata.times.size):
+        ts = attdata.times[[breakidx[-1], i]]
+        attloc = Slerp(ts, attdata(ts))
+        tvecs = attloc(attdata.times[breakidx[-1]: i]).apply(testvec)
+        if np.any(1. - np.sum(tvecs*vecs[breakidx[-1]: i], axis=1)[::-1] > (maxoffset/3600.*pi/180.)**2./2.):
+            breakidx.append(i - 1)
+            print(breakidx)
+    if breakidx[-1] != attdata.times.size - 1: breakidx.append(attdata.times.size - 1)
+    return AttDATA(attdata.times[breakidx], attdata(attdata.times[breakidx]), gti=attdata.gti)

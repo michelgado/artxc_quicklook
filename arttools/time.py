@@ -331,6 +331,7 @@ def deadtime_correction(urdhk):
     dt = (ts[1:] - ts[:-1])
     mask = (dt > 1.) & (urdhk["EVENTS"][1:] > urdhk["EVENTS"][:-1])
     tcrate = (urdhk["EVENTS"][1:] - urdhk["EVENTS"][:-1])/dt
+    print("received tcrate", tcrate)
     dtcorr = interp1d((ts[1:] + ts[:-1])[mask]/2., (1. - ARTDEADTIME*tcrate[mask]),
                       bounds_error=False, fill_value=(1. - ARTDEADTIME*np.median(tcrate)))
     return dtcorr

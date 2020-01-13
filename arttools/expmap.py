@@ -9,7 +9,6 @@ import numpy as np
 
 MPNUM = cpu_count()
 
-
 def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs):
     """
     produce exposure map on the provided wcs area, with provided GTI and attitude data
@@ -29,7 +28,6 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs)
             exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti)
             vmap = make_overall_vignetting()
             print("produce overall urds expmap")
-            #emap = AttWCSHist.make_mp(vmap, exptime, qval, wcs, mpnum)
             emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum)
             print("\ndone!")
     for urd in urdgtis:
@@ -44,7 +42,6 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs)
         emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum) + emap
         print(" done!")
     return emap
-
 
 def make_expmap_for_healpix(attdata, urdgtis, mpnum=MPNUM, dtcorr={}, subscale=4):
     if dtcorr:
@@ -69,5 +66,3 @@ def make_expmap_for_healpix(attdata, urdgtis, mpnum=MPNUM, dtcorr={}, subscale=4
         emap = AttHealpixHist.make_mp(2048, vmap, exptime, qval, mpnum, subscale=subscale) + emap
         print(" done!")
     return emap
-
-
