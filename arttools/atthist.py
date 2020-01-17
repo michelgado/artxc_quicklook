@@ -33,6 +33,16 @@ optica axis is shifted 11' away of the sattelite x axis, therefore we need some 
 DELTAROLL = 1./24./3.
 
 def hist_quat(quat):
+    """
+    provided set of quats split them on several groups, corresponding to a limited sets of optical axis direction on sky and roll angles
+    the number  of groups is defined by two parameters - DELTASKY and DELTAROLL
+    DELTASKY
+
+
+    params: quat - a set of quats stored in scipy.spatial.transfrom.Rotation class
+
+    return: unique sets of ra, dec, roll values, indices and inverse indeces of quats for corresponding set (see np.unique)
+    """
     ra, dec, roll = quat_to_pol_and_roll(quat)
     orhist = np.empty((ra.size, 3), np.int)
     orhist[:, 0] = np.asarray((dec + pi/2.)/DELTASKY, np.int)
@@ -41,28 +51,40 @@ def hist_quat(quat):
     return np.unique(orhist, return_index=True, return_inverse=True, axis=0)
 
 def hist_orientation(qval, dt):
+    """
+    provided with quats, and time spent* in the direction defined by quat
+    produces grouped by ra, dec and roll quaternions and corresponding time, spent in quats
+
+    params: qval  a set of quats stored in scipy.spatial.transfrom.Rotation class
+    params: dt corresponding to the set of quaternions, set of time intervals duration (which sc spent in the dirrection defined by quaternion)
+
+    return: exptime, qval - histogramed set of quaterninons with corresponding times
+    """
     oruniq, uidx, invidx = hist_quat(qval)
     exptime = np.zeros(uidx.size, np.double)
     np.add.at(exptime, invidx, dt)
     return exptime, qval[uidx]
 
 def make_small_steps_quats(attdata, gti=tGTI, timecorrection=lambda x: 1.):
+    """
+    provided with AttDATA container (see arttools.orientation.AttDATA)
+    produces a set of quaternions, which separated not more than by DELTASY in angles and DELTAROLL in rolls
+
+    params: 'attdata' (AttDATA container, which defines interpolation of quaterninons with time  within attached gti)
+            'timecorrection' - function which produce timescaling depending on time (time weights)
+
+    returns: qval, exptime, gti - quatertions, exposure time for this quaternions, and resulted overall gti
+    """
     locgti = gti & attdata.gti
     tnew, maskgaps = locgti.make_tedges(attdata.times)
     if tnew.size == 0:
         return Rotation(np.empty((0, 4), np.double)), np.array([])
+
     ts = ((tnew[1:] + tnew[:-1])/2.)[maskgaps]
     dt = (tnew[1:] - tnew[:-1])[maskgaps]
 
     qval = attdata(ts)
     ra, dec, roll = quat_to_pol_and_roll(attdata(tnew))
-
-    """
-    to do:
-    formally, this subroutine should not know that optic axis is [1, 0, 0],
-    need to fix this
-    vec = qval.apply([1., 0, 0])
-    """
     vec = pol_to_vec(ra, dec)
     vecprod = np.sum(vec[1:, :]*vec[:-1, :], axis=1)
     """
@@ -89,10 +111,13 @@ def make_small_steps_quats(attdata, gti=tGTI, timecorrection=lambda x: 1.):
         qval = attdata(ts)
     else:
         dtn = dt
-    print("check exposure", dt.sum(), gti.exposure)
     return qval, dtn*timecorrection(ts), locgti
 
 def hist_orientation_for_attdata(attdata, gti=tGTI, timecorrection=lambda x:1.):
+    """
+    given the AttDATA, gti and timecorrection (function which weights each time interval, in case of exposure map it is livetime fraction, or background lightcurve for the background map)
+
+    """
     qval, dtn, locgti = make_small_steps_quats(attdata, gti, timecorrection)
     exptime, qhist = hist_orientation(qval, dtn)
     return exptime, qhist, locgti
@@ -112,7 +137,6 @@ def hist_by_roll_for_attdata(attdata, gti=tGTI, timecorrection=lambda x:1., wcs=
     rsc = (rs[1:] + rs[:-1])/2.
     se = roll.searchsorted(rs)
     return [(ra[se[i]:se[i+1]], dec[se[i]:se[i+1]], dtn[se[i]:se[i+1]], rsc[i]) for i in range(rsc.size) if se[i] != se[i + 1]]
-
 
 def make_convolve_with_roll(*args):
     ra, dec, dt, roll, profile, locwcs = args
@@ -262,12 +286,12 @@ def make_wcs_for_quats(quats, pixsize=20./3600.):
                            np.array([-26.*DL, -26*DL, 26.*DL, 26.*DL]))
     edges = np.concatenate([quats.apply(v) for v in vedges])
     edges = edges/np.sqrt(np.sum(edges**2., axis=1))[:, np.newaxis]
-    return min_area_wcs_for_vecs(edges)
+    return min_area_wcs_for_vecs(edges, pixsize=pixsize)
 
-def make_wcs_for_attdata(attdata, gti=tGTI):
+def make_wcs_for_attdata(attdata, gti=tGTI, pixsize=20./3600.):
     locgti = gti & attdata.gti
     qvtot = attdata(attdata.times[locgti.mask_outofgti_times(attdata.times)])
-    return make_wcs_for_quats(qvtot)
+    return make_wcs_for_quats(qvtot, pixsize)
 
 def split_survey_mode(attdata, gti=tGTI):
     aloc = attdata.apply_gti(gti)

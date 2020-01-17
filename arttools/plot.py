@@ -6,7 +6,7 @@ from .atthist import hist_orientation_for_attdata, make_wcs_for_attdata
 from .caldb import get_energycal, get_shadowmask, get_energycal_by_urd, get_shadowmask_by_urd
 from .energy import get_events_energy
 from .telescope import URDNS
-from .orientation import get_photons_sky_coord, read_gyro_fits, read_bokz_fits, AttDATA
+from .orientation import get_photons_sky_coord, read_gyro_fits, read_bokz_fits, AttDATA, define_required_correction
 from astropy.io import fits
 from math import pi, cos, sin
 from multiprocessing import Pool, cpu_count, Queue, Process, Pipe
@@ -76,6 +76,8 @@ def get_attdata(fname):
     attdata = read_gyro_fits(ffile["ORIENTATION"]) if "gyro" in fname else read_bokz_fits(ffile["ORIENTATION"])
     attdata.times = attdata.times - (0.97 if "gyro" in fname else 1.55)
     attdata.gti.arr = attdata.gti.arr - (0.97 if "gyro" in fname else 1.55)
+    if "gyro" in fname:
+        attdata = define_required_correction(attdata)
     return attdata
 
 def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
@@ -92,16 +94,10 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
     attdata = attdata.apply_gti(gti + [-30, 30])
     gti = attdata.gti & gti
 
-    locwcs = make_wcs_for_attdata(attdata, gti) #produce wcs for accumulated atitude information
-    """
-    if locwcs.wcs.crpix[1] > locwcs.wcs.crpix[0]:
-        locwcs.wcs.crpix = locwcs.wcs.crpix[[1, 0]]
-        locwcs.wcs.pc = np.array(locwcs.wcs.pc)[:, ::-1]
-    """
-    print("locwcs", locwcs)
-    #lside = np.argmin(locwcs.wcs.crpix)
-    #locwcs.wcs.crpix[lside] = locwcs.wcs.crpix[lside]//2
-    #locwcs.wcs.crpix[lside] = locwcs.wcs.crpix[lside] + 1 - locwcs.wcs.crpix[lside]%2
+    locwcs = make_wcs_for_attdata(attdata, gti, 20/3600.) #produce wcs for accumulated atitude information
+    lside = np.argmin(locwcs.wcs.crpix)
+    locwcs.wcs.crpix[lside] = locwcs.wcs.crpix[lside]//2
+    locwcs.wcs.crpix[lside] = locwcs.wcs.crpix[lside] + 1 - locwcs.wcs.crpix[lside]%2
 
     xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
     imgdata = np.zeros((ysize, xsize), np.double)
