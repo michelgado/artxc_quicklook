@@ -10,7 +10,7 @@ from math import log10, pi, sin, cos
 
 TINY = 1e-15
 
-def make_vignetting_for_urdn(urdn, energy=12, phot_index=None, #7.2001, phot_index=None,
+def make_vignetting_for_urdn(urdn, energy=7.2, phot_index=None, #7.2001, phot_index=None,
                              useshadowmask=True, ignoreedgestrips=True,
                              emin=0, emax=np.inf):
     vignfile = get_vigneting_by_urd(urdn)
@@ -61,7 +61,7 @@ def make_vignetting_for_urdn(urdn, energy=12, phot_index=None, #7.2001, phot_ind
     return vmap
 
 
-def make_overall_vignetting(energy=12., *args,
+def make_overall_vignetting(energy=7.2, *args,
                             subgrid=20, urdweights={urdn:1. for urdn in URDNS},
                             **kwargs):
     if subgrid < 1:

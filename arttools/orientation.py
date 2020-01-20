@@ -398,9 +398,10 @@ def get_earth_rot_quats(times, t0=None):
     q[..., 3] = np.cos(phase/2.)
     return Rotation(q)
 
-def get_survey_mode_rotation_plane(attdata, gti=None): #tGTI):
+def get_elongation_plane_norm(attdata, gti=None): #tGTI):
     """
     for the provided attdata, searches mean rotation plane of the provided attdata imformation
+    note: it is assumed that the attdata achived due to the relatively constant motion in one dirrection
 
     -----------
     Params:
@@ -412,7 +413,7 @@ def get_survey_mode_rotation_plane(attdata, gti=None): #tGTI):
     """
     aloc = attdata.apply_gti(gti) if not gti is None else attdata
     tc, dt, dalphadt = get_axis_movement_speed(aloc)
-    me = medges((dalphadt > 60) & (dalphadt < 100)) + [0, -1]
+    me = medges(dalphadt < 150) + [0, -1]
     gtisurv = GTI(tc[me] + dt[me]*[-0.5, 0.5])
     te, mgaps = gtisurv.make_tedges(np.linspace(aloc.times[0], aloc.times[-1], int((aloc.times[-1] - aloc.times[0])/300) + 3))
     mask = np.ones(te.size)
@@ -422,6 +423,7 @@ def get_survey_mode_rotation_plane(attdata, gti=None): #tGTI):
     rvecm = np.sum(rvec, axis=0)
     rvecm = rvecm/sqrt(np.sum(rvecm**2.))
     return rvecm
+
 
 def minimize_norm_to_survey(attdata, rpvec):
     """

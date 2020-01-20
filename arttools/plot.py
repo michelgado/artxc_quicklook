@@ -2,7 +2,8 @@ import numpy as np
 from astropy.wcs import WCS
 from ._det_spatial import get_shadowed_pix_mask_for_urddata
 from .time import get_gti, GTI, tGTI, emptyGTI, deadtime_correction
-from .atthist import hist_orientation_for_attdata, make_wcs_for_attdata
+from .atthist import hist_orientation_for_attdata
+from .planwcs import make_wcs_for_attdata
 from .caldb import get_energycal, get_shadowmask, get_energycal_by_urd, get_shadowmask_by_urd
 from .energy import get_events_energy
 from .telescope import URDNS
@@ -82,7 +83,7 @@ def get_attdata(fname):
 
 def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
                                   outctsname, outbkgname, outexpmapname,
-                                  urdbti = {}):
+                                  urdbti = {}, usedtcorr=True):
     """
     given two sets with paths to the urdfiles and corresponding attfiles,
     and gti as a dictionary, each key contains gti for particular urd
@@ -95,10 +96,12 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
     gti = attdata.gti & gti
 
     locwcs = make_wcs_for_attdata(attdata, gti, 20/3600.) #produce wcs for accumulated atitude information
+    #locwcs = make_wcs_for_attdata(attdata, gti, 20/3600.) #produce wcs for accumulated atitude information
+    """
     lside = np.argmin(locwcs.wcs.crpix)
     locwcs.wcs.crpix[lside] = locwcs.wcs.crpix[lside]//2
     locwcs.wcs.crpix[lside] = locwcs.wcs.crpix[lside] + 1 - locwcs.wcs.crpix[lside]%2
-
+    """
     xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
     imgdata = np.zeros((ysize, xsize), np.double)
     urdgti = {URDN:emptyGTI for URDN in URDNS}
@@ -203,7 +206,10 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
         urdbkg[urdn] = lambda x: np.ones(np.asarray(x).size, np.double) #interp1d(tse, rate, bounds_error=False, fill_value=np.median(rate))
     """
 
-    emap = make_expmap_for_wcs(locwcs, attdata, urdgti, dtcorr=urddtc)
+    if usedtcorr:
+        emap = make_expmap_for_wcs(locwcs, attdata, urdgti, dtcorr=urddtc)
+    else:
+        emap = make_expmap_for_wcs(locwcs, attdata, urdgti)
     emap = fits.PrimaryHDU(data=emap, header=locwcs.to_header())
     emap.writeto(outexpmapname, overwrite=True)
     bmap = make_bkgmap_for_wcs(locwcs, attdata, urdgti, time_corr=urdbkg)
@@ -212,3 +218,5 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
 
 if __name__ == "__main__":
     pass
+    #pass, r, d - quasi cartesian coordinates of the vecteces
+    #it should be noted that convex hull is expected to be alongated along equator after quaternion rotation
