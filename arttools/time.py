@@ -186,6 +186,20 @@ class GTI(object):
     def searchtimes(self, tseries):
         return np.searchsorted(tseries, self.arr)
 
+    def local_arange(self, dt, epoch=None):
+        tsize = ((self.arr[:,1] - self.arr[:, 0])/dt).astype(np.int) + 1
+        ctot = np.empty(tsize.size + 1, np.int)
+        ctot[1:] = np.cumsum(tsize)
+        ctot[0] = 0
+        arange = np.arange(ctot[-1]) - np.repeat(ctot[:-1], tsize)
+        if epoch is None:
+            t0 = self.arr[:, 0] - dt*(tsize%1)/2.
+        else:
+            t0 = self.arr[:, 0] - (self.arr[:, 0] - epoch)%dt
+        te = arange*dt + np.repeat(t0, tsize)
+        return self.make_tedges(te)
+
+
 
 tGTI = GTI([-np.inf, np.inf])
 emptyGTI = GTI([])

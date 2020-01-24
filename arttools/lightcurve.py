@@ -3,69 +3,33 @@ from .time import deadtime_correction, make_ingti_times, tarange, get_gti, gti_i
 from .caldb import get_energycal
 from scipy.interpolate import interp1d
 import numpy as np
+from functools import reduce
 
 import matplotlib.pyplot as plt
 
-def groupevents(times, gti, cts=1000):
-    tnew = times[gti.mask_outofgti_times(times)]
-    tse = np.empty(tnew.size//cts + (2 if tnew.size%cts else 1))
-    tse[:-1] = tnew[::cts]
-    tse[[0, -1]] = gti.arr[[0, -1], [0, 1]] + [-1, 1]
-    tse, mgaps = gti.make_tedges(tse)
-    cs = tnew.searchsorted(tse)
-    css = cs[1:] - cs[:-1]
-    mg = css[np.logical_not(mgaps)]
-    plt.hist(mg, np.arange(cts*2) - 0.5, histtype="step", log=True)
-    print(css[-1])
-    plt.hist(css[mgaps], np.arange(cts*2) - 0.5, histtype="step", log=True, lw=2)
-    mss = np.logical_and(css < cts//2, mgaps)
-    c1 = css[:-1][np.logical_not(mgaps[1:])]
-    c2 = css[1:][np.logical_not(mgaps[:-1])]
-    plt.hist(css[:-1][np.logical_not(mgaps[1:])], np.arange(cts*2) - 0.5, histtype="step", log=True)
-    plt.hist(css[1:][np.logical_not(mgaps[:-1])], np.arange(cts*2) - 0.5, histtype="step", log=True)
-    plt.hist(np.concatenate([c1, c2]), np.arange(cts*2) -0.5, histtype="step", log=True)
-    mask = np.ones(tse.size, np.bool)
-    print("check events", np.all(css[np.logical_not(mgaps)] == 0))
-    plt.show()
-    print(mg.max(), np.argmax(mg))
-    mask[:-2][np.logical_and(mss[:-1], np.logical_not(mgaps[1:]))] = False
-    mask[2:][np.logical_and(mss[1:], np.logical_not(mgaps[:-1]))] = False
-    mask[-2] = css[-1] < cts//2
-    tse = tse[mask]
-    mgaps = mgaps[mask[:-1]]
-    cs = tnew.searchsorted(tse)
-    css = (cs[1:] - cs[:-1])[mgaps]
-    print(css.min())
-    css = css/(tse[1:] - tse[:-1])[mgaps]
-    amin = np.argmin(css)
-    t1 = tse.searchsorted(tse[1:][mgaps][amin])
-    print(tse[t1], t1, tse.size, mgaps.sum())
-    t2 = np.searchsorted(tse[1:][np.logical_not(mgaps)], tse[t1])
-    print(tse[1:][np.logical_not(mgaps)][t2] - tse[t1])
-    print(tse[1:][np.logical_not(mgaps)][t2 - 1] - tse[t1])
-    print(tse[1:][np.logical_not(mgaps)][t2 + 1] - tse[t1])
-    plt.show()
+urdbkgsc = {28: 1.0269982359153347,
+            22: 0.9461951470620872,
+            23: 1.029129860773177,
+            24: 1.0385034889253482,
+            25: 0.9769294100898714,
+            26: 1.0047417556512688,
+            30: 0.9775021015829128}
 
+def get_time_intervals_weigts(gtis, scales):
     """
-    idx = tnew.searchsorted(gti.arr)
-    csize = (idx[:, 1] - idx[:, 0])//cts + 1
-    idx = np.arange(size.sum()) - np.repeat(np.cumsum([0,] + list(csize[:-1])), csize)
-    t1 = tnew[np.repeat(idx[:, 0], csize) + idx]
-    t2 = np.sort(np.concatenate([t1, gti.arr.ravel()]))
-    ci = np.cumsum(csize)
-    cs = (idx[:, 1] - idx[:, 0])/csize
-    cadd = np.zeros(csize.sum(), np.int)
-    cadd[ci] = 1
-    tse = tnew[np.cumsum(np.repeat(cs, csize)).astype(np.int) + np.cumsum(cadd) - 1]
-    tse[ci - 1] = gti.arr[:,1]
-    tss = np.empty(tse.size, np.double)
-    tss[1:] = tse[:-1]
-    tss[ci[:-1]] = gti.arr[1:,0]
-    tss[0] = gti.arr[0, 0]
-    dt = tse - tss
+    for the provided dictionaries, containing keys and corresponding gtis and scales
+    computes overall weights insided gtis which determined by which of keys were active in time intervals
     """
-    return tse[1:][mgaps], css
-
+    gtitot = reduce(lambda a, b: a | b, gtis.values())
+    edges = np.unique(np.concatenate([g.arr.ravel() for g in gtis.values()]))
+    te, mgaps = gtitot.make_tedges(edges)
+    tc = (te[1:] + te[:-1])[mgaps]/2.
+    se = np.ones(mgaps.size, np.double)*np.sum(scales.values())
+    se[mgaps] = 0
+    for key, gti in gtis.items():
+        mask = np.logical_not(gti.mask_outofgti_times(tc))
+        se[mask] -= scale[key]
+    return te, se, mgaps
 
 def make_constantcounts_timeedges(times, gti, cts=1000):
     idx = times.searchsorted(gti.arr)
@@ -78,7 +42,6 @@ def make_constantcounts_timeedges(times, gti, cts=1000):
     mgaps = np.zeros(dtl.size, np.bool)
     mgaps[cidx - 1] = False
     return gti.arr[0, 0] + dtl.cumsum(), mgaps
-
 
 def make_lightcurve(times, gti):
     gti = get_gti(urdfile)

@@ -17,11 +17,13 @@ import time
 import matplotlib.pyplot as plt
 import os, sys
 from .expmap import make_expmap_for_wcs
-from .lightcurve import get_overall_countrate
 from .background import make_bkgmap_for_wcs
 from scipy.interpolate import interp1d
 from matplotlib.colors import LogNorm
 from functools import reduce
+from collections import  namedtuple
+
+eband = namedtuple("eband", ["emin", "emax"])
 
 urdbkgsc = {28: 1.0269982359153347,
             22: 0.9461951470620872,
@@ -83,7 +85,8 @@ def get_attdata(fname):
 
 def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
                                   outctsname, outbkgname, outexpmapname,
-                                  urdbti = {}, usedtcorr=True):
+                                  urdbti = {}, ebands = {"soft": eband(4, 12), "hard": eband(8, 16)},
+                                  usedtcorr=True):
     """
     given two sets with paths to the urdfiles and corresponding attfiles,
     and gti as a dictionary, each key contains gti for particular urd
@@ -96,14 +99,8 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
     gti = attdata.gti & gti
 
     locwcs = make_wcs_for_attdata(attdata, gti, 20/3600.) #produce wcs for accumulated atitude information
-    #locwcs = make_wcs_for_attdata(attdata, gti, 20/3600.) #produce wcs for accumulated atitude information
-    """
-    lside = np.argmin(locwcs.wcs.crpix)
-    locwcs.wcs.crpix[lside] = locwcs.wcs.crpix[lside]//2
-    locwcs.wcs.crpix[lside] = locwcs.wcs.crpix[lside] + 1 - locwcs.wcs.crpix[lside]%2
-    """
     xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
-    imgdata = np.zeros((ysize, xsize), np.double)
+    imgdata = {name: np.zeros((ysize, xsize), np.double) for name in ebands}
     urdgti = {URDN:emptyGTI for URDN in URDNS}
     urdhk = {}
     urdbkg = {}
@@ -112,21 +109,14 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
     for urdfname in urdflist[:]:
         urdfile = fits.open(urdfname)
         urdn = urdfile["EVENTS"].header["URDN"]
-        crate = (urdfile['HK'].data["EVENTS"][1:] - urdfile['HK'].data["EVENTS"][1:])/\
-            (urdfile["HK"].data["TIME"][1:] - urdfile['HK'].data["TIME"][:-1])
 
         tchk = (urdfile["HK"].data["TIME"][1:] + urdfile['HK'].data["TIME"][:-1])/2.
 
         print("processing:", urdfname)
-        #print("overall urd exposure", get_gti(urdfile, "STDGTI").exposure)
         locgti = (get_gti(urdfile, "STDGTI") if "STDGTI" in urdfile else get_gti(urdfile)) & gti & -urdgti.get(urdn, emptyGTI) # & -urdbti.get(urdn, emptyGTI)
         locgti.merge_joint()
         print("exposure in GTI:", locgti.exposure)
         locgti = locgti & -urdbti.get(urdn, emptyGTI)
-        if np.any(crate[(locgti + [-30, 30]).mask_outofgti_times(tchk)] > 200.):
-            print("skip due to bki")
-            continue
-
         print("exposure after excluding BTI", locgti.exposure)
         if locgti.exposure == 0.:
             continue
@@ -141,12 +131,13 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
         urdhk[urdn] = urdhk.get(urdn, []) + [hkdata,]
 
         energy, grade, flag = make_energies_flags_and_grades(urddata, hkdata, urdn)
-        pickimg = np.all([energy > 4., energy < 11.2, grade > -1, grade < 10, flag == 0, locgti.mask_outofgti_times(urddata["TIME"])], axis=0)
-        print(urdfname, "used events", pickimg.sum())
-        if np.any(pickimg):
-            timg = make_sky_image(urddata[pickimg], urdn, attdata, locwcs, 1)
-            print("total photon on img", timg.sum(), "selected events", pickimg.sum())
-            imgdata += timg
+        for bandname, band in ebands.items():
+            pickimg = np.all([energy > band.emin, energy < band.emax, grade > -1, grade < 10, flag == 0, locgti.mask_outofgti_times(urddata["TIME"])], axis=0)
+            print(urdfname, "used events", pickimg.sum())
+            if np.any(pickimg):
+                timg = make_sky_image(urddata[pickimg], urdn, attdata, locwcs, 1)
+                print("total photon on img", timg.sum(), "selected events", pickimg.sum())
+                imgdata[bandname] += timg
 
         pickbkg = np.all([energy > 40., energy < 100., grade > -1, grade < 10, flag < 3], axis=0)
         bkgevts = urddata["TIME"][pickbkg]
@@ -165,8 +156,9 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
     for urdn in urdgti:
         print("real time exposure", urdn, urdgti[urdn].exposure)
 
-    img = fits.PrimaryHDU(header=locwcs.to_header(), data=imgdata)
-    img.writeto(outctsname, overwrite=True)
+    for bandname, img in imgdata.items():
+        img = fits.PrimaryHDU(header=locwcs.to_header(), data=img)
+        img.writeto(bandname + outctsname, overwrite=True)
 
     urdhk = {urdn:np.unique(np.concatenate(hklist)) for urdn, hklist in urdhk.items()}
     urddtc = {urdn: deadtime_correction(hk) for urdn, hk in urdhk.items()}
