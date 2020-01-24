@@ -8,11 +8,17 @@ from math import pi
 import pandas
 import copy
 
+import arttools
 from arttools._det_spatial import get_shadowed_pix_mask_for_urddata
 from arttools.energy import get_events_energy
-from arttools.orientation import extract_raw_gyro, get_photons_sky_coord, nonzero_quaternions, get_gyro_quat_as_arr, clear_att
 from arttools.caldb import get_shadowmask, get_energycal
-from arttools.time import get_gti, gti_union, gti_intersection, make_hv_gti
+from arttools.time import get_gti
+
+import socket
+import smtplib
+from email.message import EmailMessage
+
+
 
 parser = argparse.ArgumentParser(description="process L0 data to L1 format")
 parser.add_argument("stem", help="part of the L0 files name, which are euqal to them")
@@ -31,64 +37,74 @@ URDTOTEL = {28: "T1",
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4 or "-h" in sys.argv:
-        print("description run like that 'python3 L1toL15.py stem outdir'"\
-                ", where stem is srg_20190727_214739_000")
-        raise ValueError("wrong arguments")
-    fname = sys.argv[1]
-    stem = fname.rsplit(".")[0]
-    outdir = sys.argv[2]
-    attfname = sys.argv[3]
-    if os.path.abspath(outdir) == os.path.abspath(os.path.dirname(stem)):
-        raise ValueError("The L0 files will be overwriten")
+    try:
+        sock = socket.socket()
+        sock.connect(("10.5.2.24", 8081))
+        sock.send(str.encode(sys.argv[1]))
+    except ConnectionRefusedError as conerr:
+        msg = EmailMessage()
+        msg["to"] = "san@iki.rssi.ru"
+        msg["from"] = "art@cosmos.ru"
+        msg["subbj"] = "makeL1b fail to start daemon"
+        msg.set_content(conerr)
+        smtplib.SMTP("localhost").send_message(msg)
+    finally:
+        if len(sys.argv) != 4 or "-h" in sys.argv:
+            print("description run like that 'python3 L1toL15.py stem outdir'"\
+                    ", where stem is srg_20190727_214739_000")
+            raise ValueError("wrong arguments")
+        fname = sys.argv[1]
+        stem = fname.rsplit(".")[0]
+        outdir = sys.argv[2]
+        attfname = sys.argv[3]
+        if os.path.abspath(outdir) == os.path.abspath(os.path.dirname(stem)):
+            raise ValueError("The L0 files will be overwriten")
 
-    if not os.path.exists(outdir):
-        os.mkdir(outdir)
+        if not os.path.exists(outdir):
+            os.mkdir(outdir)
 
-    attfile = fits.open(attfname)
-    attdata = clear_att(np.copy(attfile["ORIENTATION"].data))
-    #attdata = attdata[nonzero_quaternions(get_gyro_quat_as_arr(attdata))]
-    urdfname = fname
-    urdfile = fits.open(urdfname)
-    urddata = urdfile["EVENTS"].data
-    flag = np.ones(urddata.size, np.uint8)
+        attdata = arttools.plot.get_attdata(attfname)
+        urdfname = fname
+        urdfile = fits.open(urdfname)
+        urddata = np.copy(urdfile["EVENTS"].data)
+        flag = np.ones(urddata.size, np.uint8)
 
-    gti = get_gti(urdfile)
-    gti = gti_union(gti[:,:] + [0, 1.])
-    gti = gti_intersection(gti, make_hv_gti(urdfile["HK"].data))
-    gti = gti_intersection(gti, np.array([attdata["TIME"][[0, -1]],]))
+        locgti = get_gti(urdfile) & attdata.gti
 
-    caldbfile = get_energycal(urdfile)
-    masktime = (urddata["TIME"] > attdata["TIME"][0]) & (urddata["TIME"] < attdata["TIME"][-1])
-    flag[masktime] = 0
-    RA, DEC = np.empty(urddata.size, np.double), np.empty(urddata.size, np.double)
-    r, d = get_photons_sky_coord(urddata[masktime],
-                    urdfile["EVENTS"].header["URDN"],
-                    attdata)
-    RA[masktime] = r
-    DEC[masktime] = d
-    ENERGY, xc, yc, grades = get_events_energy(urddata, urdfile["HK"].data, caldbfile)
+        caldbfile = get_energycal(urdfile)
+        flag[(locgti & attdata.gti).mask_outofgti_times(urddata["TIME"])] = 0
 
-    shadow = get_shadowmask(urdfile)
-    maskshadow = get_shadowed_pix_mask_for_urddata(urddata, shadow)
-    flag[np.logical_not(maskshadow)] = 2
-    flag[np.any([urddata["RAW_X"] == 0, urddata["RAW_X"] == 47, urddata["RAW_Y"] == 0, urddata["RAW_Y"]  == 47], axis=0)] = 3
-    h = copy.copy(urdfile["EVENTS"].header)
-    h.pop("NAXIS2")
+        RA, DEC = np.empty(urddata.size, np.double), np.empty(urddata.size, np.double)
+        attmask = attdata.gti.mask_outofgti_times(urddata["TIME"])
+        RA[attmask], DEC[attmask] = arttools.orientation.get_photons_sky_coord(urddata[attmask], urdfile["EVENTS"].header["URDN"], attdata)
 
-    print(urddata["TIME_I"][:10])
-    cols = urdfile["EVENTS"].data.columns
-    cols.add_col(fits.Column(name="ENERGY", array=ENERGY, format="1D", unit="keV"))
-    cols.add_col(fits.Column(name="RA", array=np.copy(RA*180./pi), format="1D", unit="deg"))
-    cols.add_col(fits.Column(name="DEC", array=np.copy(DEC*180./pi), format="1D", unit="deg"))
-    cols.add_col(fits.Column(name="GRADE", array=grades, format="I"))
-    cols.add_col(fits.Column(name="FLAG", array=flag, format="I"))
-    cols["TIME_I"].array = urddata["TIME_I"]
+        ENERGY, xc, yc, grades = get_events_energy(urddata, urdfile["HK"].data, caldbfile)
 
-    newurdtable = fits.BinTableHDU.from_columns(cols, header=h)
+        shadow = get_shadowmask(urdfile)
+        maskshadow = get_shadowed_pix_mask_for_urddata(urddata, shadow)
+        flag[np.logical_not(maskshadow)] = 2
+        h = copy.copy(urdfile["EVENTS"].header)
+        h.pop("NAXIS2")
 
-    newurdtable.name = "EVENTS"
-    gtitable = urdfile["GTI"]
-    gtitable.data = np.array([tuple(g) for g in gti], dtype=gtitable.data.dtype)
-    newfile = fits.HDUList([urdfile[0], newurdtable, urdfile["HK"], gtitable])
-    newfile.writeto(os.path.join(outdir, os.path.basename(urdfname)), overwrite=True)
+        cols = urdfile["EVENTS"].data.columns
+        cols.add_col(fits.Column(name="ENERGY", array=ENERGY, format="1D", unit="keV"))
+        cols.add_col(fits.Column(name="RA", array=np.copy(RA*180./pi), format="1D", unit="deg"))
+        cols.add_col(fits.Column(name="DEC", array=np.copy(DEC*180./pi), format="1D", unit="deg"))
+        cols.add_col(fits.Column(name="GRADE", array=grades, format="I"))
+        cols.add_col(fits.Column(name="FLAG", array=flag, format="I"))
+        cols["TIME_I"].array = urddata["TIME_I"]
+
+        newurdtable = fits.BinTableHDU.from_columns(cols, header=h)
+
+        newurdtable.name = "EVENTS"
+        gtitable = fits.BinTableHDU(Table(locgti.arr, names=("TSATRT", "TSTOP")), header=urdfile["GTI"].header)
+        newfile = fits.HDUList([urdfile[0], newurdtable, urdfile["HK"], gtitable])
+        newfile.writeto(os.path.join(outdir, os.path.basename(urdfname)), overwrite=True)
+
+        if not os.path.exists(os.path.join(outdir, os.path.basename(attfname))):
+            attfile = fits.open(attfname)
+            hdus = [attfile[0], ]
+            for telescope in arttools.telescope.TELESCOPES:
+                ra, dec, roll = arttools.orientation.quat_to_pol_and_roll(attdata(attdata.times)*arttools.caldb.ARTQUATS[telescope])
+                hdus.append(fits.BinTableHDU(Table(np.array([attdata.times, ra*180/pi, dec*180/pi, roll*180/pi]).T, names=("TIME", "RA", "DEC", "ROLL")), header={"TELESCP":telescope}, name=telescope))
+            fits.HDUList(hdus).writeto(os.path.join(outdir, os.path.basename(attfname)))
