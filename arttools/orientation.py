@@ -233,6 +233,7 @@ def get_raw_bokz(bokzhdu):
     jyear = get_hdu_times(bokzhdu).jyear[mask]
     return bokzdata["TIME"][mask], earth_precession_quat(jyear).inv()*qbokz
 
+
 def get_photons_vectors(urddata, URDN, attdata, subscale=1):
     """
     return cartesian vectros, defining direction to the sky, for the specific pixel, defined with urddata rawx, rawy coordinates

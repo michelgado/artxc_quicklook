@@ -188,6 +188,9 @@ def convolve_profile(attdata, locwcs, profile, gti=tGTI, timecorrection=lambda x
 
 
 class AttHist(object):
+    """
+    base class which performrs FoV slide over provided wcs defined area
+    """
 
     def __init__(self, vmap, qin, qout, subscale=4):
         self.qin = qin

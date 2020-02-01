@@ -10,9 +10,40 @@ from math import log10, pi, sin, cos
 
 TINY = 1e-15
 
+rawvignfun = None
+
+def load_raw_wignetting_function():
+    """
+    read original vignetting function which defines Effective area depending on offset  from optical axis and energy of incident photon
+
+    return: scipy.itnerpolate.RegularGridInterpolator instance awaiting energy, xoffset and yoffset as arguments
+    """
+    global rawvignfun
+    if rawvignfun is None:
+        vignfile = get_vigneting_by_urd(28)
+        x = 23.5 + np.tan(vignfile["Offset angles"].data["X"]*pi/180/60.)*F/DL
+        y = 23.5 + np.tan(vignfile["Offset angles"].data["Y"]*pi/180/60.)*F/DL
+        rawvignfun = RegularGridInterpolator((vignfile["5 arcmin PSF"].data["E"], x, y), vignfile["5 arcmin PSF"].data["EFFAREA"])
+    return rawvignfun
+
 def make_vignetting_for_urdn(urdn, energy=7.2, phot_index=None, #7.2001, phot_index=None,
                              useshadowmask=True, ignoreedgestrips=True,
                              emin=0, emax=np.inf):
+    """
+    for provided urd number  energy or photon index provided 2d interpolation function (RegularGridInterpolator) defining the profile of the effective area depending on offset
+
+    --------------
+    Parameters:
+        urdn:  num of urd (28, 22, 23, ... 30)
+        energy: energy of incident at which to compute vignetting
+        phot_index: photon index if provided used the vignetting maps are weighted with power law model
+        useshadowmask: if True subroutine ignores pixels covered by collimator
+        ignoreedgestrips: if True ignores 4 edges strips, which were shown to produce larger noise
+        emin, emax: edges of the energy band within which to weight  effective area with phot_index power law
+
+    return: scipy.interpolate.RegularGridInterpolator containing scalled effective area depending on offset in mm from the center of detector
+
+    """
     vignfile = get_vigneting_by_urd(urdn)
     #TO DO: put max eff area in CALDB
     norm = 65.71259133631082 # = np.max(vignfile["5 arcmin PSF"].data["EFFAREA"])
@@ -62,8 +93,19 @@ def make_vignetting_for_urdn(urdn, energy=7.2, phot_index=None, #7.2001, phot_in
 
 
 def make_overall_vignetting(energy=7.2, *args,
-                            subgrid=20, urdweights={urdn:1. for urdn in URDNS},
+                            subgrid=10, urdweights={},
                             **kwargs):
+    """
+    produces combined effective area of seven detector as projected on sky
+
+    --------------
+    Parameters:
+        same as for make_vignetting_for_urdn, with additional arguments of urdweights - which weight vignetting map of each urd
+
+    returns:
+        scipy.interpolate.RegularGridInterpolator provideds projection of the effective area of seven detectors on sky, depending on offset from the "telescope axis" defined
+        by mean quaternion stored in CALDB, offsets can be coverted to vectors with arttools._det_spatial.offset_to_vec which assumes focal length arttools._det_spatial.F
+    """
     if subgrid < 1:
         print("ahtung! subgrid defines splines of the translation of multiple vigneting file into one map")
         print("set subgrid to 2")

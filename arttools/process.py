@@ -65,6 +65,8 @@ def analyze_survey(fpath, pastday=None):
     gtis = split_survey_mode(attdata)
 
     for k, sgti in enumerate(gtis):
+        if os.path.exists("bmap%02d_%s.fits.gz" % (k, date)):
+            continue
         make_mosaic_for_urdset_by_gti(urdfiles, gyrofiles, sgti + [-30, 30],
                                       "cmap%02d_%s.fits.gz" % (k, date),
                                       "bmap%02d_%s.fits.gz" % (k, date),

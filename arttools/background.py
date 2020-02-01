@@ -15,6 +15,9 @@ from math import pi, sin, cos, sqrt
 MPNUM = cpu_count()
 
 def make_background_det_map_for_urdn(urdn, useshadowmask=True, ignoreedgestrips=True):
+    """
+    for provided urdn provides RegularGridInterpolator of backgroud profile for corresponding urdn
+    """
     bkgprofile = get_backprofile_by_urdn(urdn)
     shmask = get_shadowmask_by_urd(urdn)
     if ignoreedgestrips:
@@ -61,13 +64,23 @@ def make_overall_background_map(subgrid=10, useshadowmask=True):
 
 def make_bkgmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, time_corr={}, subscale=10):
     """
-    produce exposure map on the provided wcs area, with provided GTI and attitude data
+    produce background map on the provided wcs area, with provided GTI and attitude data
 
     There are two hidden nonobvious properties of the input data expected:
     1) gti is expected to be a dict with key is urd number
         and value is elevant for this urd gti in the form of Nx2 numpy array
     2) wcs is expected to be astropy.wcs.WCS class,
         crpix is expected to be exactly the central pixel of the image
+
+
+    -------------
+    parameters:
+        wcs - astropy.wcs.WCS
+        attdata - attitude data container defined by arttools.orientation.AttDATA
+        urdgtis - a dict of the form {urdn: arttools.time.GTI ...}
+        mpnum - num of the processort to use in multiprocessing computation
+        time_corr - a dict containing functions {urdn: urdnbkgrate(time) ...}
+        subscale - defined a number of subpixels (under detecto pixels) to interpolate bkgmap
     """
     bkg = 0
     overall_gti = emptyGTI

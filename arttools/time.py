@@ -10,14 +10,30 @@ class ART_TIME_ERROR(ValueError):
     pass
 
 class GTI(object):
+    """
+    this class provides a number of userfull function to work with consequitive ordered unintersected 1d intervals
+    in this code this class is used to store Good Time Intervals
+    most userfull functions of the class are
+    *intersection GTI1 & GTI2
+    *unification GTI1 | GTI2
+    and negation -GTI1
+
+    the class also has method to produce masks of exclude from intervals times
+    mask_outofgti_times
+    """
 
     def _regularize(self, arr=None):
         if arr is None:
             arr = self.arr
         if arr.ndim != 2 or arr.shape[1] != 2:
             raise ValueError("gti array should be of shape Nx2")
-        arr = arr[np.argsort(arr[:,0])]
         arr = arr[arr[:,0] < arr[:,1]]
+        us, iidx = np.unique(arr[:, 0], return_inverse=True)
+        arrn = np.empty((us.size, 2), np.double)
+        arrn[:, 0] = us
+        arrn[:, 1] = -np.inf
+        np.maximum.at(arrn[:, 1], iidx, arr[:, 1])
+        arr = arrn
         idx = np.argsort(np.ravel(arr))
         gtis = np.ravel(arr)[idx]
         mask = np.zeros(gtis.size, np.bool)
@@ -187,7 +203,11 @@ class GTI(object):
         return np.searchsorted(tseries, self.arr)
 
     def local_arange(self, dt, epoch=None):
-        tsize = ((self.arr[:,1] - self.arr[:, 0])/dt).astype(np.int) + 1
+        te = np.concatenate([np.minimum(e, np.arange(int(np.ceil((e - s)/dt)) + 1)*dt + s) for s, e in self.arr])
+        return self.make_tedges(te)
+
+    def arange(self, dt, epoch=None, joinsize=0.2):
+        tsize = np.ceil((self.arr[:,1] - self.arr[:, 0])/dt).astype(np.int) + 1
         ctot = np.empty(tsize.size + 1, np.int)
         ctot[1:] = np.cumsum(tsize)
         ctot[0] = 0
@@ -233,6 +253,8 @@ def filter_nonitersect(gti, gtifilt):
 
 def gti_union(gti):
     """
+    Ahtung #2!!! this function was used before GTI class was introduced
+
     produces union of the input gti interval
     !!!AHTUNG!!!
     the gti intervals with TSTART > TSTOP will be eliminated
