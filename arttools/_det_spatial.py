@@ -15,7 +15,7 @@ F = 2693. # focal length in mm
 dxya = np.arctan(DL/F)*180./pi #0.595 - distance between strips, 2693 - ART-XC focal length
 
 
-@cache_single_result_np
+#@cache_single_result_np
 def raw_xy_to_offset(rawx, rawy):
     """
     this function converts event parameters (rawx, rawy) to the spatial offset from the detector center in the detector plane
@@ -30,7 +30,7 @@ def raw_xy_to_offset(rawx, rawy):
     """
     return (rawx - 23.5)*DL, (rawy - 23.5)*DL
 
-@cache_single_result_np
+#@cache_single_result_np
 def offset_to_raw_xy(x, y):
     """
     converts the spatial offset in the detector plane to the pixel integer coordinates (read rawx, rawy)
@@ -44,7 +44,7 @@ def offset_to_raw_xy(x, y):
     """
     return np.array(x/DL + 24, np.int), np.array(y/DL + 24, np.int)
 
-@cache_single_result_np
+#@cache_single_result_np
 def raw_xy_to_vec(rawx, rawy):
     """
     assuming that the detector is located in the YZ vizier plane and X is normal to it
@@ -59,7 +59,7 @@ def raw_xy_to_vec(rawx, rawy):
     """
     return offset_to_vec(*raw_xy_to_offset(rawx, rawy))
 
-@cache_single_result_np
+#@cache_single_result_np
 def offset_to_vec(x, y):
     """
     converts spatial offset in the detector plane to the vector, defining offset from the optical axis, corresponding to the spatial offset
@@ -76,7 +76,7 @@ def offset_to_vec(x, y):
     outvec[..., 2] = -y
     return outvec
 
-@cache_single_result_np
+#@cache_single_result_np
 def vec_to_offset(vec):
     """
     converts vector defined in the detector coordinate system to the spatial offset in mm
@@ -88,7 +88,7 @@ def vec_to_offset(vec):
     """
     return vec[...,1]*F/vec[...,0], -vec[...,2]*F/vec[...,0]
 
-@cache_single_result_np
+#@cache_single_result_np
 def vec_to_offset_pairs(vec):
     """
     converts vector defined in the detector coordinate system to the spatial offset in mm
@@ -101,7 +101,7 @@ def vec_to_offset_pairs(vec):
     return (vec[...,[1,2]]/vec[...,0][..., np.newaxis])*[F, -F]
 
 
-@cache_single_result_np
+#@cache_single_result_np
 def multiply_coord(x, y, subscale=1):
     """
     assuming that x and y are ceil indexes

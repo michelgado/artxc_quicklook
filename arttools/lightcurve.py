@@ -7,6 +7,8 @@ from functools import reduce
 
 #import matplotlib.pyplot as plt
 
+def stepsize(arr):
+    return arr[1:] - arr[:-1]
 
 def weigt_time_intervals(gtis, scales=urdbkgsc, defaultscale=1):
     """
@@ -42,20 +44,24 @@ def make_overall_bkglc(times, urdgtis, dt=100, scales=urdbkgsc):
     gtitot = reduce(lambda a, b: a | b, urdgtis.values())
     te, mgaps = gtitot.arange(dt)
     teg, mgapsg, se, scalef, cscalef = weigt_time_intervals(urdgtis)
-    g1 = GTI(te[[0, -1]])
-    crate = times.searchsorted(te)
-    crate = (crate[1:] - crate[:-1])/(cscalef(te[1:]) - cscalef(te[:-1]))
+    cidx = times.searchsorted(te)
+    csf = cscalef(te)
+    ccts = stepsize(cidx)
+    crate = ccts/stepsize(csf)
+    crerr = np.sqrt(ccts)/stepsize(csf)
+
     crate[np.logical_not(mgaps)] = 0.
 
 
     def bkgrate(times, urdn=None, scales=scales, fill_value=0.):
-        mask = g1.mask_outofgti_times(times)
-        print("background edges", times[mask][[0, -1]], "and gti", g1.arr)
-        res = np.full(times.size, fill_value, np.double)
-        res[mask] = crate[te.searchsorted(times[mask]) - 1]*urdbkgsc.get(urdn, 1.)
+        res = np.empty(times.size, np.double)
+        idx = te.searchsorted(times)
+        mask = (idx > 0) & (idx < crate.size)
+        res[np.logical_not(mask)] = fill_value
+        res[mask] = crate[idx[mask] - 1]
         return res*urdbkgsc.get(urdn, 1.)
 
-    return te, mgaps, crate, bkgrate
+    return te, mgaps, crate, crerr, bkgrate
 
 def make_constantcounts_timeedges(times, gti, cts=1000):
     idx = times.searchsorted(gti.arr)

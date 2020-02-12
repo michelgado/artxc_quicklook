@@ -7,6 +7,7 @@ from .telescope import URDNS
 from .caldb import ARTQUATS
 import numpy as np
 from math import log10, pi, sin, cos
+from functools import lru_cache
 
 TINY = 1e-15
 
@@ -26,7 +27,18 @@ def load_raw_wignetting_function():
         rawvignfun = RegularGridInterpolator((vignfile["5 arcmin PSF"].data["E"], x, y), vignfile["5 arcmin PSF"].data["EFFAREA"])
     return rawvignfun
 
-def make_vignetting_for_urdn(urdn, energy=7.2, phot_index=None, #7.2001, phot_index=None,
+
+def cutmask(mask):
+    mx = mask.any(axis=0)
+    my = mask.any(axis=1)
+    def newfunc(val2d):
+        val2d = val2d[:, mx]
+        val2d = val2d[my, :]
+        return val2d
+    return newfunc
+
+@lru_cache(maxsize=7)
+def make_vignetting_for_urdn(urdn, energy=7.2, phot_index=None,
                              useshadowmask=True, ignoreedgestrips=True,
                              emin=0, emax=np.inf):
     """
@@ -74,21 +86,26 @@ def make_vignetting_for_urdn(urdn, energy=7.2, phot_index=None, #7.2001, phot_in
     vignmap = vignmap/norm
     print("check vignetting map:", vignmap.max())
 
-    x = np.tan(vignfile["Offset angles"].data["X"]*pi/180/60.)*F + (24. - OPAXOFFSET[urdn][0])*DL
-    y = np.tan(vignfile["Offset angles"].data["Y"]*pi/180/60.)*F + (24. - OPAXOFFSET[urdn][1])*DL
+    x = np.tan(vignfile["Offset angles"].data["X"]*pi/180/60.)*F - (24. - OPAXOFFSET[urdn][0])*DL
+    y = np.tan(vignfile["Offset angles"].data["Y"]*pi/180/60.)*F - (24. - OPAXOFFSET[urdn][1])*DL
 
     shmask = get_shadowmask_by_urd(urdn).astype(np.uint8) if useshadowmask else np.ones((48, 48), np.uint8)
-    if ignoreedgestrips:
-        shmask[[0, -1], :] = 0
-        shmask[:, [0, -1]] = 0
-
     X, Y = np.meshgrid(x, y)
-    rawx, rawy = offset_to_raw_xy(X.ravel(), Y.ravel())
-    mask = np.all([rawx > -1, rawx < 48, rawy > -1, rawy < 48], axis=0)
-    vignmap[np.logical_not(mask).reshape(vignmap.shape)] = 0.
-    vignmap[mask.reshape(vignmap.shape)] *= shmask[rawx[mask], rawy[mask]]
+    rawx, rawy = offset_to_raw_xy(X, Y)
+    if ignoreedgestrips:
+        mask = np.all([rawx > 0, rawx < 47, rawy > 0, rawy < 47], axis=0)
+    else:
+        mask = np.all([rawx > -1, rawx < 48, rawy > -1, rawy < 48], axis=0)
+    cutzero = cutmask(mask)
+    rawx = cutzero(rawx)
+    rawy = cutzero(rawy)
+    x = x[mask.any(axis=1)]
+    y = y[mask.any(axis=0)]
+    vignmap = cutzero(vignmap)
+    mask = shmask[rawx, rawy]
+    vignmap[np.logical_not(mask)] = 0.
 
-    vmap = RegularGridInterpolator((x, y), vignmap[:, ::-1], bounds_error=False, fill_value=0.)
+    vmap = RegularGridInterpolator((x, y), vignmap[:, :], bounds_error=False, fill_value=0.)
     return vmap
 
 

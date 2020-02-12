@@ -13,6 +13,7 @@ import numpy as np
 from astropy.io import fits
 from functools import reduce
 from scipy.interpolate import interp1d
+from functools import reduce
 
 def poltovec(ra, dec):
     shape = np.asarray(ra).shape
@@ -34,6 +35,10 @@ urdbkgsc = {28: 1.0269982359153347,
             26: 1.0047417556512688,
             30: 0.9775021015829128}
 
+import pickle
+bkigti = pickle.load(open("/srg/a1/work/andrey/ART-XC/gc/allbki2.pickle", "rb"))
+allbki = reduce(lambda a, b: a | b, bkigti.values())
+
 
 def get_neighbours(fpath):
     ids = fpath.split("/")[-1]
@@ -44,6 +49,7 @@ def get_neighbours(fpath):
     print(list(zip(skycells["RA_CEN"][cells], skycells["DE_CEN"][cells])))
     cells = ["%03d%03d" % (np.ceil(skycells[c]["RA_CEN"]), np.ceil(90. - skycells[c]["DE_CEN"])) for c in cells]
     return cells
+
 
 def analyze_survey(fpath, pastday=None):
     abspath = fpath #os.path.abspath(".")
@@ -65,12 +71,18 @@ def analyze_survey(fpath, pastday=None):
     gtis = split_survey_mode(attdata)
 
     for k, sgti in enumerate(gtis):
+        #if (sgti & allbki).exposure == 0:
         if os.path.exists("bmap%02d_%s.fits.gz" % (k, date)):
+            #print(sgti.exposure, allbki.exposure)
+            #print(sgti.arr[[0, -1], [0, 1]], allbki.arr)
             continue
+        print("start", k, "exposure", sgti.exposure)
         make_mosaic_for_urdset_by_gti(urdfiles, gyrofiles, sgti + [-30, 30],
                                       "cmap%02d_%s.fits.gz" % (k, date),
                                       "bmap%02d_%s.fits.gz" % (k, date),
-                                      "emap%02d_%s.fits.gz" % (k, date), usedtcorr=False)
+                                      "emap%02d_%s.fits.gz" % (k, date),
+                                      urdbti=bkigti,
+                                      usedtcorr=False)
 
 
 def run(fpath):

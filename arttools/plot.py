@@ -203,7 +203,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
         urdbkg = {urdn: interp1d(tc, rate*urdbkgsc[urdn]/7.61, bounds_error=False, fill_value=tm*urdbkgsc[urdn]/7.62) for urdn in urdbkgsc}
     """
     pickle.dump([tevts, urdgti, bkggti, locwcs, attdata], open('sp3bkgaux.pickle', 'wb'))
-    tebkg, mgapsbkg, cratebkg, bkgrate = make_overall_bkglc(tevts, bkggti, 25.)
+    tebkg, mgapsbkg, cratebkg, crerrbkg, bkgrate = make_overall_bkglc(tevts, bkggti, 25.)
     urdbkg = {urdn: constscale(urdbkgsc[urdn], bkgrate) for urdn in urdbkgsc}
 
     #te, mgaps, create, bkgrate = make_overall_bkglc(tevts, {urdn: gti + [-1000, 1000] for urdn, gti in urdgti.items()}, dt=25)
