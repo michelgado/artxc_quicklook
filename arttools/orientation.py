@@ -291,7 +291,7 @@ def quat_to_pol_and_roll(qfin, opaxis=[1, 0, 0], north=[0, 0, 1]):
         north - axis relative to which roll angle will be defined
 
     return:
-        ra, dec, roll - attitude fk5 coordinates (ra, dec) and roll angle relative to north axis
+        ra, dec, roll - attitude fk5 coordinates (ra, dec) and roll angle relative to north axis ! note that all angles are returned in radians
     """
     opticaxis = qfin.apply(opaxis)
     dec = np.arctan(opticaxis[:,2]/np.sqrt(opticaxis[:,1]**2 + opticaxis[:,0]**2))

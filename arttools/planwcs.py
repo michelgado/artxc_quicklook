@@ -11,7 +11,17 @@ from scipy.spatial.transform import Rotation, Slerp
 import matplotlib.pyplot as plt
 
 class Corners(object):
+    """
+    class to define convex hull on the sphere surface
+    """
     def __init__(self, vecs):
+        """
+        init class with a series of vectors, which defines directions,
+        all vectors will be reset to have 1 length
+        after that class producess following attributres:
+            vertices - unit vectors in the vertices of the convex hull, containing all vectors
+            idx - indexes of the vectors, located in the corners, from  input array of vectors
+        """
         #plt.scatter(vecs[:, 1], vecs[:, 2])
         cvec = vecs.sum(axis=0)
         cvec = cvec/sqrt(np.sum(cvec**2.))
@@ -33,6 +43,7 @@ class Corners(object):
 
         self.vertices = np.array(self.corners)
         self.idx = np.array(self.idx)
+        self.orts = np.cross(self.vertices, np.roll(self.vertices, -1, axis=0))
 
     def check_newpoint(self, vec1, vec3, color, lvl):
         if self.vecs.size == 0:
@@ -51,6 +62,10 @@ class Corners(object):
             self.idx.append(iloc)
             self.corners.append(vec2)
             self.check_newpoint(vec2, vec3, color, lvl-0.1)
+
+    def check_inside_polygon(self, vecs):
+        return np.logical_not(np.any(np.sum(self.orts[np.newaxis, :, :]*vecs[:, np.newaxis, :], axis=2) > 0, axis=1))
+
 
 def random_orthogonal_vec(vec):
     """
