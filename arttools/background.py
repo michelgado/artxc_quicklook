@@ -93,6 +93,7 @@ def make_bkgmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, time_corr={}, subsca
                                                      time_corr.get(urd, lambda x: 1.))
         print("processed exposure", gti.exposure, exptime.sum())
         bkgmap = make_background_det_map_for_urdn(urd)
+        #bkg = AttWCSHistmean.make_mp(bkgmap, exptime, qval, wcs, mpnum, subscale=subscale) + bkg
         bkg = AttInvHist.make_mp(wcs, bkgmap, exptime, qval,  mpnum) + bkg
         print("done!")
 

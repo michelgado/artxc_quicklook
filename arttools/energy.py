@@ -4,7 +4,7 @@ import numpy as np
 GRADESI = np.ones(256)*(-1)
 GRADESI[18] = 0 #single central events
 GRADESI[[50, 26, 22, 19, 54, 51, 30, 27]] = [1, 2, 3, 4, 5, 6, 7, 8] #double events
-GRADESI[[58, 62, 59, 23, 56, 31, 63]] = [9, 10, 11, 12, 13, 14, 15] #tripple events
+GRADESI[[58, 62, 59, 23, 55, 31, 63]] = [9, 10, 11, 12, 13, 14, 15] #tripple events
 
 def PHA_to_PI(PHA, strip, Temp, caldb):
     """
@@ -33,7 +33,7 @@ def mkeventindex(strip):
 
 def bitmask_to_grade(bitmask):
     maskint = np.packbits(bitmask, axis=0)[0]
-    return GRADESI[maskint]
+    return GRADESI[maskint].astype(np.int)
 
 def get_bot_energy(eventlist, hkdata, caldb):
     T = interp1d(hkdata["TIME"], hkdata["TD1"],

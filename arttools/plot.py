@@ -63,10 +63,11 @@ def get_attdata(fname):
         attdata = define_required_correction(attdata)
     return attdata
 
+
 def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
                                   outctsname, outbkgname, outexpmapname,
                                   urdbti = {}, ebands = {"soft": eband(4, 12), "hard": eband(8, 16)},
-                                  usedtcorr=True):
+                                  usedtcorr=True, pixsize=20./3600.):
     """
     given two sets with paths to the urdfiles and corresponding attfiles,
     and gti as a dictionary, each key contains gti for particular urd
@@ -78,7 +79,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
     attdata = attdata.apply_gti(gti + [-30, 30])
     gti = attdata.gti & gti
 
-    locwcs = make_wcs_for_attdata(attdata, gti, 20/3600.) #produce wcs for accumulated atitude information
+    locwcs = make_wcs_for_attdata(attdata, gti, 15/3600.) #produce wcs for accumulated atitude information
     xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
     imgdata = {name: np.zeros((ysize, xsize), np.double) for name in ebands}
     urdgti = {URDN:emptyGTI for URDN in URDNS}

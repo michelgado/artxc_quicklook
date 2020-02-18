@@ -22,6 +22,13 @@ ARTQUATS.update({TELTOURD[row[0]]:Rotation(row[1:]) for row in fits.getdata(os.p
 CUTAPP = None
 FLATBKG = False
 
+urdbkgsc = {28: 1.0269982359153347,
+            22: 0.9461951470620872,
+            23: 1.029129860773177,
+            24: 1.0385034889253482,
+            25: 0.9769294100898714,
+            26: 1.0047417556512688,
+            30: 0.9775021015829128}
 
 def get_cif(cal_cname, instrume):
     return idxtabl.query("INSTRUME=='%s' and CAL_CNAME=='%s'" %

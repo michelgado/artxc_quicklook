@@ -1,21 +1,14 @@
 from .energy import get_events_energy
 from .time import deadtime_correction, make_ingti_times, tarange, get_gti, gti_intersection
-from .caldb import get_energycal
+from .caldb import get_energycal, urdbkgsc
 from scipy.interpolate import interp1d
 import numpy as np
 from functools import reduce
 
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 
-urdbkgsc = {28: 1.0269982359153347,
-            22: 0.9461951470620872,
-            23: 1.029129860773177,
-            24: 1.0385034889253482,
-            25: 0.9769294100898714,
-            26: 1.0047417556512688,
-            30: 0.9775021015829128}
 
-def get_time_intervals_weigts(gtis, scales):
+def weigt_time_intervals(gtis, scales=urdbkgsc, defaultscale=1):
     """
     for the provided dictionaries, containing keys and corresponding gtis and scales
     computes overall weights insided gtis which determined by which of keys were active in time intervals
@@ -23,13 +16,34 @@ def get_time_intervals_weigts(gtis, scales):
     gtitot = reduce(lambda a, b: a | b, gtis.values())
     edges = np.unique(np.concatenate([g.arr.ravel() for g in gtis.values()]))
     te, mgaps = gtitot.make_tedges(edges)
-    tc = (te[1:] + te[:-1])[mgaps]/2.
-    se = np.ones(mgaps.size, np.double)*np.sum(scales.values())
-    se[mgaps] = 0
+    tc = (te[1:] + te[:-1])/2.
+    se = np.ones(mgaps.size + 2, np.double)*np.sum([scales.get(key, defaultscale) for ket in gtis])
+    se[1:-1][mgaps] = 0
     for key, gti in gtis.items():
         mask = np.logical_not(gti.mask_outofgti_times(tc))
-        se[mask] -= scale[key]
-    return te, se, mgaps
+        se[1:-1][mask] -= scales.get(key, defaultscale)
+    se[[0, -1]] = 0.
+
+    def scalefunc(times):
+        return se[te.searchsorted(times)]
+
+    cse = np.cumsum(se)
+    cumscalefunc = interp1d(te, cse[:-1], kind="linear", bounds_error=False, fill_value=(cse[0], cse[-1]))
+
+    return te, se, scalefunc, cumscalefunc
+
+def make_overall_bkglc(times, urdgtis, dt=100):
+    gtitot = reduce(lambda a, b: a | b, urdgtis.values())
+    te, mgaps = gtitot.local_arange(100.)
+    teg, mgapsg, scalef, cscalef = weigt_time_intervals(urdgtis)
+    crate = te.searchsorted(times)
+    crate = (crate[1:] - crate[:-1])/(cscalef(te[1:]) - cscalef(te[:-1]))/(te[1:] - te[:-1])
+    crate[mgaps] = 0.
+
+    def bkgrate(times, urnd=None, scales=urdbkgsc):
+        return crate[te.searchsorted(times)]*urdbkgsc.get(urdn, 1.)
+
+    return te, mgaps, crate, bkgrate
 
 def make_constantcounts_timeedges(times, gti, cts=1000):
     idx = times.searchsorted(gti.arr)
@@ -45,7 +59,6 @@ def make_constantcounts_timeedges(times, gti, cts=1000):
 
 def make_lightcurve(times, gti):
     gti = get_gti(urdfile)
-
     ts = np.concatenate([tarange(dtbkg, g) for g in gti])
     tnew, maskgaps = make_ingti_times(ts, gti + [dtbkg*1e-6, -dtbkg*1e-6])
     lcs = np.searchsorted(tevt, tnew)

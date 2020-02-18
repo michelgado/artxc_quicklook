@@ -69,7 +69,9 @@ if __name__ == "__main__":
         urddata = np.copy(urdfile["EVENTS"].data)
         flag = np.ones(urddata.size, np.uint8)
 
-        locgti = get_gti(urdfile) & attdata.gti
+        locgti = get_gti(urdfile)
+        locgti.merge_joint()
+
 
         caldbfile = get_energycal(urdfile)
         flag[(locgti & attdata.gti).mask_outofgti_times(urddata["TIME"])] = 0
@@ -97,7 +99,7 @@ if __name__ == "__main__":
         newurdtable = fits.BinTableHDU.from_columns(cols, header=h)
 
         newurdtable.name = "EVENTS"
-        gtitable = fits.BinTableHDU(Table(locgti.arr, names=("TSATRT", "TSTOP")), header=urdfile["GTI"].header)
+        gtitable = fits.BinTableHDU(Table(locgti.arr, names=("START", "STOP")), header=urdfile["GTI"].header)
         newfile = fits.HDUList([urdfile[0], newurdtable, urdfile["HK"], gtitable])
         newfile.writeto(os.path.join(outdir, os.path.basename(urdfname)), overwrite=True)
 

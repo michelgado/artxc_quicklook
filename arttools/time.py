@@ -187,18 +187,38 @@ class GTI(object):
         return np.searchsorted(tseries, self.arr)
 
     def local_arange(self, dt, epoch=None):
-        tsize = ((self.arr[:,1] - self.arr[:, 0])/dt).astype(np.int) + 1
+        tsize = np.ceil((self.arr[:,1] - self.arr[:, 0])/dt).astype(np.int)
         ctot = np.empty(tsize.size + 1, np.int)
-        ctot[1:] = np.cumsum(tsize)
+        ctot[1:] = np.cumsum(tsize + 1)
         ctot[0] = 0
-        arange = np.arange(ctot[-1]) - np.repeat(ctot[:-1], tsize)
+        arange = np.arange(ctot[-1]) - np.repeat(ctot[:-1], tsize + 1)
         if epoch is None:
-            t0 = self.arr[:, 0] - dt*(tsize%1)/2.
+            t0 = self.arr[:, 0]
         else:
             t0 = self.arr[:, 0] - (self.arr[:, 0] - epoch)%dt
-        te = arange*dt + np.repeat(t0, tsize)
+        te = arange*dt + np.repeat(t0, tsize + 1)
         return self.make_tedges(te)
 
+
+"""
+class WeightedGTI(GTI):
+
+    def __init__(self, arr, weight=1.):
+        super().__int__(arr)
+        self.weight = weight if type(weight) is np.ndarray else np.ones(self.arr.shape[0], np.double)*weight
+
+    def get_weights(times):
+        wgh = np.zeros(times.size, np.double)
+        mask = self.mask_outofgti_times(times)
+        tloc = times[mask]
+        wgh[mask] = self.weight[self.arr.shape[:, 0].searchsorted(tloc)]
+        return wgh
+
+    def __and__(self, other):
+        super.__and__(other)
+        self.weight = self.get_weights(self.arr.mean(axis=1)) + other.get_weights(self.arr.mean(axis=1))
+
+"""
 
 
 tGTI = GTI([-np.inf, np.inf])
