@@ -85,6 +85,7 @@ if __name__ == "__main__":
         shadow = get_shadowmask(urdfile)
         maskshadow = get_shadowed_pix_mask_for_urddata(urddata, shadow)
         flag[np.logical_not(maskshadow)] = 2
+        flag[np.any([urddata["RAW_X"] == 0, urddata["RAW_X"] == 47, urddata["RAW_Y"] == 0, urddata["RAW_Y"] == 47], axis=0)] = 3
         h = copy.copy(urdfile["EVENTS"].header)
         h.pop("NAXIS2")
 
