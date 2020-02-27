@@ -26,7 +26,7 @@ def sent_email(subject, text):
     msg = EmailMessage()
     msg['Subject'] = f'{subject}'
     msg['From'] = 'artxc-grb@cosmos.ru'
-    msg['To'] = 'i.a.mereminskiy@gmail.com'
+    msg['To'] = 'i.a.mereminskiy@gmail.com,molkov@iki.rssi.ru'
     msg.set_content(text)
 
     s = smtplib.SMTP('localhost')
@@ -57,11 +57,12 @@ def check_plan(evt_t, evt_ra, evt_dec):
         offset_at_evt = coords[at_evt].separation(evt_pos).degree
     
     min_sep, at_time = -999, -999
-    t  = t[t>evt_t]
+    ta  = t[t>evt_t]
     if len(t)>0:
+        coords = coords[t>evt_t]
         sepz = coords.separation(evt_pos).degree
         min_sep = np.min(sepz)
-        at_time = t[np.argmin(sepz)] - evt_t
+        at_time = ta[np.argmin(sepz)] - evt_t
     return offset_at_evt, min_sep, at_time   
 
 def parse_GCN(payload, root):
@@ -75,7 +76,7 @@ def parse_GCN(payload, root):
         value = param.attrib['value']
         content[name]=value
     gcn_type = content["Packet_Type"]
-    grb_full   = ['61', '98', '99', '53', '54', '55', '100', '101', '102',  '115', '131', '121', '127', '128', '134']
+    grb_full   = ['61', '98', '99', '53', '54', '55', '100', '101', '102', '111', '112', '115', '131', '121', '127', '128', '134']
     grb_time   = ['110','105', '59', '60', '52', '160', '161']
     grb_all    = grb_full + grb_time
     if (gcn_type in grb_all) and (notice_role=='observation'):
@@ -94,11 +95,16 @@ def parse_GCN(payload, root):
             except:
                 pass
         if ra == -999:
-            payload     = f'GRB Notice: burst at {event_time} (approx. {obt_time} OBT), position is unavailable at the moment \n\n\n'+payload    
+            payload     = f'GRB Notice: burst at {event_time} (approx. {obt_time} OBT), position is unavailable or unrecognised at the moment \n\n\n'+payload    
         else:
             offset_at_evt, min_sep, at_time = check_plan(obt_time, ra, dec)
-            warning_dist = np.max([18./60, 1.5*err])
             buff     = f'GRB Notice: burst at {event_time} (approx. {obt_time} OBT), position ({ra:.4f},{dec:.4f} with error radius {err:.2f} degree)\n'
+            pos = SkyCoord(ra=ra, dec=dec, frame="fk5", unit="deg")
+            l, b = pos.galactic.l.degree, pos.galactic.b.degree
+            half = 'RU'
+            if l>180.:
+                half = 'DE'
+            buff  += f'Galactic (l,b) = ({l:.4f},{b:.4f}), on {half} side\n'
             if offset_at_evt!=-999:
                 buff    += f'Angle between tel.axis and burst is {offset_at_evt:.1f}\n'
             if min_sep!=-999:
@@ -106,7 +112,5 @@ def parse_GCN(payload, root):
             payload  = buff + '\n\n\n'+payload
         sent_email(subject, payload)
     
-    
 # Listen for VOEvents until killed with Control-C.
 gcn.listen(handler=parse_GCN)
-    
