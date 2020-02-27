@@ -91,6 +91,7 @@ def get_attdata(fname):
         attdata = define_required_correction(attdata)
     return attdata
 
+
 def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
                                   outctsname, outbkgname, outexpmapname,
                                   urdbti={}, ebands={"soft": eband(4, 12), "hard": eband(8, 16)},
@@ -136,7 +137,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
         bkggti[urdn] = bkggti.get(urdn, emptyGTI) | locbgti
 
         urddata = np.copy(urdfile["EVENTS"].data) #hint: do not apply bool mask to a fitsrec - it's a stright way to the memory leak :)
-        urddata = urddata[locbgti.mask_outofgti_times(urddata["TIME"])]
+        urddata = urddata[(locgti + [-200, 200]).mask_outofgti_times(urddata["TIME"])]
 
         hkdata = np.copy(urdfile["HK"].data)
         hkdata = hkdata[(locgti + [-30, 30]).mask_outofgti_times(hkdata["TIME"])]

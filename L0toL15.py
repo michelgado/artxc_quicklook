@@ -71,7 +71,9 @@ if __name__ == "__main__":
         urddata = Table(urdfile["EVENTS"].data).as_array()
         flag = np.ones(urddata.size, np.uint8)
 
-        locgti = get_gti(urdfile) & attdata.gti
+        locgti = get_gti(urdfile)
+        locgti.merge_joint()
+
 
         caldbfile = get_energycal(urdfile)
         bkigti = arttools.time.make_bki_gti(urdfile)
@@ -86,6 +88,7 @@ if __name__ == "__main__":
         shadow = get_shadowmask(urdfile)
         maskshadow = get_shadowed_pix_mask_for_urddata(urddata, shadow)
         flag[np.logical_not(maskshadow)] = 2
+        flag[np.any([urddata["RAW_X"] == 0, urddata["RAW_X"] == 47, urddata["RAW_Y"] == 0, urddata["RAW_Y"] == 47], axis=0)] = 3
         h = copy.copy(urdfile["EVENTS"].header)
         h.pop("NAXIS2")
 
@@ -104,7 +107,7 @@ if __name__ == "__main__":
         newurdtable = fits.BinTableHDU.from_columns(cols, header=h)
 
         newurdtable.name = "EVENTS"
-        gtitable = fits.BinTableHDU(Table(locgti.arr, names=("TSATRT", "TSTOP")), header=urdfile["GTI"].header)
+        gtitable = fits.BinTableHDU(Table(locgti.arr, names=("START", "STOP")), header=urdfile["GTI"].header)
         newfile = fits.HDUList([urdfile[0], newurdtable, urdfile["HK"], gtitable])
         newfile.writeto(os.path.join(outdir, os.path.basename(urdfname)), overwrite=True)
 

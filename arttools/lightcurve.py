@@ -20,7 +20,7 @@ def weigt_time_intervals(gtis, scales=urdbkgsc, defaultscale=1):
     te, mgaps = gtitot.make_tedges(edges)
     tc = (te[1:] + te[:-1])/2.
     se = np.ones(mgaps.size + 2, np.double)*np.sum([scales.get(key, defaultscale) for key in gtis])
-
+    se[1:-1][mgaps] = 0
     for key, gti in gtis.items():
         mask = np.logical_not(gti.mask_outofgti_times(tc))
         se[1:-1][mask] -= scales.get(key, defaultscale)
@@ -28,7 +28,6 @@ def weigt_time_intervals(gtis, scales=urdbkgsc, defaultscale=1):
 
     def scalefunc(times):
         return se[te.searchsorted(times)]
-
     dt = np.zeros(se.size, np.double)
     dt[1:-1] = (te[1:] - te[:-1])
     cse = np.cumsum(se*dt)
@@ -52,7 +51,6 @@ def make_overall_bkglc(times, urdgtis, dt=100, scales=urdbkgsc):
 
     crate[np.logical_not(mgaps)] = 0.
 
-
     def bkgrate(times, urdn=None, scales=scales, fill_value=0.):
         res = np.empty(times.size, np.double)
         idx = te.searchsorted(times)
@@ -60,8 +58,8 @@ def make_overall_bkglc(times, urdgtis, dt=100, scales=urdbkgsc):
         res[np.logical_not(mask)] = fill_value
         res[mask] = crate[idx[mask] - 1]
         return res*urdbkgsc.get(urdn, 1.)
-
     return te, mgaps, crate, crerr, bkgrate
+
 
 def make_constantcounts_timeedges(times, gti, cts=1000):
     idx = times.searchsorted(gti.arr)
@@ -109,4 +107,3 @@ def get_overall_countrate(urdfile, elow, ehigh, ingoreedgestrips=True):
     maskzero = dt > 0
     bkgrate = lcs[maskgaps][maskzero]/dt[maskzero]
     return ts[maskzero], bkgrate
-
