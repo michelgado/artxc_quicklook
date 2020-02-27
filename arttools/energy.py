@@ -124,4 +124,4 @@ def get_events_energy(eventlist, hkdata, caldb):
     xc = eventlist["RAW_X"]
     yc = eventlist["RAW_Y"]
     emean = -0.2504 + 1.0082*emean - 6.10E-5*emean**2.
-    kggjkggjkggj, xc, yc, bitmask_to_grade(bitmask)
+    return emean, xc, yc, bitmask_to_grade(bitmask)
