@@ -71,7 +71,7 @@ if __name__ == "__main__":
         urddata = Table(urdfile["EVENTS"].data).as_array()
         flag = np.ones(urddata.size, np.uint8)
 
-        locgti = get_gti(urdfile)
+        locgti = get_gti(urdfile, gtiextname="KVEA_GTI")
         locgti.merge_joint()
 
 
