@@ -8,12 +8,14 @@ there are also functions which can be used to create masks on the urd data to ex
 
 import numpy as np
 from math import pi
+from .aux import cache_single_result_np
 
 DL = 0.595 # distance between strips in mm
 F = 2693. # focal length in mm
 dxya = np.arctan(DL/F)*180./pi #0.595 - distance between strips, 2693 - ART-XC focal length
 
 
+#@cache_single_result_np
 def raw_xy_to_offset(rawx, rawy):
     """
     this function converts event parameters (rawx, rawy) to the spatial offset from the detector center in the detector plane
@@ -28,6 +30,7 @@ def raw_xy_to_offset(rawx, rawy):
     """
     return (rawx - 23.5)*DL, (rawy - 23.5)*DL
 
+#@cache_single_result_np
 def offset_to_raw_xy(x, y):
     """
     converts the spatial offset in the detector plane to the pixel integer coordinates (read rawx, rawy)
@@ -41,6 +44,7 @@ def offset_to_raw_xy(x, y):
     """
     return np.array(x/DL + 24, np.int), np.array(y/DL + 24, np.int)
 
+#@cache_single_result_np
 def raw_xy_to_vec(rawx, rawy):
     """
     assuming that the detector is located in the YZ vizier plane and X is normal to it
@@ -55,6 +59,7 @@ def raw_xy_to_vec(rawx, rawy):
     """
     return offset_to_vec(*raw_xy_to_offset(rawx, rawy))
 
+#@cache_single_result_np
 def offset_to_vec(x, y):
     """
     converts spatial offset in the detector plane to the vector, defining offset from the optical axis, corresponding to the spatial offset
@@ -71,6 +76,7 @@ def offset_to_vec(x, y):
     outvec[..., 2] = -y
     return outvec
 
+#@cache_single_result_np
 def vec_to_offset(vec):
     """
     converts vector defined in the detector coordinate system to the spatial offset in mm
@@ -82,6 +88,7 @@ def vec_to_offset(vec):
     """
     return vec[...,1]*F/vec[...,0], -vec[...,2]*F/vec[...,0]
 
+#@cache_single_result_np
 def vec_to_offset_pairs(vec):
     """
     converts vector defined in the detector coordinate system to the spatial offset in mm
@@ -93,17 +100,33 @@ def vec_to_offset_pairs(vec):
     """
     return (vec[...,[1,2]]/vec[...,0][..., np.newaxis])*[F, -F]
 
+
+#@cache_single_result_np
+def multiply_coord(x, y, subscale=1):
+    """
+    assuming that x and y are ceil indexes
+    """
+    sscale = (np.arange(subscale) - (subscale - 1)/2.)/subscale
+    X = np.repeat(x, subscale*subscale) + \
+            np.tile(np.tile(sscale, subscale), x.size)
+    Y = np.repeat(y, subscale*subscale) + \
+            np.tile(np.repeat(sscale, subscale), x.size)
+    return X, Y
+
+
+def multiply_photons(urddata, subscale=1):
+    """
+    for the provided urddata splits each pixel on subscale x subscale subpixes and return their detector coordinates
+    """
+    return multiply_coord(urddata["RAW_X"], urddata["RAW_Y"], subscale)
+
+
 def urd_to_vec(urddata, subscale=1):
     """
     shorcut for offset_to_vec(urd_to_offset())
     produces unit vectors corresponding to offset from optical axis which are required for photon to be scatterd in the pixel with rawx rawy coordinates
     """
-    sscale = (np.arange(subscale) - (subscale - 1)/2.)/subscale
-    rawx = np.repeat(urddata["RAW_X"], subscale*subscale) + \
-            np.tile(np.tile(sscale, subscale), urddata.size)
-    rawy = np.repeat(urddata["RAW_Y"], subscale*subscale) + \
-            np.tile(np.repeat(sscale, subscale), urddata.size)
-    return raw_xy_to_vec(rawx, rawy)
+    return raw_xy_to_vec(*multiply_photons(urddata, subscale))
 
 def weight_coordinate(PI, rawcoord, mask):
     """

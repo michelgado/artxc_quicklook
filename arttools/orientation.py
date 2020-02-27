@@ -169,6 +169,11 @@ class AttDATA(SlerpWithNaiveIndexing):
         ut, uidx = np.unique(tlist, return_index=True)
         return cls(ut, Rotation(qlist[uidx]), gti=tgti)
 
+    def set_nodes(self, te):
+        te, mgaps = self.gti.make_tedges(te)
+        return AttDATA(te, self(te), gti=self.gti)
+
+
 def read_gyro_fits(gyrohdu):
     """
     reads gyro quaternion from fits file hdu and returns AttDATA  container
@@ -233,6 +238,7 @@ def get_raw_bokz(bokzhdu):
     jyear = get_hdu_times(bokzhdu).jyear[mask]
     return bokzdata["TIME"][mask], earth_precession_quat(jyear).inv()*qbokz
 
+
 def get_photons_vectors(urddata, URDN, attdata, subscale=1):
     """
     return cartesian vectros, defining direction to the sky, for the specific pixel, defined with urddata rawx, rawy coordinates
@@ -290,7 +296,7 @@ def quat_to_pol_and_roll(qfin, opaxis=[1, 0, 0], north=[0, 0, 1]):
         north - axis relative to which roll angle will be defined
 
     return:
-        ra, dec, roll - attitude fk5 coordinates (ra, dec) and roll angle relative to north axis
+        ra, dec, roll - attitude fk5 coordinates (ra, dec) and roll angle relative to north axis ! note that all angles are returned in radians
     """
     opticaxis = qfin.apply(opaxis)
     dec = np.arctan(opticaxis[:,2]/np.sqrt(opticaxis[:,1]**2 + opticaxis[:,0]**2))
@@ -307,7 +313,7 @@ def earth_precession_quat(jyear):
     """
     taken from astropy.coordinates.earth_orientation
     contains standrard precession ephemerides, accepted at IAU 2006,
-    didn't check but should work better then IAU76 version, which provide several mas upto 2040
+    didn't check but should work better then IAU76 version, which provide several mas precission upto 2040
 
     -------
     Params:
@@ -340,8 +346,8 @@ def get_wcs_roll_for_qval(wcs, qval):
     """
     ra, dec = vec_to_pol(qval.apply([1, 0, 0]))
     x, y = wcs.all_world2pix(np.array([ra, dec]).T*180./pi, 1).T
-    r1, d1 = (wcs.all_pix2world(np.array([x, y - 50.]).T, 1)).T
-    r2, d2 = (wcs.all_pix2world(np.array([x, y + 50.]).T, 1)).T
+    r1, d1 = (wcs.all_pix2world(np.array([x, y - max(1./wcs.wcs.cdelt[1], 50.)]).T, 1)).T
+    r2, d2 = (wcs.all_pix2world(np.array([x, y + max(1./wcs.wcs.cdelt[1], 50.)]).T, 1)).T
     vbot = pol_to_vec(r1*pi/180., d1*pi/180.)
     vtop = pol_to_vec(r2*pi/180., d2*pi/180.)
     vimgyax = vbot - vtop

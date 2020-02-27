@@ -2,10 +2,17 @@ import os, sys
 import pandas
 from astropy.io import fits
 from astropy.table import Table
+from functools import lru_cache
 import datetime
+from astropy import time as atime
 import numpy as np
 from .telescope import URDTOTEL
+from .time import GTI
 from scipy.spatial.transform import Rotation
+
+
+""" ART-XC mjd ref used to compute onboard seconds"""
+MJDREF = 51543.875
 
 ARTCALDBPATH = os.environ["ARTCALDB"]
 indexfname = "artxc_index.fits"
@@ -17,15 +24,71 @@ idxtabl = Table(idxdata).to_pandas()
 idxtabl["CAL_DATE"] = pandas.to_datetime(idxtabl["CAL_DATE"])
 idxtabl.set_index("CAL_DATE", inplace=True)
 
+
+"""
+task should store required calibrations
+
+for example, let assume I have a task
+def mksomething(urddata, hkdata, attdata, gti):
+    which producess someproduct  with some actions
+    first product can be producesd only on the crossection of the all input data types and task
+
+    product should store, information about used calibration data
+
+    question concatenate and unify products of the task???
+
+    some can be unifiend some not - i.e. we have different arf and rmf
+
+    questions:
+    * how to join exposure maps
+    answer:
+        if exposure maps have proper normalization, corresponding to effective area, one have simpy sum them
+        result: check how the exposure map were computed
+
+    * how to join lightcurves
+        usually expect  to concatenate lightcurves in single energy band or sum lightcurves in disjoint  bands
+
+    *how to join spectra
+        spectra with same rmf but different arf - simply sum then and weight arfs with exposures
+        spectra with different rmf - always use separately ????
+
+"""
+
+
+def get_caldata(urdn, ctype, gti=GTI([(atime.Time(datetime.datetime.now()) - atime.Time(MJDREF, format="mjd")).sec,]*2,)):
+    """
+    given the urd
+    """
+    caldata = idxtabl.query("INSTRUME=='%s' and CAL_CNAME=='%s'" % (TELTOURD[urdn], ctype)).sort_index()
+    timestamps = (atime.Time(caldata.index.values) - atime.Time(MJDREF)).sec
+    caldata["tstart"] = timestamps
+    caldata["tstop"] = np.roll(timestamps, -1)
+    caldata.iloc[-1].tstop = np.inf
+    idxloc = np.maximum(np.unique(timestamps.searchsorted(gti.arr)) - 1, 0)
+    caldata = caldata.iloc[idxloc].groupby(["CAL_DIR", "CAL_FILE"])
+    return {g: GTI(caldata.iloc[idx][["tstart", "tstop"]].values) for g, idx in caldata.groups.items()}
+
+
+"""
+def get_quats(urdn, gti):
+    calibrations = get_caldata(urdn, "NONE")
+"""
+
 ARTQUATS = {row[0]:Rotation(row[1:]) for row in fits.getdata(os.path.join(ARTCALDBPATH, "artxc_quats_v001.fits"), 1)}
 ARTQUATS.update({TELTOURD[row[0]]:Rotation(row[1:]) for row in fits.getdata(os.path.join(ARTCALDBPATH, "artxc_quats_v001.fits"), 1) if row[0] in TELTOURD})
 CUTAPP = None
 FLATBKG = False
 
+urdbkgsc = {28: 1.0269982359153347,
+            22: 0.9461951470620872,
+            23: 1.029129860773177,
+            24: 1.0385034889253482,
+            25: 0.9769294100898714,
+            26: 1.0047417556512688,
+            30: 0.9775021015829128}
 
 def get_cif(cal_cname, instrume):
-    return idxtabl.query("INSTRUME=='%s' and CAL_CNAME=='%s'" %
-                               (instrume, cal_cname))
+    return idxtabl.query("INSTRUME=='%s' and CAL_CNAME=='%s'" % (instrume, cal_cname))
 
 def get_relevat_file(cal_cname, instrume, date=datetime.datetime(2030, 10, 10)):
     caltable = get_cif(cal_cname, instrume)
@@ -36,12 +99,14 @@ def get_relevat_file(cal_cname, instrume, date=datetime.datetime(2030, 10, 10)):
 
 OPAXOFFSET = {TELTOURD[tel]: [x, y] for tel, x, y in fits.getdata(get_relevat_file("OPT_AXIS", "NONE"))}
 
+@lru_cache(maxsize=5)
 def get_vigneting_by_urd(urdn):
     """
     to do: put vignmap in the caldb
     """
     return fits.open("/srg/a1/work/ayut/art-xc_vignea_q200_191210.fits")
 
+@lru_cache()
 def get_shadowmask_by_urd(urdn):
     global CUTAPP
     #temporal patch
@@ -58,6 +123,7 @@ def get_shadowmask_by_urd(urdn):
 def get_shadowmask(urdfile):
     return get_shadowmask_by_urd(urdfile["EVENTS"].header["URDN"])
 
+@lru_cache()
 def get_energycal_by_urd(urdn):
     fpath = get_relevat_file('TCOEF', URDTOTEL[urdn])
     return fits.open(fpath)
@@ -65,6 +131,7 @@ def get_energycal_by_urd(urdn):
 def get_energycal(urdfile):
     return get_energycal_by_urd(urdfile["EVENTS"].header["URDN"])
 
+@lru_cache()
 def get_backprofile_by_urdn(urdn):
     global FLATBKG
     bkg = fits.getdata(get_relevat_file("BKG", URDTOTEL[urdn]), 0)

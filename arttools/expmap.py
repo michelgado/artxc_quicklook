@@ -1,7 +1,9 @@
 from .caldb import ARTQUATS
-from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttInvHist
+from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttInvHist, make_small_steps_quats
 from .vignetting import make_vignetting_for_urdn, make_overall_vignetting
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
+from .lightcurve import weigt_time_intervals
+from ._det_spatial import vec_to_offset_pairs
 from .telescope import URDNS
 from functools import reduce
 from multiprocessing import cpu_count
@@ -30,6 +32,7 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs)
             print("produce overall urds expmap")
             emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum)
             print("\ndone!")
+
     for urd in urdgtis:
         gti = urdgtis[urd] & -overall_gti
         if gti.exposure == 0:
@@ -41,7 +44,20 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs)
         vmap = make_vignetting_for_urdn(urd, **kwargs)
         emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum) + emap
         print(" done!")
+    #make_vignetting_for_urdn.cache_clear()
     return emap
+
+def make_exposures(direction, te, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs):
+    tec, mgaps, se, scalefunc, cumscalefunc = weigt_time_intervals(urdgtis)
+    overall_gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
+    ts, qval, dtn, locgti = make_small_steps_quats(attdata.set_nodes(te), gti=overall_gti)
+    vmap = make_overall_vignetting()
+    offset = vec_to_offset_pairs(attdata(ts).apply(direction, inverse=True))
+    scales = vmap(offset)
+    dtn = dtn*scales*cumscalefunc(ts)
+    idx = np.argsort(dtn)
+    dtn = np.histogram(ts[idx], te, weights=dtn[idx])[0]
+    return te, dtn
 
 def make_expmap_for_healpix(attdata, urdgtis, mpnum=MPNUM, dtcorr={}, subscale=4):
     if dtcorr:
@@ -65,4 +81,5 @@ def make_expmap_for_healpix(attdata, urdgtis, mpnum=MPNUM, dtcorr={}, subscale=4
         vmap = make_vignetting_for_urdn(urd)
         emap = AttHealpixHist.make_mp(2048, vmap, exptime, qval, mpnum, subscale=subscale) + emap
         print(" done!")
+    make_vignetting_for_urdn.clear_cache()
     return emap

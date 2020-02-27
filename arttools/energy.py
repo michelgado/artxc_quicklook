@@ -4,7 +4,7 @@ import numpy as np
 GRADESI = np.ones(256)*(-1)
 GRADESI[18] = 0 #single central events
 GRADESI[[50, 26, 22, 19, 54, 51, 30, 27]] = [1, 2, 3, 4, 5, 6, 7, 8] #double events
-GRADESI[[58, 62, 59, 23, 56, 31, 63]] = [9, 10, 11, 12, 13, 14, 15] #tripple events
+GRADESI[[58, 62, 59, 23, 55, 31, 63]] = [9, 10, 11, 12, 13, 14, 15] #tripple events
 
 def PHA_to_PI(PHA, strip, Temp, caldb):
     """
@@ -33,9 +33,10 @@ def mkeventindex(strip):
 
 def bitmask_to_grade(bitmask):
     maskint = np.packbits(bitmask, axis=0)[0]
-    return GRADESI[maskint]
+    return GRADESI[maskint].astype(np.int)
 
-def get_bot_energy(eventlist, hkdata, caldb):
+
+def get_bot_energy(eventlist, hkdata, caldb, randomize=True):
     T = interp1d(hkdata["TIME"], hkdata["TD1"],
             bounds_error=False, kind="linear",
             fill_value=(hkdata["TD1"][0], hkdata["TD1"][-1]))(eventlist["TIME"])
@@ -43,11 +44,11 @@ def get_bot_energy(eventlist, hkdata, caldb):
     rawx, maskb = mkeventindex(eventlist["RAW_X"])
     sigmab = botcal["fwhm_1"][rawx]*T + botcal["fwhm_0"][rawx]
     PHAB = np.array([eventlist["PHA_BOT_SUB1"], eventlist["PHA_BOT"], eventlist["PHA_BOT_ADD1"]])
-    energb = random_uniform(PHAB, rawx, T, botcal)
+    energb = random_uniform(PHAB, rawx, T, botcal) if randomize else PHA_to_PI(PHAB, rawx, T, botcal)
     maskb = np.logical_and(maskb, energb > botcal["THRESHOLD"][rawx])
-    return energb, maskb
+    return energb, maskb, sigmab
 
-def get_top_energy(eventlist, hkdata, caldb):
+def get_top_energy(eventlist, hkdata, caldb, randomize=True):
     T = interp1d(hkdata["TIME"], hkdata["TD1"],
             bounds_error=False, kind="linear",
             fill_value=(hkdata["TD1"][0], hkdata["TD1"][-1]))(eventlist["TIME"])
@@ -55,9 +56,9 @@ def get_top_energy(eventlist, hkdata, caldb):
     rawy, maskt = mkeventindex(eventlist["RAW_Y"])
     sigmat = topcal["fwhm_1"][rawy]*T + topcal["fwhm_0"][rawy]
     PHAT = np.array([eventlist["PHA_TOP_SUB1"], eventlist["PHA_TOP"], eventlist["PHA_TOP_ADD1"]])
-    energt = random_uniform(PHAT, rawy, T, topcal) #PHA_to_PI(PHAT, rawy, T, topcal)
+    energt = random_uniform(PHAT, rawy, T, topcal) if randomize else  PHA_to_PI(PHAT, rawy, T, topcal)
     maskt = np.logical_and(maskt, energt > topcal["THRESHOLD"][rawy])
-    return energt, maskt
+    return energt, maskt, sigmat
 
 def get_events_energy(eventlist, hkdata, caldb):
     """
@@ -109,9 +110,6 @@ def get_events_energy(eventlist, hkdata, caldb):
     bitmask[2:5, :] = maskt
     print("top dist", np.unique(maskt.sum(axis=0), return_counts=True))
 
-    """
-    drop all below threashold
-    """
     atleastone = np.any(bitmask[2:,:], axis=0)
     print("drop by threshold", atleastone.size - atleastone.sum(), " from ", atleastone.size)
 
@@ -126,4 +124,4 @@ def get_events_energy(eventlist, hkdata, caldb):
     xc = eventlist["RAW_X"]
     yc = eventlist["RAW_Y"]
     emean = -0.2504 + 1.0082*emean - 6.10E-5*emean**2.
-    return emean, xc, yc, bitmask_to_grade(bitmask)
+    kggjkggjkggj, xc, yc, bitmask_to_grade(bitmask)
