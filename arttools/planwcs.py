@@ -95,6 +95,9 @@ def get_most_orthogonal_idx(vec1, vec2, vecs):
     return idx, proj > 0
 
 def get_outof_trinagle(vec1, vec2, vec3, vecs):
+    """
+    check, whether the vecs are outside of triangle with verteces vec1, vec2 and vec3
+    """
     vort1 = np.cross(vec1, vec2)
     vort2 = np.cross(vec2, vec3)
     vort3 = np.cross(vec3, vec1)
@@ -102,7 +105,6 @@ def get_outof_trinagle(vec1, vec2, vec3, vecs):
     s2 = np.sum(vort2*vecs, axis=1)
     s3 = np.sum(vort3*vecs, axis=1)
     return  np.any([s1*s2 < 0, s1*s3 < 0, s2*s3 < 0], axis=0)
-
 
 def get_vecs_convex(vecs):
     """
@@ -362,20 +364,10 @@ def make_wcs_for_attdata(attdata, gti=tGTI, pixsize=20./3600.):
 def split_survey_mode(attdata, gti=tGTI):
     aloc = attdata.apply_gti(gti)
     rpvec = get_elongation_plane_norm(aloc)
-    #rpvec = minimize_norm_to_survey(aloc, rpvec)
     rquat = align_with_z_quat(rpvec)
     amin = np.argmin(vec_to_pol(aloc(aloc.times).apply([1, 0, 0]))[0])
-    print(amin)
-    """
-    zeropoint = [1, 0, 0] - rpvec*rpvec[0]
-    print(zeropoint)
-    #zeropoint = np.cross(rpvec, [0, 1, 0])
-    zeropoint = zeropoint/sqrt(np.sum(zeropoint**2.))
-    """
     zeropoint = aloc([aloc.times[amin],])[0].apply([1, 0, 0])
-    print(zeropoint, vec_to_pol(zeropoint), np.arctan2(zeropoint[1], zeropoint[0]))
     zeropoint = rquat.apply(zeropoint)
-    print(zeropoint)
     alpha0 = np.arctan2(zeropoint[1], zeropoint[0])
 
     vecs = aloc(aloc.times).apply([1, 0, 0])
@@ -413,7 +405,6 @@ def make_wcs_for_survey_mode(attdata, gti=None, rpvec=None, pixsize=20./3600.):
     yangles = np.arccos(np.sum(rpvec*vecs, axis=1))/pi*180./pixsize
     xmin, xmax = xangles.min(), xangles.max()
     ymin, ymax = yangles.min(), yangles.max()
-    print(xmin, xmax, ymin, ymax)
     rasize = max(abs(xmin), abs(xmax))
     desize = max(abs(ymin), abs(ymax))
     rasize = rasize - rasize%2 + 1

@@ -169,6 +169,11 @@ class AttDATA(SlerpWithNaiveIndexing):
         ut, uidx = np.unique(tlist, return_index=True)
         return cls(ut, Rotation(qlist[uidx]), gti=tgti)
 
+    def set_nodes(self, te):
+        te, mgaps = self.gti.make_tedges(te)
+        return AttDATA(te, self(te), gti=self.gti)
+
+
 def read_gyro_fits(gyrohdu):
     """
     reads gyro quaternion from fits file hdu and returns AttDATA  container
@@ -308,7 +313,7 @@ def earth_precession_quat(jyear):
     """
     taken from astropy.coordinates.earth_orientation
     contains standrard precession ephemerides, accepted at IAU 2006,
-    didn't check but should work better then IAU76 version, which provide several mas upto 2040
+    didn't check but should work better then IAU76 version, which provide several mas precission upto 2040
 
     -------
     Params:
@@ -341,8 +346,8 @@ def get_wcs_roll_for_qval(wcs, qval):
     """
     ra, dec = vec_to_pol(qval.apply([1, 0, 0]))
     x, y = wcs.all_world2pix(np.array([ra, dec]).T*180./pi, 1).T
-    r1, d1 = (wcs.all_pix2world(np.array([x, y - 50.]).T, 1)).T
-    r2, d2 = (wcs.all_pix2world(np.array([x, y + 50.]).T, 1)).T
+    r1, d1 = (wcs.all_pix2world(np.array([x, y - max(1./wcs.wcs.cdelt[1], 50.)]).T, 1)).T
+    r2, d2 = (wcs.all_pix2world(np.array([x, y + max(1./wcs.wcs.cdelt[1], 50.)]).T, 1)).T
     vbot = pol_to_vec(r1*pi/180., d1*pi/180.)
     vtop = pol_to_vec(r2*pi/180., d2*pi/180.)
     vimgyax = vbot - vtop

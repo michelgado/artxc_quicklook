@@ -111,19 +111,19 @@ def make_small_steps_quats(attdata, gti=tGTI, timecorrection=lambda x: 1.):
         qval = attdata(ts)
     else:
         dtn = dt
-    return qval, dtn*timecorrection(ts), locgti
+    return ts, qval, dtn*timecorrection(ts), locgti
 
 def hist_orientation_for_attdata(attdata, gti=tGTI, timecorrection=lambda x:1.):
     """
     given the AttDATA, gti and timecorrection (function which weights each time interval, in case of exposure map it is livetime fraction, or background lightcurve for the background map)
 
     """
-    qval, dtn, locgti = make_small_steps_quats(attdata, gti, timecorrection)
+    ts, qval, dtn, locgti = make_small_steps_quats(attdata, gti, timecorrection)
     exptime, qhist = hist_orientation(qval, dtn)
     return exptime, qhist, locgti
 
 def hist_by_roll_for_attdata(attdata, gti=tGTI, timecorrection=lambda x:1., wcs=None): #wcsax=[0, 0, 1]):
-    qval, dtn, locgti = make_small_steps_quats(attdata, gti, timecorrection)
+    ts, qval, dtn, locgti = make_small_steps_quats(attdata, gti, timecorrection)
     if wcs is None:
         ra, dec, roll = quat_to_pol_and_roll(qval)
         roll = (roll*180./pi)%360

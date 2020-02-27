@@ -14,6 +14,8 @@ from arttools.energy import get_events_energy
 from arttools.caldb import get_shadowmask, get_energycal
 from arttools.time import get_gti
 
+from astropy.table import Table
+
 import socket
 import smtplib
 from email.message import EmailMessage
@@ -48,7 +50,7 @@ if __name__ == "__main__":
         msg["subbj"] = "makeL1b fail to start daemon"
         msg.set_content(conerr)
         smtplib.SMTP("localhost").send_message(msg)
-    finally:    
+    finally:
         if len(sys.argv) != 4 or "-h" in sys.argv:
             print("description run like that 'python3 L1toL15.py stem outdir'"\
                     ", where stem is srg_20190727_214739_000")
@@ -66,12 +68,13 @@ if __name__ == "__main__":
         attdata = arttools.plot.get_attdata(attfname)
         urdfname = fname
         urdfile = fits.open(urdfname)
-        urddata = np.copy(urdfile["EVENTS"].data)
+        urddata = Table(urdfile["EVENTS"].data).as_array()
         flag = np.ones(urddata.size, np.uint8)
 
         locgti = get_gti(urdfile) & attdata.gti
 
         caldbfile = get_energycal(urdfile)
+        bkigti = arttools.time.make_bki_gti(urdfile)
         flag[(locgti & attdata.gti).mask_outofgti_times(urddata["TIME"])] = 0
 
         RA, DEC = np.empty(urddata.size, np.double), np.empty(urddata.size, np.double)
@@ -85,6 +88,10 @@ if __name__ == "__main__":
         flag[np.logical_not(maskshadow)] = 2
         h = copy.copy(urdfile["EVENTS"].header)
         h.pop("NAXIS2")
+
+        if bkigti.exposure > 0:
+            bkimask = bkigti.mask_outofgti_times(urddata["TIME"])
+            flag[bkimask] += 100
 
         cols = urdfile["EVENTS"].data.columns
         cols.add_col(fits.Column(name="ENERGY", array=ENERGY, format="1D", unit="keV"))

@@ -3,6 +3,7 @@ from .mask import edges as maskedges
 from math import pi
 from scipy.interpolate import interp1d
 import astropy.time as atime
+from astropy.table import Table
 
 ARTDEADTIME = 770e-6 #seconds - ART-XC detector deadtime
 
@@ -219,16 +220,33 @@ class GTI(object):
         te = arange*dt + np.repeat(t0, tsize)
         return self.make_tedges(te)
 
-
-
 tGTI = GTI([-np.inf, np.inf])
 emptyGTI = GTI([])
 
+def get_gti(ffile, gtiextname="GTI", excludebki=True):
+    if not gtiextname is None:
+        gti = GTI(np.array([ffile[gtiextname].data["START"], ffile[gtiextname].data["STOP"]]).T)
+    else:
+        gti = tGTI
+        for hdu in ffile:
+            if hdu.name in ["GTI", "STD_GTI", "KVEA_GTI"]:
+                gti = gti & GTI(np.array([hdu.data["START"], hdu.data["STOP"]]).T)
 
-def get_gti(ffile, gtiextname="GTI"):
-    gti = GTI(np.array([ffile[gtiextname].data["START"], ffile[gtiextname].data["STOP"]]).T)
-    gti.merge_close_intervals(0.5)
-    return gti & make_hv_gti(ffile["HK"].data)
+    gti.merge_close_intervals(0.1)
+    gti = gti & make_hv_gti(ffile["HK"].data)
+    if excludebki:
+        gti = gti & -make_bki_gti(ffile)
+    return gti
+
+
+def make_bki_gti(ffile):
+    if 'BKI_STATE' in ffile["HK"].data.dtype.names:
+        bkigti = GTI(ffile["HK"].data["TIME"][maskedges(ffile["HK"].data["BKI_STATE"] != 1) + [0, -1]]) + [-5, 5]
+    else:
+        rate = (ffile["HK"].data["EVENTS"][1:].astype(np.int) - ffile["HK"].data["EVENTS"][:-1])/(ffile["HK"].data["TIME"][1:] - ffile["HK"].data["TIME"][:-1])
+        bkigti = GTI(ffile["HK"].data["TIME"][maskedges(rate > 200) + [1, 0]]) + [-5, 5]
+    return bkigti
+
 
 def get_filtered_table(tabledata, gti):
     """
