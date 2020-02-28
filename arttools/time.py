@@ -244,7 +244,7 @@ def make_bki_gti(ffile):
         bkigti = GTI(ffile["HK"].data["TIME"][maskedges(ffile["HK"].data["BKI_STATE"] != 1) + [0, -1]]) + [-5, 5]
     else:
         rate = (ffile["HK"].data["EVENTS"][1:].astype(np.int) - ffile["HK"].data["EVENTS"][:-1])/(ffile["HK"].data["TIME"][1:] - ffile["HK"].data["TIME"][:-1])
-        bkigti = GTI(ffile["HK"].data["TIME"][maskedges(rate > 200) + [1, 0]]) + [-5, 5]
+        bkigti = GTI(ffile["HK"].data["TIME"][maskedges(rate > 200) + [1, 0]]) + [-10, 10]
     return bkigti
 
 
