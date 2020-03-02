@@ -232,7 +232,7 @@ def get_gti(ffile, gtiextname="GTI", excludebki=True):
             if hdu.name in ["GTI", "STD_GTI", "KVEA_GTI"]:
                 gti = gti & GTI(np.array([hdu.data["START"], hdu.data["STOP"]]).T)
 
-    gti.merge_close_intervals(0.1)
+    gti.merge_close_intervals(0.5)
     gti = gti & make_hv_gti(ffile["HK"].data)
     if excludebki:
         gti = gti & -make_bki_gti(ffile)

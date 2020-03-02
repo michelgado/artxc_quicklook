@@ -9,10 +9,12 @@ import numpy as np
 from .telescope import URDTOTEL
 from .time import GTI
 from scipy.spatial.transform import Rotation
+from math import sin, cos, pi
 
 
 """ ART-XC mjd ref used to compute onboard seconds"""
 MJDREF = 51543.875
+T0 = 617228538.1056 #first day of ART-XC work
 
 ARTCALDBPATH = os.environ["ARTCALDB"]
 indexfname = "artxc_index.fits"
@@ -24,6 +26,28 @@ idxtabl = Table(idxdata).to_pandas()
 idxtabl["CAL_DATE"] = pandas.to_datetime(idxtabl["CAL_DATE"])
 idxtabl.set_index("CAL_DATE", inplace=True)
 
+CUTAPP = None
+FLATBKG = False
+
+qrot0 = Rotation([sin(15*pi/360.), 0., 0., cos(15*pi/360.)]) #ART detectors cs rotattion to the spasecraft cs
+qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])
+qgyro0 = Rotation([0., 0., 0., 1.])
+OPAX = np.array([1, 0, 0])
+
+
+ARTQUATS = {row[0]:Rotation(row[1:]) for row in fits.getdata(os.path.join(ARTCALDBPATH, "artxc_quats_v001.fits"), 1)}
+ARTQUATS.update({TELTOURD[row[0]]:Rotation(row[1:]) for row in fits.getdata(os.path.join(ARTCALDBPATH, "artxc_quats_v001.fits"), 1) if row[0] in TELTOURD})
+
+"""
+some magical numbers, generally define mean count rate of the background of each detector relative to the mean over all seven
+"""
+urdbkgsc = {28: 1.0269982359153347,
+            22: 0.9461951470620872,
+            23: 1.0291298607731770,
+            24: 1.0385034889253482,
+            25: 0.9769294100898714,
+            26: 1.0047417556512688,
+            30: 0.9775021015829128}
 
 """
 task should store required calibrations
@@ -51,13 +75,12 @@ def mksomething(urddata, hkdata, attdata, gti):
     *how to join spectra
         spectra with same rmf but different arf - simply sum then and weight arfs with exposures
         spectra with different rmf - always use separately ????
-
 """
 
 
 def get_caldata(urdn, ctype, gti=GTI([(atime.Time(datetime.datetime.now()) - atime.Time(MJDREF, format="mjd")).sec,]*2,)):
     """
-    given the urd
+    given the urd as a unique key for calibration data
     """
     caldata = idxtabl.query("INSTRUME=='%s' and CAL_CNAME=='%s'" % (TELTOURD[urdn], ctype)).sort_index()
     timestamps = (atime.Time(caldata.index.values) - atime.Time(MJDREF)).sec
@@ -67,25 +90,6 @@ def get_caldata(urdn, ctype, gti=GTI([(atime.Time(datetime.datetime.now()) - ati
     idxloc = np.maximum(np.unique(timestamps.searchsorted(gti.arr)) - 1, 0)
     caldata = caldata.iloc[idxloc].groupby(["CAL_DIR", "CAL_FILE"])
     return {g: GTI(caldata.iloc[idx][["tstart", "tstop"]].values) for g, idx in caldata.groups.items()}
-
-
-"""
-def get_quats(urdn, gti):
-    calibrations = get_caldata(urdn, "NONE")
-"""
-
-ARTQUATS = {row[0]:Rotation(row[1:]) for row in fits.getdata(os.path.join(ARTCALDBPATH, "artxc_quats_v001.fits"), 1)}
-ARTQUATS.update({TELTOURD[row[0]]:Rotation(row[1:]) for row in fits.getdata(os.path.join(ARTCALDBPATH, "artxc_quats_v001.fits"), 1) if row[0] in TELTOURD})
-CUTAPP = None
-FLATBKG = False
-
-urdbkgsc = {28: 1.0269982359153347,
-            22: 0.9461951470620872,
-            23: 1.029129860773177,
-            24: 1.0385034889253482,
-            25: 0.9769294100898714,
-            26: 1.0047417556512688,
-            30: 0.9775021015829128}
 
 def get_cif(cal_cname, instrume):
     return idxtabl.query("INSTRUME=='%s' and CAL_CNAME=='%s'" % (instrume, cal_cname))

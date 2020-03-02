@@ -3,7 +3,7 @@ import numpy as np
 from math import pi, cos, sin, sqrt
 from ._det_spatial import urd_to_vec, F, DL
 from .time import get_hdu_times, GTI, tGTI
-from .caldb import ARTQUATS
+from .caldb import ARTQUATS, T0
 from .mask import edges as medges
 from functools import reduce
 from scipy.optimize import minimize
@@ -42,9 +42,6 @@ def make_gyro_relativistic_correction(attdata):
     qcorr[:, 3] = calphap2
     return AttDATA(attdata.times, Rotation(qcorr).inv()*attdata(attdata.times), gti=attdata.gti)
 #-===========================================================================================
-
-
-T0 = 617228538.1056 #first day of ART-XC work
 
 qrot0 = Rotation([sin(15*pi/360.), 0., 0., cos(15*pi/360.)]) #ART detectors cs to the spasecraft cs
 qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])
