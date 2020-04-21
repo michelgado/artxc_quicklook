@@ -20,7 +20,7 @@ def weigt_time_intervals(gtis, scales=urdbkgsc, defaultscale=1):
     te, mgaps = gtitot.make_tedges(edges)
     tc = (te[1:] + te[:-1])/2.
     se = np.ones(mgaps.size + 2, np.double)*np.sum([scales.get(key, defaultscale) for key in gtis])
-    se[1:-1][np.logical_not(mgaps)] = 0
+    #se[1:-1][np.logical_not(mgaps)] = 0
     for key, gti in gtis.items():
         mask = np.logical_not(gti.mask_outofgti_times(tc))
         se[1:-1][mask] -= scales.get(key, defaultscale)

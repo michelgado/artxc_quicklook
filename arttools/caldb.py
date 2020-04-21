@@ -34,13 +34,8 @@ qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])
 qgyro0 = Rotation([0., 0., 0., 1.])
 OPAX = np.array([1, 0, 0])
 
-
-#ARTQUATS = {row[0]:Rotation(row[1:]) for row in fits.getdata(os.path.join(ARTCALDBPATH, "artxc_quats_v001.fits"), 1)}
-#ARTQUATS = {row[0]:Rotation(row[1:]) for row in fits.getdata(os.path.join("/srg/a1/work/andrey/ART-XC/Quats_V5", "ART_QUATS_v5.fits"), 1)}
 ARTQUATS = {row[0]:Rotation(row[1:]) for row in fits.getdata(os.path.join("/srg/a1/work/andrey/ART-XC/Quats_V5", "ART_QUATS_V5_rotin.fits"), 1)}
-#ARTQUATS.update({TELTOURD[row[0]]:Rotation(row[1:]) for row in fits.getdata(os.path.join("/srg/a1/work/andrey/ART-XC/Quats_V5", "ART_QUATS_v5.fits"), 1) if row[0] in TELTOURD})
 ARTQUATS.update({TELTOURD[row[0]]:Rotation(row[1:]) for row in fits.getdata(os.path.join("/srg/a1/work/andrey/ART-XC/Quats_V5", "ART_QUATS_V5_rotin.fits"), 1) if row[0] in TELTOURD})
-#ARTQUATS.update({TELTOURD[row[0]]:Rotation(row[1:]) for row in fits.getdata(os.path.join(ARTCALDBPATH, "artxc_quats_v001.fits"), 1) if row[0] in TELTOURD})
 
 """
 some magical numbers, generally define mean count rate of the background of each detector relative to the mean over all seven

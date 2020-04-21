@@ -43,7 +43,6 @@ def make_gyro_relativistic_correction(attdata):
     return AttDATA(attdata.times, Rotation(qcorr).inv()*attdata(attdata.times), gti=attdata.gti)
 #-===========================================================================================
 
-qrot0 = Rotation([sin(15*pi/360.), 0., 0., cos(15*pi/360.)]) #ART detectors cs to the spasecraft cs
 qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])
 qgyro0 = Rotation([0., 0., 0., 1.])
 OPAX = np.array([1, 0, 0])
@@ -190,7 +189,7 @@ def read_gyro_fits(gyrohdu):
     mask = np.logical_and(masktimes, mask0quats)
     times, quats = times[mask], quats[mask]
     ts, uidx = np.unique(times, return_index=True)
-    return AttDATA(ts, Rotation(quats[uidx])*qgyro0*qrot0*ARTQUATS["GYRO"])
+    return AttDATA(ts, Rotation(quats[uidx])*qgyro0*ARTQUATS["GYRO"])
 
 def read_bokz_fits(bokzhdu):
     """
@@ -210,7 +209,7 @@ def read_bokz_fits(bokzhdu):
     masktimes = bokzdata["TIME"] > T0
     mask = np.logical_and(mask0quats, masktimes)
     jyear = get_hdu_times(bokzhdu).jyear[mask]
-    qbokz = earth_precession_quat(jyear).inv()*Rotation.from_dcm(mat[mask])*qbokz0*qrot0*ARTQUATS["BOKZ"]
+    qbokz = earth_precession_quat(jyear).inv()*Rotation.from_dcm(mat[mask])*qbokz0*ARTQUATS["BOKZ"]
     ts, uidx = np.unique(bokzdata["TIME"][mask], return_index=True)
     return AttDATA(ts, qbokz[uidx])
 
@@ -231,7 +230,7 @@ def get_raw_bokz(bokzhdu):
     mask0quats = np.linalg.det(mat) != 0.
     masktimes = bokzdata["TIME"] > T0
     mask = np.logical_and(mask0quats, masktimes)
-    qbokz = Rotation.from_dcm(mat[mask])*qbokz0*qrot0
+    qbokz = Rotation.from_dcm(mat[mask])*qbokz0
     jyear = get_hdu_times(bokzhdu).jyear[mask]
     return bokzdata["TIME"][mask], earth_precession_quat(jyear).inv()*qbokz
 
@@ -466,6 +465,18 @@ def align_with_z_quat(vec):
     q[3] = cos(alpha/2.)
     return Rotation(q)
 
+
+class SurveyMode(object):
+    def __init__(self, vz, vrot, t0=0., omegaz=pi/180., phiz=0., omega2=pi*4.*3600/180., mjdref=51543.875):
+        self.vz = vz
+        self.vrot = vrot
+
+    """
+    def __call__(self, tlist):
+        vrot = Rotation.from_rkkkk
+    """
+
+
 def condence_attdata(attdata, maxoffset=5.):
     """
     for provided attdata (which is a series of quaternions, rotation vectors and time points),
@@ -491,3 +502,5 @@ def condence_attdata(attdata, maxoffset=5.):
             print(breakidx)
     if breakidx[-1] != attdata.times.size - 1: breakidx.append(attdata.times.size - 1)
     return AttDATA(attdata.times[breakidx], attdata(attdata.times[breakidx]), gti=attdata.gti)
+
+

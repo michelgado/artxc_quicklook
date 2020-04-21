@@ -7,7 +7,7 @@ from .planwcs import make_wcs_for_attdata
 from .caldb import get_energycal, get_shadowmask, get_energycal_by_urd, get_shadowmask_by_urd, urdbkgsc, OPAXOFFSET
 from .energy import get_events_energy
 from .telescope import URDNS
-from .orientation import get_photons_sky_coord, read_gyro_fits, read_bokz_fits, AttDATA, define_required_correction
+from .orientation import get_photons_sky_coord, read_gyro_fits, read_bokz_fits, AttDATA, define_required_correction, pol_to_vec, get_photons_vectors
 from .lightcurve import make_overall_bkglc
 from .vignetting import load_raw_wignetting_function
 from astropy.io import fits
@@ -95,8 +95,8 @@ def get_attdata(fname):
 def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
                                   outctsname, outbkgname, outexpmapname,
                                   urdbti={}, ebands={"soft": eband(4, 12), "hard": eband(8, 16)},
-                                  photsplitnside=1,
-                                  pixsize=20/3600., usedtcorr=True, weightphotons=False):
+                                  photsplitnside=1, pixsize=20/3600., usedtcorr=True,
+                                  weightphotons=False, locwcs=None):
     """
     given two sets with paths to the urdfiles and corresponding attfiles,
     and gti as a dictionary, each key contains gti for particular urd
@@ -108,7 +108,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
     attdata = attdata.apply_gti(gti + [-30, 30])
     gti = attdata.gti & gti
 
-    locwcs = make_wcs_for_attdata(attdata, gti, pixsize) #produce wcs for accumulated atitude information
+    if locwcs is None: locwcs = make_wcs_for_attdata(attdata, gti, pixsize) #produce wcs for accumulated atitude information
     xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
     imgdata = {name: np.zeros((ysize, xsize), np.double) for name in ebands}
     urdgti = {URDN:emptyGTI for URDN in URDNS}
@@ -116,6 +116,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
     urdbkg = {}
     urdbkge = {}
     bkggti = {}
+    urdevt = []
 
     for urdfname in urdflist[:]:
         urdfile = fits.open(urdfname)
@@ -149,6 +150,11 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
             pickimg = np.all([energy > band.emin, energy < band.emax, grade > -1, grade < 10,
                               flag == 0, locgti.mask_outofgti_times(urddata["TIME"])], axis=0)
             if np.any(pickimg):
+                urdloc = urddata[pickimg]
+                vec1 = pol_to_vec(263.8940535*pi/180., -32.2583163*pi/180.)
+                urdloc = get_photons_vectors(urdloc, urdn, attdata)
+                masklast = np.arccos(np.sum(urdloc*vec1, axis=1)) < 100./3600.*pi/180.
+                urdevt.append(urdloc[masklast])
                 if weightphotons:
                     timg = make_vignetting_weighted_phot_images(urddata[pickimg], urdn, energy[pickimg], attdata, locwcs, photsplitnside)
                 else:
@@ -187,10 +193,11 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
     else:
         urdbkg = {urdn: interp1d(tc, rate*urdbkgsc[urdn]/7.61, bounds_error=False, fill_value=tm*urdbkgsc[urdn]/7.62) for urdn in urdbkgsc}
     tebkg, mgapsbkg, cratebkg, crerrbkg, bkgrate = make_overall_bkglc(tevts, bkggti, 25.)
+    pickle.dump([tevts, bkggti, urdevt, urdgti, attdata], open("backgroud.pickle", "wb"))
     urdbkg = {urdn: constscale(urdbkgsc[urdn], bkgrate) for urdn in urdbkgsc}
 
     if usedtcorr:
-        emap = make_expmap_for_wcs(locwcs, attdata, urdgti, dtcorr=urddtc)
+        emap = make_expmap_for_wcs(locwcs, attdata, urdgti, dtcorr=urddtc) #, flatprofile=True)
     else:
         emap = make_expmap_for_wcs(locwcs, attdata, urdgti)
     emap = fits.PrimaryHDU(data=emap, header=locwcs.to_header())

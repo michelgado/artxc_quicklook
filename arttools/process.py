@@ -96,7 +96,7 @@ def run(fpath):
     gyrofiles = [os.path.join(abspath, "L0", l) for l in allfiles if "gyro.fits" in l]
     urdfiles = [os.path.join(abspath, "L0", l) for l in allfiles if "urd.fits" in l]
 
-    attgti = reduce(lambda a, b: a | b, [get_gti(fits.open(urdfile), "STDGTI") for urdfile in urdfiles])
+    attgti = reduce(lambda a, b: a | b, [get_gti(fits.open(urdfile)) for urdfile in urdfiles])
     attdata = AttDATA.concatenate([get_attdata(fname) for fname in set(gyrofiles)])
     locwcs = make_wcs_for_attdata(attdata, attgti)
 
@@ -133,8 +133,8 @@ def run(fpath):
         urdfile = fits.open(urdfname)
         urdn = urdfile["EVENTS"].header["URDN"]
         print("processing:", urdfname)
-        print("overall urd exposure", get_gti(urdfile, "STDGTI").exposure)
-        locgti = get_gti(urdfile, "STDGTI") & attdata.gti & -urdgti.get(urdn, emptyGTI)
+        print("overall urd exposure", get_gti(urdfile).exposure)
+        locgti = get_gti(urdfile) & attdata.gti & -urdgti.get(urdn, emptyGTI)
         locgti.merge_joint()
         print("exposure in GTI:", locgti.exposure)
         if locgti.exposure == 0.:

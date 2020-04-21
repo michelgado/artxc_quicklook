@@ -56,10 +56,17 @@ def make_vignetting_for_urdn(urdn, energy=7.2, phot_index=None,
     return: scipy.interpolate.RegularGridInterpolator containing scalled effective area depending on offset in mm from the center of detector
 
     """
+    shmask = get_shadowmask_by_urd(urdn).astype(np.uint8) if useshadowmask else np.ones((48, 48), np.uint8)
+    """
+    shmask[[0, -1], :] = 0
+    shmask[:, [0, -1]] = 0
+    return RegularGridInterpolator((np.arange(-23.5, 23.6, 1.)*DL, np.arange(-23.5, 23.6, 1.)*DL),
+                                   shmask, bounds_error=False, fill_value=0.)
+    """
+
     vignfile = get_vigneting_by_urd(urdn)
     #TO DO: put max eff area in CALDB
     norm = 65.71259133631082 # = np.max(vignfile["5 arcmin PSF"].data["EFFAREA"])
-
 
     efint = interp1d(vignfile["5 arcmin PSF"].data["E"],
                      vignfile["5 arcmin PSF"].data["EFFAREA"],
@@ -89,7 +96,6 @@ def make_vignetting_for_urdn(urdn, energy=7.2, phot_index=None,
     x = np.tan(vignfile["Offset angles"].data["X"]*pi/180/60.)*F - (24. - OPAXOFFSET[urdn][0])*DL
     y = np.tan(vignfile["Offset angles"].data["Y"]*pi/180/60.)*F - (24. - OPAXOFFSET[urdn][1])*DL
 
-    shmask = get_shadowmask_by_urd(urdn).astype(np.uint8) if useshadowmask else np.ones((48, 48), np.uint8)
     X, Y = np.meshgrid(x, y)
     rawx, rawy = offset_to_raw_xy(X, Y)
     if ignoreedgestrips:
