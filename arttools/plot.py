@@ -193,7 +193,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
     else:
         urdbkg = {urdn: interp1d(tc, rate*urdbkgsc[urdn]/7.61, bounds_error=False, fill_value=tm*urdbkgsc[urdn]/7.62) for urdn in urdbkgsc}
     tebkg, mgapsbkg, cratebkg, crerrbkg, bkgrate = make_overall_bkglc(tevts, bkggti, 25.)
-    pickle.dump([tevts, bkggti, urdevt, urdgti, attdata], open("backgroud.pickle", "wb"))
+    pickle.dump([tevts, bkggti, urdevt, urdgti, attdata, locwcs, urddtc], open("backgroud.pickle", "wb"))
     urdbkg = {urdn: constscale(urdbkgsc[urdn], bkgrate) for urdn in urdbkgsc}
 
     if usedtcorr:

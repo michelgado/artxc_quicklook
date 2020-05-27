@@ -57,9 +57,9 @@ def make_vignetting_for_urdn(urdn, energy=7.2, phot_index=None,
 
     """
     shmask = get_shadowmask_by_urd(urdn).astype(np.uint8) if useshadowmask else np.ones((48, 48), np.uint8)
-    """
     shmask[[0, -1], :] = 0
     shmask[:, [0, -1]] = 0
+    """
     return RegularGridInterpolator((np.arange(-23.5, 23.6, 1.)*DL, np.arange(-23.5, 23.6, 1.)*DL),
                                    shmask, bounds_error=False, fill_value=0.)
     """

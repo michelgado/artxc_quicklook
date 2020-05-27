@@ -59,7 +59,7 @@ def analyze_survey(fpath, pastday=None):
     gyrofiles = [os.path.join(abspath, "L0", l) for l in allfiles if "gyro.fits" in l]
     urdfiles = [os.path.join(abspath, "L0", l) for l in allfiles if "urd.fits" in l]
 
-    date = bokzfiles[-1][-29:-21]
+    date = gyrofiles[-1][-29:-14]
 
 
     if not pastday is None:

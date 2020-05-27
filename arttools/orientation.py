@@ -142,8 +142,8 @@ class AttDATA(SlerpWithNaiveIndexing):
         te, mgaps = self.gti.make_tedges(self.times)
         tc = ((te[1:] + te[:-1])/2.)[mgaps]
         dt = (te[1:] - te[:-1])[mgaps]
-        vecs = self(tc).apply(OPAX)
-        dalphadt = np.arccos(np.sum(vecs[:-1]*vecs[1:], axis=1))/dt*180./pi*3600.
+        vecs = self(te).apply(OPAX)
+        dalphadt = np.arccos(np.sum(vecs[:-1]*vecs[1:], axis=1))[mgaps]/dt*180./pi*3600.
         return tc, dt, dalphadt
 
     def __mul__(self, val):
