@@ -43,6 +43,11 @@ class GTI(object):
         arr = np.asarray(gtis[mask].reshape((-1, 2)))
         return arr
 
+    def read(self, fname):
+        self.__init__(np.loadtxt(fname))
+
+    def writeto(self, fname):
+        np.savetxt(fname, self.arr)
 
     def __init__(self, arr):
         """

@@ -108,7 +108,7 @@ def get_vigneting_by_urd(urdn):
     """
     to do: put vignmap in the caldb
     """
-    return fits.open("/srg/a1/work/ayut/art-xc_vignea_q200_191210.fits")
+    return fits.open(os.path.join(ARTCALDBPATH, "art-xc_vignea_q200_191210.fits"))
 
 @lru_cache()
 def get_shadowmask_by_urd(urdn):
@@ -116,8 +116,9 @@ def get_shadowmask_by_urd(urdn):
     #temporal patch
     print(CUTAPP)
     urdtobit = {28:2, 22:4, 23:8, 24:10, 25:20, 26:40, 30:80}
-    fpath = "/home/andrey/ART-XC/sandbox/artxc_quicklook/newshadowmask/newopenpix%02d.fits" % urdtobit[urdn]
-    mask = np.logical_not(fits.getdata(fpath, 1).astype(np.bool))
+    fpath = os.path.join(ARTCALDBPATH, "artxc_detmask_%s_20200414_v001.fits" % URDTOTEL[urdn])
+    #mask = np.logical_not(fits.getdata(fpath, 1).astype(np.bool))
+    mask = np.copy(fits.getdata(fpath, 1)).astype(np.bool)
     if not CUTAPP is None:
         x, y = np.mgrid[0:48:1, 0:48:1] + 0.5
         maskapp = (OPAXOFFSET[urdn][0] - x)**2. + (OPAXOFFSET[urdn][1] - y)**2. < CUTAPP**2.

@@ -42,7 +42,9 @@ def offset_to_raw_xy(x, y):
 
     returns: rawx, rawy int  coordinates, which corresponds to the pixel which covers provided spatial offset
     """
-    return np.array(x/DL + 24, np.int), np.array(y/DL + 24, np.int)
+    x = x/DL + 24
+    y = y/DL + 24
+    return x.astype(np.int) - (x < 0), y.astype(np.int) - (y < 0)
 
 #@cache_single_result_np
 def raw_xy_to_vec(rawx, rawy):

@@ -36,7 +36,7 @@ def weigt_time_intervals(gtis, scales=urdbkgsc, defaultscale=1):
 
     return te, mgaps, se, scalefunc, cumscalefunc
 
-def make_overall_bkglc(times, urdgtis, dt=100, scales=urdbkgsc):
+def make_overall_lc(times, urdgtis, dt=100, scales=urdbkgsc):
     """
     for stored background events occurence times (times) produces overall for 7 detectors background lightcurve with time resolution dt
     """
@@ -59,7 +59,6 @@ def make_overall_bkglc(times, urdgtis, dt=100, scales=urdbkgsc):
         res[mask] = crate[idx[mask] - 1]
         return res*urdbkgsc.get(urdn, 1.)
     return te, mgaps, crate, crerr, bkgrate
-
 
 def make_constantcounts_timeedges(times, gti, cts=1000):
     idx = times.searchsorted(gti.arr)

@@ -8,7 +8,7 @@ from .caldb import get_energycal, get_shadowmask, get_energycal_by_urd, get_shad
 from .energy import get_events_energy
 from .telescope import URDNS
 from .orientation import get_photons_sky_coord, read_gyro_fits, read_bokz_fits, AttDATA, define_required_correction
-from .lightcurve import make_overall_bkglc
+from .lightcurve import make_overall_lc
 from .vignetting import load_raw_wignetting_function
 from astropy.io import fits
 from math import pi, cos, sin
@@ -39,7 +39,6 @@ def constscale(const, func):
     return newfunc
 
 
-
 def make_events_mask(minenergy=4., maxenergy=12., minflag=-1, ):
     def mask_events(urddata, grade, energy):
         eventsmask = np.all([grade > mingrade, grade < maxgrade,
@@ -62,6 +61,7 @@ def make_energies_flags_and_grades(urddata, urdhk, urdn):
     energy, xc, yc, grade = get_events_energy(urddata, urdhk, caldbfile)
     return energy, grade, flag
 
+
 def make_vignetting_weighted_phot_images(urddata, urdn, energy, attdata, locwcs, photsplitside=1):
     rawvignfun = load_raw_wignetting_function()
     x, y = multiply_photons(urddata, photsplitside)
@@ -75,12 +75,12 @@ def make_vignetting_weighted_phot_images(urddata, urdn, energy, attdata, locwcs,
 
 
 def make_sky_image(urddata, urdn, attdata, locwcs, photsplitside=10, weight_with_vignetting=False):
-
     r, d = get_photons_sky_coord(urddata, urdn, attdata, photsplitside)
     x, y = locwcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1.).T
     img = np.histogram2d(x, y, [np.arange(locwcs.wcs.crpix[0]*2 + 2) + 0.5,
                             np.arange(locwcs.wcs.crpix[1]*2 + 2) + 0.5])[0].T
     return img/photsplitside/photsplitside
+
 
 def get_attdata(fname):
     ffile = fits.open(fname)
@@ -96,7 +96,8 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
                                   outctsname, outbkgname, outexpmapname,
                                   urdbti={}, ebands={"soft": eband(4, 12), "hard": eband(8, 16)},
                                   photsplitnside=1,
-                                  pixsize=20/3600., usedtcorr=True, weightphotons=False):
+                                  pixsize=20/3600., usedtcorr=True, weightphotons=False, 
+                                  **kwargs):
     """
     given two sets with paths to the urdfiles and corresponding attfiles,
     and gti as a dictionary, each key contains gti for particular urd
@@ -186,13 +187,13 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
         urdbkg = {urdn: lambda x: np.ones(x.size)*tm*urdbkgsc[urdn]/7.62 for urdn in urdbkgsc}
     else:
         urdbkg = {urdn: interp1d(tc, rate*urdbkgsc[urdn]/7.61, bounds_error=False, fill_value=tm*urdbkgsc[urdn]/7.62) for urdn in urdbkgsc}
-    tebkg, mgapsbkg, cratebkg, crerrbkg, bkgrate = make_overall_bkglc(tevts, bkggti, 25.)
+    tebkg, mgapsbkg, cratebkg, crerrbkg, bkgrate = make_overall_lc(tevts, bkggti, 25.)
     urdbkg = {urdn: constscale(urdbkgsc[urdn], bkgrate) for urdn in urdbkgsc}
 
     if usedtcorr:
-        emap = make_expmap_for_wcs(locwcs, attdata, urdgti, dtcorr=urddtc)
+        emap = make_expmap_for_wcs(locwcs, attdata, urdgti, dtcorr=urddtc, flat=kwargs.get("flat", False))
     else:
-        emap = make_expmap_for_wcs(locwcs, attdata, urdgti)
+        emap = make_expmap_for_wcs(locwcs, attdata, urdgti, flat=kwargs.get("flat", False))
     emap = fits.PrimaryHDU(data=emap, header=locwcs.to_header())
     emap.writeto(outexpmapname, overwrite=True)
     bmap = make_bkgmap_for_wcs(locwcs, attdata, urdgti, time_corr=urdbkg)

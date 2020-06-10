@@ -7,6 +7,8 @@ from .caldb import ARTQUATS, T0
 from .mask import edges as medges
 from functools import reduce
 from scipy.optimize import minimize
+from datetime import datetime 
+from astropy.time import Time
 
 #============================================================================================
 """
@@ -210,6 +212,9 @@ def read_bokz_fits(bokzhdu):
     masktimes = bokzdata["TIME"] > T0
     mask = np.logical_and(mask0quats, masktimes)
     jyear = get_hdu_times(bokzhdu).jyear[mask]
+    """
+    correct quaternions for earth precession, since bokz return coordinates at the current epoch!!!!
+    """
     qbokz = earth_precession_quat(jyear).inv()*Rotation.from_dcm(mat[mask])*qbokz0*qrot0*ARTQUATS["BOKZ"]
     ts, uidx = np.unique(bokzdata["TIME"][mask], return_index=True)
     return AttDATA(ts, qbokz[uidx])
@@ -428,6 +433,102 @@ def get_elongation_plane_norm(attdata, gti=None): #tGTI):
     return rvecm
 
 
+class SurveyAtt(object):
+    def __init__(self, polus, omega, tstart, tstop, sc_start_rotvec, sc_romega, sc_start_vec, roll):
+        """
+        initialize survey att container:
+         for a set (or single) tstart values, store survey pole, survey angular frequency, start rotating
+         vector, optical axis rotating speed
+        """
+        self.tstart = np.asarray(tstart)
+        """ start times for survey pices"""
+        idx = np.argsort(self.tstart)
+        self.tstart = self.tstart[idx]
+        self.polus = np.asarray(polus)[idx]
+        """ survey poluses"""
+        self.omega = np.asarray(omega)[idx]
+        """ survey rotational axis rotation around pole angular speed"""
+        self.tstop = np.asarray(tstop)[idx]
+        self.sc_start_vec = np.asarray(sc_start_vec)[idx]
+        """ initial orientation of the spacecraft axis"""
+        self.sc_start_rotvec = np.asarray(sc_start_rotvec)[idx]
+        """ starting rotation vector of sc optical axis"""
+        self.sc_romega = np.asarray(sc_romega)[idx]
+        """ spacecraft optical axis rotation speed """ 
+        self.roll = np.asarray(roll)[idx]
+        """ roll angle of the spacecraft""" 
+        self.roll = roll[idx]
+
+        self.gti = GTI(np.array([self.tstart, self.tstop]).T)
+
+
+    def get_rotax(self, times):
+        times = np.asarray(times)
+        mask = self.gti.mask_outofgti_times(times)
+        if not np.all(mask):
+            print("Warning!: some of the times are out of survey attdata")
+        tloc = times[mask]
+        idx = np.searchsorted(self.tstart, tloc) - 1
+        print(idx[0])
+        pole_phase = (tloc - self.tstart[idx])*self.omega[idx]
+        r = Rotation.from_rotvec(self.polus[idx]*pole_phase[:, np.newaxis])
+        return mask, r.apply(self.sc_start_rotvec[idx])
+
+    def get_opax_vec(self, time):
+        time = np.asarray(time)
+        mask = self.gti.mask_outofgti_times(time)
+        if not np.all(mask):
+            print("Warning!: some of the times are out of survey attdata")
+        tloc = time[mask]
+        idx = self.tstart.searchsorted(tloc) - 1
+        pole_phase = (tloc - self.tstart[idx])*self.omega[idx]
+        rotz = Rotation.from_rotvec(self.polus[idx]*pole_phase[:, np.newaxis])
+        rot_phase = (tloc - self.tstart[idx])*self.sc_romega[idx]
+        rotax = Rotation.from_rotvec(self.sc_start_rotvec[idx]*rot_phase[:, np.newaxis])
+        return mask, (rotz*rotax).apply(self.sc_start_vec[idx])
+
+    def get_quaterninos(self, time):
+        time = np.asarray(time)
+        mask = self.gti.mask_outofgti_times(time)
+        if not np.all(mask):
+            print("Warning!: some of the times are out of survey attdata")
+        tloc = time[mask]
+        tloc = time[mask]
+        idx = self.tstart.searchsorted(tloc) - 1
+        pidx = self.polus[idx]
+
+        pole_phase = (tloc - self.tstart[idx])*self.omega[idx]
+        rotz = Rotation.from_rotvec(self.polus[idx]*pole_phase[:, np.newaxis])
+
+        rot_phase = (tloc - self.tstart[idx])*self.sc_romega[idx]
+        rotax = Rotation.from_rotvec(self.sc_start_rotvec[idx]*rot_phase[:, np.newaxis])
+
+        rollq = Rotation.from_rotvec(np.array([1, 0, 0])[np.newaxis, :]*self.roll[idx, np.newaxis])
+
+        rollp = Rotation.from_rotvec(np.array([0, 0, 1])[np.newaxis, :]*np.arctan2(self.polus[idx, 1], self.polus[idx, 0])[:, np.newaxis])
+        pidx = np.copy(self.polus[idx])
+        pidx[:, 2] = 0.
+        pidx = pidx/np.sqrt(np.sum(pidx**2, axis=1))[:, np.newaxis]
+        r = np.cross(self.polus[idx], pidx)
+        n = np.sqrt(np.sum(r**2, axis=1))
+        rolla = Rotation.from_rotvec(r*-(np.arcsin(n)/n)[:, np.newaxis])
+        return rotz*rotax*rolla*rollp*rollq
+
+    @classmethod
+    def read_survey_fits(cls, ffile):
+        surveys = np.copy(ffile[1].data)[ffile[1].data["TYPE"] == "SURVEY"]
+        start = (Time([datetime.fromisoformat(t) for t in surveys["START"].astype(str)]) - \
+                Time(51543.875, format="mjd")).sec
+        stop = (Time([datetime.fromisoformat(t) for t in surveys["STOP"].astype(str)]) - \
+                Time(51543.875, format="mjd")).sec
+        polus = pol_to_vec(surveys["RA_P"]*pi/180, surveys["DEC_P"]*pi/180)
+        sc_start_rotvec = pol_to_vec(surveys["RA_Z0"]*pi/180, surveys["DEC_Z0"]*pi/180)
+        sc_start_vec = polus # Rotation.from_rotvec(sc_start_rotvec*-30*pi/180).apply(polus) # pol_to_vec(surveys["RA"]*pi/180, surveys["DEC"]*pi/180)
+        sc_romega = np.ones(surveys.size, np.double)*((90. + 0.015/24.)/3600.*pi/180.)
+        omega = surveys["Z_SPEED"]*pi/180./(24*3600.)
+        roll = surveys["ROLL_ANGLE"]
+        return cls(polus, omega, start, stop, sc_start_rotvec, sc_romega, sc_start_vec, roll)
+
 def minimize_norm_to_survey(attdata, rpvec):
     """
     for provided attdata find vector, for which minimize SUM (vrot*opax)^2 where OPAX is mean optical axis oriented with attitude in fk5 frame
@@ -465,29 +566,3 @@ def align_with_z_quat(vec):
     q[:3] = vrot*sin(alpha/2.)
     q[3] = cos(alpha/2.)
     return Rotation(q)
-
-def condence_attdata(attdata, maxoffset=5.):
-    """
-    for provided attdata (which is a series of quaternions, rotation vectors and time points),
-    search time segments which can be described with single rotation vector and still be accurate up to maxoffset
-
-    --------
-    Params:
-        attdata - attitude informaion in AttDATA container
-
-    retunrs:
-        attdata with smaller number of points, it is assumed within each time interval linear rotation provided accuracy at the level maxoffset
-    """
-    breakidx = [0, ]
-    testvec = np.array([F, DL*25, DL*25])
-    testvec = testvec/sqrt(sum(testvec**2.))
-    vecs = attdata(attdata.times).apply(testvec)
-    for i in range(2, attdata.times.size):
-        ts = attdata.times[[breakidx[-1], i]]
-        attloc = Slerp(ts, attdata(ts))
-        tvecs = attloc(attdata.times[breakidx[-1]: i]).apply(testvec)
-        if np.any(1. - np.sum(tvecs*vecs[breakidx[-1]: i], axis=1)[::-1] > (maxoffset/3600.*pi/180.)**2./2.):
-            breakidx.append(i - 1)
-            print(breakidx)
-    if breakidx[-1] != attdata.times.size - 1: breakidx.append(attdata.times.size - 1)
-    return AttDATA(attdata.times[breakidx], attdata(attdata.times[breakidx]), gti=attdata.gti)

@@ -24,7 +24,7 @@ def load_raw_wignetting_function():
         vignfile = get_vigneting_by_urd(28)
         x = 23.5 + np.tan(vignfile["Offset angles"].data["X"]*pi/180/60.)*F/DL
         y = 23.5 + np.tan(vignfile["Offset angles"].data["Y"]*pi/180/60.)*F/DL
-        rawvignfun = RegularGridInterpolator((vignfile["5 arcmin PSF"].data["E"], x, y), vignfile["5 arcmin PSF"].data["EFFAREA"])
+        rawvignfun = RegularGridInterpolator((vignfile["7 arcmin PSF"].data["E"], x, y), vignfile["5 arcmin PSF"].data["EFFAREA"])
     return rawvignfun
 
 
@@ -37,8 +37,20 @@ def cutmask(mask):
         return val2d
     return newfunc
 
+class PixInterpolator(object):
+    def __init__(self, shadow_mask):
+        self.values = shadow_mask
+
+    def __call__(self, xy_offset_pair):
+        rawx, rawy = offset_to_raw_xy(xy_offset_pair[..., 0], xy_offset_pair[..., 1])
+        mask = np.all([rawx > -1, rawy > -1, rawx < 48, rawy < 48], axis=0)
+        result = np.zeros(rawx.shape[0] if rawx.ndim == 1 else rawx.shape[:1])
+        result[mask] = self.values[rawx[mask], rawy[mask]]
+        return result
+
+
 @lru_cache(maxsize=7)
-def make_vignetting_for_urdn(urdn, energy=7.2, phot_index=None,
+def make_vignetting_for_urdn(urdn, energy=7.2, flat=False, phot_index=None,
                              useshadowmask=True, ignoreedgestrips=True,
                              emin=0, emax=np.inf):
     """
@@ -59,7 +71,20 @@ def make_vignetting_for_urdn(urdn, energy=7.2, phot_index=None,
     vignfile = get_vigneting_by_urd(urdn)
     #TO DO: put max eff area in CALDB
     norm = 65.71259133631082 # = np.max(vignfile["5 arcmin PSF"].data["EFFAREA"])
+    if useshadowmask:
+        shmask = get_shadowmask_by_urd(urdn).astype(np.uint8)
+    else:
+        x, y = np.mgrid[-23.5:23.6:1, -23.5:23.6:1]
+        shmask = x**2 + y**2 < 25.**2.
 
+    if ignoreedgestrips:
+        shmask[[0, -1], :] = False
+        shmask[:, [0, -1]] = False
+
+    pixmask = PixInterpolator(shmask)
+
+    if flat: 
+        return pixmask 
 
     efint = interp1d(vignfile["5 arcmin PSF"].data["E"],
                      vignfile["5 arcmin PSF"].data["EFFAREA"],
@@ -67,18 +92,24 @@ def make_vignetting_for_urdn(urdn, energy=7.2, phot_index=None,
 
     if not phot_index is None:
         s, e = np.searchsorted(vignfile["5 arcmin PSF"].data["E"], [emin, emax])
-        es = np.copy(vignfile["5 arcmin PSF"].data["E"][s: e])
-        vmap = np.copy(vignfile["5 arcmin PSF"].data["EFFAREA"][s:e])
+        es = np.copy(vignfile["5 arcmin PSF"].data["E"][max(s - 1, 1): e+1])
+        e0 = np.copy(es)
+        es[0] = max(es[0], emin)
+        es[-1] = min(es[-1], emax)
+        vmap = np.copy(vignfile["5 arcmin PSF"].data["EFFAREA"][max(s - 1, 1): e+1])
         de = es[1:] - es[:-1]
-        if phot_index != 1:
-            vignmap = np.sum(vmap[:-1] - vmap[1:]*(es[:-1]/de)[:, np.newaxis, np.newaxis] + \
-                             vmap[1:]/(2. - phot_index)*\
-                             ((es[1:]**(2. - phot_index) - es[:-1]**(2. - phot_index))/de)[:, np.newaxis, np.newaxis], axis=0)*\
-                            (1. - phot_index)/(es[-1]**(1. - phot_index) - es[0]**(1. - phot_index))
+        if phot_index == 1:
+            s1 = np.log(es[1:]/es[:-1])
         else:
-            vignmap = np.sum(vmap[:-1] - vmap[1:]*(es[:-1]/de)[:, np.newaxis, np.newaxis] + \
-                             vmap[1:], axis=0)/np.log(es[-1]/es[0])
-
+            s1 = (es[1:]**(1. - phot_index) - es[:-1]**(1. - phot_index))/(1. - phot_index)
+        if phot_index == 2:
+            s2 = np.log(es[1:]/es[:-1])
+        else:
+            s2 = (es[1:]**(2. - phot_index) - es[:-1]**(2. - phot_index))/(2. - phot_index)
+        a = vmap[:-1]
+        b = (vmap[1:] - vmap[:-1])/(e0[1:, np.newaxis, np.newaxis] - e0[:-1, np.newaxis, np.newaxis])
+        vignmap = np.sum((a - b*e0[:-1, np.newaxis, np.newaxis])*s1[:, np.newaxis, np.newaxis] + \
+                b*s2[:, np.newaxis, np.newaxis], axis=0)/np.sum(s1)
     else:
         print("compute for energy", energy)
         vignmap = efint(energy)
@@ -89,22 +120,16 @@ def make_vignetting_for_urdn(urdn, energy=7.2, phot_index=None,
     x = np.tan(vignfile["Offset angles"].data["X"]*pi/180/60.)*F - (24. - OPAXOFFSET[urdn][0])*DL
     y = np.tan(vignfile["Offset angles"].data["Y"]*pi/180/60.)*F - (24. - OPAXOFFSET[urdn][1])*DL
 
-    shmask = get_shadowmask_by_urd(urdn).astype(np.uint8) if useshadowmask else np.ones((48, 48), np.uint8)
     X, Y = np.meshgrid(x, y)
-    rawx, rawy = offset_to_raw_xy(X, Y)
-    if ignoreedgestrips:
-        mask = np.all([rawx > 0, rawx < 47, rawy > 0, rawy < 47], axis=0)
-    else:
-        mask = np.all([rawx > -1, rawx < 48, rawy > -1, rawy < 48], axis=0)
+    mask = pixmask(np.array([X.ravel(), Y.ravel()]).T).reshape(X.shape)
+
+    #temporary solution, we need to account for psf for shadow mask
     cutzero = cutmask(mask)
-    rawx = cutzero(rawx)
-    rawy = cutzero(rawy)
     x = x[mask.any(axis=1)]
     y = y[mask.any(axis=0)]
     vignmap = cutzero(vignmap)
-    mask = shmask[rawx, rawy]
+    mask = cutzero(mask)
     vignmap[np.logical_not(mask)] = 0.
-
     vmap = RegularGridInterpolator((x, y), vignmap[:, :], bounds_error=False, fill_value=0.)
     return vmap
 

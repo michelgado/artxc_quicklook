@@ -148,14 +148,6 @@ def make_convolve_with_roll(*args):
 
 
 def convolve_profile(attdata, locwcs, profile, gti=tGTI, timecorrection=lambda x: 1.):
-    import matplotlib.pyplot as plt
-    #r, d = locwcs.all_pix2world([[0, locwcs.wcs.crpix[1]], [2*locwcs.wcs.crpix[0], locwcs.wcs.crpix[1]]], 1).T
-    """
-    r, d = locwcs.all_pix2world([[locwcs.wcs.crpix[0], locwcs.wcs.crpix[1]*2], [locwcs.wcs.crpix[0], 0]], 1).T
-    vecs = pol_to_vec(r*pi/180., d*pi/180.)
-    wcsax = vecs[1, :] - vecs[0, :]
-    wcsax = wcsax/np.sqrt(np.sum(wcsax**2.))
-    """
     rolls = hist_by_roll_for_attdata(attdata, gti, timecorrection, locwcs)
     xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
     img = 0.
@@ -163,27 +155,12 @@ def convolve_profile(attdata, locwcs, profile, gti=tGTI, timecorrection=lambda x
         ra, dec, dt = rolls[i]
         if ra.size == 0:
             continue
-        print(ra.size)
         roll = i*0.5 + 0.25
-        print("roll %d exptimes %.2f" % (roll, dt.sum()))
         x, y = locwcs.all_world2pix(np.array([ra*180./pi, dec*180./pi]).T, 1.).T
-        print(x, y)
         timg = np.histogram2d(x, y, [np.arange(locwcs.wcs.crpix[0]*2 + 2) + 0.5,
                                      np.arange(locwcs.wcs.crpix[1]*2 + 2) + 0.5])[0].T
-        #return timg
-        print("timg sum", timg.sum())
-        #plt.imshow(timg)
-        #plt.show()
-
-        print("rotate on roll angle", roll)
         locbkg = ndimage.rotate(profile, roll)
-        print("rotate image")
-        print("locbkg shape", locbkg.shape)
-        #timg = ndimage.convolve(timg, locbkg)
-        print(timg.shape)
-        print(img)
         img = ndimage.convolve(timg, locbkg) + img
-        print("affter adding convolve", img)
     return img
 
 
