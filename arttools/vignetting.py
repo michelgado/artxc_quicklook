@@ -68,6 +68,14 @@ def make_vignetting_for_urdn(urdn, energy=7.2, flat=False, phot_index=None,
     return: scipy.interpolate.RegularGridInterpolator containing scalled effective area depending on offset in mm from the center of detector
 
     """
+    shmask = get_shadowmask_by_urd(urdn).astype(np.uint8) if useshadowmask else np.ones((48, 48), np.uint8)
+    shmask[[0, -1], :] = 0
+    shmask[:, [0, -1]] = 0
+    """
+    return RegularGridInterpolator((np.arange(-23.5, 23.6, 1.)*DL, np.arange(-23.5, 23.6, 1.)*DL),
+                                   shmask, bounds_error=False, fill_value=0.)
+    """
+
     vignfile = get_vigneting_by_urd(urdn)
     #TO DO: put max eff area in CALDB
     norm = 65.71259133631082 # = np.max(vignfile["5 arcmin PSF"].data["EFFAREA"])

@@ -108,6 +108,8 @@ def make_small_steps_quats(attdata, gti=tGTI, timecorrection=lambda x: 1.):
         tnew = np.repeat(tsm, size) + ar*dtm
         dtn = np.concatenate([dt[maskmoving], dtm]) #*timecorrection(ts[maskmoving]), dtm*timecorrection(tnew)])
         ts = np.concatenate([ts[maskmoving], tnew])
+        idx = np.argsort(ts)
+        ts, dtn = ts[idx], dtn[idx]
         qval = attdata(ts)
     else:
         dtn = dt

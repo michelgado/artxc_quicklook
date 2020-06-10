@@ -109,7 +109,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
     attdata = attdata.apply_gti(gti + [-30, 30])
     gti = attdata.gti & gti
 
-    locwcs = make_wcs_for_attdata(attdata, gti, pixsize) #produce wcs for accumulated atitude information
+    if locwcs is None: locwcs = make_wcs_for_attdata(attdata, gti, pixsize) #produce wcs for accumulated atitude information
     xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
     imgdata = {name: np.zeros((ysize, xsize), np.double) for name in ebands}
     urdgti = {URDN:emptyGTI for URDN in URDNS}
@@ -117,6 +117,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
     urdbkg = {}
     urdbkge = {}
     bkggti = {}
+    urdevt = []
 
     for urdfname in urdflist[:]:
         urdfile = fits.open(urdfname)
@@ -150,6 +151,11 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
             pickimg = np.all([energy > band.emin, energy < band.emax, grade > -1, grade < 10,
                               flag == 0, locgti.mask_outofgti_times(urddata["TIME"])], axis=0)
             if np.any(pickimg):
+                urdloc = urddata[pickimg]
+                vec1 = pol_to_vec(263.8940535*pi/180., -32.2583163*pi/180.)
+                urdloc = get_photons_vectors(urdloc, urdn, attdata)
+                masklast = np.arccos(np.sum(urdloc*vec1, axis=1)) < 100./3600.*pi/180.
+                urdevt.append(urdloc[masklast])
                 if weightphotons:
                     timg = make_vignetting_weighted_phot_images(urddata[pickimg], urdn, energy[pickimg], attdata, locwcs, photsplitnside)
                 else:

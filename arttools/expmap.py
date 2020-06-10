@@ -54,7 +54,7 @@ def make_exposures(direction, te, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kw
     vmap = make_overall_vignetting()
     offset = vec_to_offset_pairs(attdata(ts).apply(direction, inverse=True))
     scales = vmap(offset)
-    dtn = dtn*scales*cumscalefunc(ts)
+    dtn = dtn*scales*scalefunc(ts)
     idx = np.argsort(dtn)
     dtn = np.histogram(ts[idx], te, weights=dtn[idx])[0]
     return te, dtn

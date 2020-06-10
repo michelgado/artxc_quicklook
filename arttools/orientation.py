@@ -45,7 +45,6 @@ def make_gyro_relativistic_correction(attdata):
     return AttDATA(attdata.times, Rotation(qcorr).inv()*attdata(attdata.times), gti=attdata.gti)
 #-===========================================================================================
 
-qrot0 = Rotation([sin(15*pi/360.), 0., 0., cos(15*pi/360.)]) #ART detectors cs to the spasecraft cs
 qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])
 qgyro0 = Rotation([0., 0., 0., 1.])
 OPAX = np.array([1, 0, 0])
@@ -145,8 +144,8 @@ class AttDATA(SlerpWithNaiveIndexing):
         te, mgaps = self.gti.make_tedges(self.times)
         tc = ((te[1:] + te[:-1])/2.)[mgaps]
         dt = (te[1:] - te[:-1])[mgaps]
-        vecs = self(tc).apply(OPAX)
-        dalphadt = np.arccos(np.sum(vecs[:-1]*vecs[1:], axis=1))/dt*180./pi*3600.
+        vecs = self(te).apply(OPAX)
+        dalphadt = np.arccos(np.sum(vecs[:-1]*vecs[1:], axis=1))[mgaps]/dt*180./pi*3600.
         return tc, dt, dalphadt
 
     def __mul__(self, val):
@@ -192,7 +191,7 @@ def read_gyro_fits(gyrohdu):
     mask = np.logical_and(masktimes, mask0quats)
     times, quats = times[mask], quats[mask]
     ts, uidx = np.unique(times, return_index=True)
-    return AttDATA(ts, Rotation(quats[uidx])*qgyro0*qrot0*ARTQUATS["GYRO"])
+    return AttDATA(ts, Rotation(quats[uidx])*qgyro0*ARTQUATS["GYRO"])
 
 def read_bokz_fits(bokzhdu):
     """
@@ -212,10 +211,7 @@ def read_bokz_fits(bokzhdu):
     masktimes = bokzdata["TIME"] > T0
     mask = np.logical_and(mask0quats, masktimes)
     jyear = get_hdu_times(bokzhdu).jyear[mask]
-    """
-    correct quaternions for earth precession, since bokz return coordinates at the current epoch!!!!
-    """
-    qbokz = earth_precession_quat(jyear).inv()*Rotation.from_dcm(mat[mask])*qbokz0*qrot0*ARTQUATS["BOKZ"]
+    qbokz = earth_precession_quat(jyear).inv()*Rotation.from_dcm(mat[mask])*qbokz0*ARTQUATS["BOKZ"]
     ts, uidx = np.unique(bokzdata["TIME"][mask], return_index=True)
     return AttDATA(ts, qbokz[uidx])
 
@@ -236,7 +232,7 @@ def get_raw_bokz(bokzhdu):
     mask0quats = np.linalg.det(mat) != 0.
     masktimes = bokzdata["TIME"] > T0
     mask = np.logical_and(mask0quats, masktimes)
-    qbokz = Rotation.from_dcm(mat[mask])*qbokz0*qrot0
+    qbokz = Rotation.from_dcm(mat[mask])*qbokz0
     jyear = get_hdu_times(bokzhdu).jyear[mask]
     return bokzdata["TIME"][mask], earth_precession_quat(jyear).inv()*qbokz
 

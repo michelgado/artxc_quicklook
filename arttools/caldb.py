@@ -27,16 +27,15 @@ idxtabl["CAL_DATE"] = pandas.to_datetime(idxtabl["CAL_DATE"])
 idxtabl.set_index("CAL_DATE", inplace=True)
 
 CUTAPP = None
+FLATVIGN = False
 FLATBKG = False
 
-qrot0 = Rotation([sin(15*pi/360.), 0., 0., cos(15*pi/360.)]) #ART detectors cs rotattion to the spasecraft cs
 qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])
 qgyro0 = Rotation([0., 0., 0., 1.])
 OPAX = np.array([1, 0, 0])
 
-
-ARTQUATS = {row[0]:Rotation(row[1:]) for row in fits.getdata(os.path.join(ARTCALDBPATH, "artxc_quats_v001.fits"), 1)}
-ARTQUATS.update({TELTOURD[row[0]]:Rotation(row[1:]) for row in fits.getdata(os.path.join(ARTCALDBPATH, "artxc_quats_v001.fits"), 1) if row[0] in TELTOURD})
+ARTQUATS = {row[0]:Rotation(row[1:]) for row in fits.getdata(os.path.join("/srg/a1/work/andrey/ART-XC/Quats_V5", "ART_QUATS_V5_rotin.fits"), 1)}
+ARTQUATS.update({TELTOURD[row[0]]:Rotation(row[1:]) for row in fits.getdata(os.path.join("/srg/a1/work/andrey/ART-XC/Quats_V5", "ART_QUATS_V5_rotin.fits"), 1) if row[0] in TELTOURD})
 
 """
 some magical numbers, generally define mean count rate of the background of each detector relative to the mean over all seven
@@ -141,7 +140,7 @@ def get_backprofile_by_urdn(urdn):
     global FLATBKG
     bkg = fits.getdata(get_relevat_file("BKG", URDTOTEL[urdn]), 0)
     if FLATBKG:
-        bkg = np.ones(bkg.shape)*bkg.mean()
+        bkg = np.ones(bkg.shape)
     return bkg
 
 def get_backprofile(urdfile):
