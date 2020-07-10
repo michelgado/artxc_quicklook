@@ -43,8 +43,9 @@ class GTI(object):
         arr = np.asarray(gtis[mask].reshape((-1, 2)))
         return arr
 
-    def read(self, fname):
-        self.__init__(np.loadtxt(fname))
+    @classmethod
+    def read(cls, fname):
+        return cls(np.loadtxt(fname))
 
     def writeto(self, fname):
         np.savetxt(fname, self.arr)
@@ -219,7 +220,8 @@ class GTI(object):
         ctot[0] = 0
         arange = np.arange(ctot[-1]) - np.repeat(ctot[:-1], tsize)
         if epoch is None:
-            t0 = self.arr[:, 0] - dt*(tsize%1)/2.
+            t0 = np.median((self.arr.ravel() + dt/2.)%dt) - dt/2. + (self.arr[:, 0]//dt)*dt
+            #t0 = self.arr[:, 0] - dt*(tsize%1)/2.
         else:
             t0 = self.arr[:, 0] - (self.arr[:, 0] - epoch)%dt
         te = arange*dt + np.repeat(t0, tsize)

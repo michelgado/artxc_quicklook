@@ -42,7 +42,7 @@ class PixInterpolator(object):
         self.values = shadow_mask
 
     def __call__(self, xy_offset_pair):
-        rawx, rawy = offset_to_raw_xy(xy_offset_pair[..., 0], xy_offset_pair[..., 1])
+        rawx, rawy = offset_to_raw_xy(xy_offset_pair[0], xy_offset_pair[1])
         mask = np.all([rawx > -1, rawy > -1, rawx < 48, rawy < 48], axis=0)
         result = np.zeros(rawx.shape[0] if rawx.ndim == 1 else rawx.shape[:1])
         result[mask] = self.values[rawx[mask], rawy[mask]]
@@ -91,8 +91,8 @@ def make_vignetting_for_urdn(urdn, energy=7.2, flat=False, phot_index=None,
 
     pixmask = PixInterpolator(shmask)
 
-    if flat: 
-        return pixmask 
+    if flat:
+        return pixmask
 
     efint = interp1d(vignfile["5 arcmin PSF"].data["E"],
                      vignfile["5 arcmin PSF"].data["EFFAREA"],
@@ -129,7 +129,7 @@ def make_vignetting_for_urdn(urdn, energy=7.2, flat=False, phot_index=None,
     y = np.tan(vignfile["Offset angles"].data["Y"]*pi/180/60.)*F - (24. - OPAXOFFSET[urdn][1])*DL
 
     X, Y = np.meshgrid(x, y)
-    mask = pixmask(np.array([X.ravel(), Y.ravel()]).T).reshape(X.shape)
+    mask = pixmask((X.ravel(), Y.ravel())).reshape(X.shape)
 
     #temporary solution, we need to account for psf for shadow mask
     cutzero = cutmask(mask)

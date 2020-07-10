@@ -2,12 +2,12 @@ from scipy.spatial.transform import Rotation, Slerp
 import numpy as np
 from math import pi, cos, sin, sqrt
 from ._det_spatial import urd_to_vec, F, DL
-from .time import get_hdu_times, GTI, tGTI
+from .time import get_hdu_times, GTI, tGTI, emptyGTI
 from .caldb import ARTQUATS, T0
 from .mask import edges as medges
 from functools import reduce
 from scipy.optimize import minimize
-from datetime import datetime 
+from datetime import datetime
 from astropy.time import Time
 
 #============================================================================================
@@ -108,6 +108,7 @@ class AttDATA(SlerpWithNaiveIndexing):
     """
     quaternions interpolation associated with
     """
+    prec = 10./3600*pi/180.
 
     def __init__(self, *args, gti=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -115,6 +116,38 @@ class AttDATA(SlerpWithNaiveIndexing):
             self.gti = GTI(gti)
         except Exception:
             self.gti = GTI(self.times[[0, -1]])
+
+    def _try_to_reconstruct(self):
+        dt = np.diff(self.times, 1)
+        dtmed = np.median(dt)
+        maskall = dt > 1.5*dtmed
+        if not np.any(maskall):
+            self.badrec = emptyGTI
+            self.goodrec = emptyGTI
+        else:
+            bti = GTI(self.times[medges(maskall) + [0, 1]])
+
+            idx = np.repeat(np.where(maskall)[0], 3).reshape((-1, 3)) + [-1, 0, 1]
+            idx[0, 0] = max(0, idx[0, 0])
+            idx[-1, 1] = min(dt.size - 1, idx[-1, 1])
+
+            rvecs = self.rotvecs[idx, :]
+            r1 = Rotation.from_rotvec(rvecs[:, 1, :]).inv()
+            print(rvecs[0, :, :], dt[idx[0]])
+            rlist1 = Rotation.from_rotvec(rvecs[:, 0, :]*dt[idx]/dt[idx - 1])*r1
+            rlist2 = Rotation.from_rotvec(rvecs[:, 2, :]*dt[idx]/dt[idx + 1])*r1
+
+            print(self.prec)
+            maskgood = (np.arccos(rlist1.as_quat()[...,-1]) < self.prec) & (np.arccos(rlist2.as_quat()[...,-1]) < self.prec)
+            if np.any(maskgood):
+                goodrec = GTI(self.times[idx[maskgood, [1, 2]]])
+                goodrec.merge_close_intervals(0.01*dtmed)
+            else:
+                goodrec = emptyGTI
+            self.goodrec = goodrec
+            self.badrec = bti & -goodrec
+
+
 
     def __add__(self, other):
         base = super().__add__(other)
@@ -450,9 +483,9 @@ class SurveyAtt(object):
         self.sc_start_rotvec = np.asarray(sc_start_rotvec)[idx]
         """ starting rotation vector of sc optical axis"""
         self.sc_romega = np.asarray(sc_romega)[idx]
-        """ spacecraft optical axis rotation speed """ 
+        """ spacecraft optical axis rotation speed """
         self.roll = np.asarray(roll)[idx]
-        """ roll angle of the spacecraft""" 
+        """ roll angle of the spacecraft"""
         self.roll = roll[idx]
 
         self.gti = GTI(np.array([self.tstart, self.tstop]).T)
