@@ -139,17 +139,17 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
         bkggti[urdn] = bkggti.get(urdn, emptyGTI) | locbgti
 
         urddata = np.copy(urdfile["EVENTS"].data) #hint: do not apply bool mask to a fitsrec - it's a stright way to the memory leak :)
-        urddata = urddata[(locgti + [-200, 200]).mask_outofgti_times(urddata["TIME"])]
+        urddata = urddata[(locgti + [-200, 200]).mask_external(urddata["TIME"])]
 
         hkdata = np.copy(urdfile["HK"].data)
-        hkdata = hkdata[(locgti + [-30, 30]).mask_outofgti_times(hkdata["TIME"])]
+        hkdata = hkdata[(locgti + [-30, 30]).mask_external(hkdata["TIME"])]
         urdhk[urdn] = urdhk.get(urdn, []) + [hkdata,]
 
         energy, grade, flag = make_energies_flags_and_grades(urddata, hkdata, urdn)
-        timemask = locgti.mask_outofgti_times(urddata["TIME"])
+        timemask = locgti.mask_external(urddata["TIME"])
         for bandname, band in ebands.items():
             pickimg = np.all([energy > band.emin, energy < band.emax, grade > -1, grade < 10,
-                              flag == 0, locgti.mask_outofgti_times(urddata["TIME"])], axis=0)
+                              flag == 0, locgti.mask_external(urddata["TIME"])], axis=0)
             if np.any(pickimg):
                 if weightphotons:
                     timg = make_vignetting_weighted_phot_images(urddata[pickimg], urdn, energy[pickimg], attdata, locwcs, photsplitnside)
@@ -181,7 +181,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
     rate = tevts.searchsorted(te)
     rate = (rate[1:] - rate[:-1])[mgaps]/(te[1:] - te[:-1])[mgaps]
     tc = (te[1:] + te[:-1])[mgaps]/2.
-    tm = np.sum(tgti.mask_outofgti_times(tevts))/tgti.exposure
+    tm = np.sum(tgti.mask_external(tevts))/tgti.exposure
 
 
     if tc.size == 0:

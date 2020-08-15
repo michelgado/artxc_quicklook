@@ -2,6 +2,7 @@ import os, sys
 import pandas
 from astropy.io import fits
 from astropy.table import Table
+from astropy.time import Time, TimeDelta
 from functools import lru_cache
 import datetime
 from astropy import time as atime
@@ -21,10 +22,13 @@ indexfname = "artxc_index.fits"
 
 TELTOURD = {v:k for k, v in URDTOTEL.items()}
 
-idxdata = fits.getdata(os.path.join(ARTCALDBPATH, indexfname), 1)
-idxtabl = Table(idxdata).to_pandas()
-idxtabl["CAL_DATE"] = pandas.to_datetime(idxtabl["CAL_DATE"])
-idxtabl.set_index("CAL_DATE", inplace=True)
+idxtabl = Table(fits.getdata(os.path.join(ARTCALDBPATH, indexfname), 1))
+idxtabl["CAL_DATE"] = idxtabl["CAL_DATE"][:, 0]
+print(idxtabl["CAL_DATE"])
+idxtabl = idxtabl.to_pandas()
+idxtabl["CAL_DATE_ISO"] = (Time(idxtabl.REF_TIME.values, format="mjd") + \
+                            TimeDelta(idxtabl.CAL_DATE.values, format="sec")).to_datetime()
+idxtabl.set_index("CAL_DATE_ISO", inplace=True)
 
 CUTAPP = None
 FLATVIGN = False
@@ -34,8 +38,8 @@ qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])
 qgyro0 = Rotation([0., 0., 0., 1.])
 OPAX = np.array([1, 0, 0])
 
-ARTQUATS = {row[0]:Rotation(row[1:]) for row in fits.getdata(os.path.join("/srg/a1/work/andrey/ART-XC/Quats_V5", "ART_QUATS_V5_rotin.fits"), 1)}
-ARTQUATS.update({TELTOURD[row[0]]:Rotation(row[1:]) for row in fits.getdata(os.path.join("/srg/a1/work/andrey/ART-XC/Quats_V5", "ART_QUATS_V5_rotin.fits"), 1) if row[0] in TELTOURD})
+#ARTQUATS = {row[0]:Rotation(row[1:]) for row in fits.getdata(os.path.join("/srg/a1/work/andrey/ART-XC/Quats_V5", "ART_QUATS_V5_rotin.fits"), 1)}
+#ARTQUATS.update({TELTOURD[row[0]]:Rotation(row[1:]) for row in fits.getdata(os.path.join("/srg/a1/work/andrey/ART-XC/Quats_V5", "ART_QUATS_V5_rotin.fits"), 1) if row[0] in TELTOURD})
 
 """
 some magical numbers, generally define mean count rate of the background of each detector relative to the mean over all seven
@@ -101,6 +105,12 @@ def get_relevat_file(cal_cname, instrume, date=datetime.datetime(2030, 10, 10)):
     return fpath
 
 OPAXOFFSET = {TELTOURD[tel]: [x, y] for tel, x, y in fits.getdata(get_relevat_file("OPT_AXIS", "NONE"))}
+
+
+@lru_cache(maxsize=7)
+def get_boresight_by_device(dev):
+    return Rotation(fits.getdata(get_relevat_file("BORESIGHT", TELTOURD.get(dev, dev)), 1)[0])
+
 
 @lru_cache(maxsize=5)
 def get_vigneting_by_urd(urdn):

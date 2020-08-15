@@ -4,7 +4,7 @@ from scipy.integrate import cumtrapz
 from ._det_spatial import offset_to_raw_xy, DL, F, \
     offset_to_vec, vec_to_offset_pairs, vec_to_offset
 from .telescope import URDNS
-from .caldb import ARTQUATS
+from .caldb import get_boresight_by_device
 import numpy as np
 from math import log10, pi, sin, cos
 from functools import lru_cache
@@ -169,7 +169,7 @@ def make_overall_vignetting(energy=7.2, *args,
 
     vmaps = {}
     for urdn in URDNS:
-        quat = ARTQUATS[urdn]
+        quat = get_boresight_by_device(urdn)
         xlim, ylim = vec_to_offset(quat.apply(vecs))
         xmin, xmax = min(xmin, xlim.min()), max(xmax, xlim.max())
         ymin, ymax = min(ymin, ylim.min()), max(ymax, ylim.max())
@@ -187,7 +187,7 @@ def make_overall_vignetting(energy=7.2, *args,
 
     for urdn in URDNS:
         vmap = make_vignetting_for_urdn(urdn, energy, *args, **kwargs)
-        quat = ARTQUATS[urdn]
+        quat = get_boresight_by_device(urdn)
         newvmap += vmap(vec_to_offset_pairs(quat.apply(vecs, inverse=True))).reshape(shape)*urdweights.get(urdn, 1.)
 
     vmap = RegularGridInterpolator((x[:, 0], y[0]), newvmap, bounds_error=False, fill_value=0)

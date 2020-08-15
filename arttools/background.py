@@ -1,4 +1,4 @@
-from .caldb import ARTQUATS
+from .caldb import get_boresight_by_device 
 from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttWCSHistmean, AttWCSHistinteg, convolve_profile, AttInvHist
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from .caldb import get_backprofile_by_urdn, get_shadowmask_by_urd
@@ -36,7 +36,7 @@ def make_overall_background_map(subgrid=10, useshadowmask=True):
                          np.array([ymin, ymin, ymax, ymax]))
     vmaps = {}
     for urdn in URDNS:
-        quat = ARTQUATS[urdn]
+        quat = get_boresight_by_device(urdn)
         xlim, ylim = vec_to_offset(quat.apply(vecs))
         xmin, xmax = min(xmin, xlim.min()), max(xmax, xlim.max())
         ymin, ymax = min(ymin, ylim.min()), max(ymax, ylim.max())
@@ -55,7 +55,7 @@ def make_overall_background_map(subgrid=10, useshadowmask=True):
 
     for urdn in URDNS:
         vmap = make_background_det_map_for_urdn(urdn, useshadowmask)
-        quat = ARTQUATS[urdn]
+        quat = get_boresight_by_device(urdn)
         newvmap += vmap(vec_to_offset_pairs(quat.apply(vecs))).reshape(shape)
 
     bkgmap = RegularGridInterpolator((x[:, 0], y[0]), newvmap, bounds_error=False, fill_value=0)
@@ -101,7 +101,7 @@ def make_bkgmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, time_corr={}, subsca
             print("urd %d has no individual gti, continue" % urd)
             continue
         print("urd %d progress:" % urd)
-        exptime, qval, locgti = hist_orientation_for_attdata(attdata*ARTQUATS[urd], gti, \
+        exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urd), gti, \
                                                      time_corr.get(urd, lambda x: 1.))
         print("processed exposure", gti.exposure, exptime.sum())
         bkgmap = make_background_det_map_for_urdn(urd)

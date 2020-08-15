@@ -23,8 +23,8 @@ def poltovec(ra, dec):
     vec[..., 2] = np.sin(dec*pi/180.)
     return vec
 
-skycells = np.copy(fits.getdata("/srg/a1/work/srg/data/eRO_4700_SKYMAPS.fits", 1))
-skycelltree = cKDTree(poltovec(skycells["RA_CEN"], skycells["DE_CEN"]))
+#skycells = np.copy(fits.getdata("/srg/a1/work/srg/data/eRO_4700_SKYMAPS.fits", 1))
+#skycelltree = cKDTree(poltovec(skycells["RA_CEN"], skycells["DE_CEN"]))
 SEARCHRAD = 2.*sin(4.9/2.*pi/180.)
 
 urdbkgsc = {28: 1.0269982359153347,
@@ -36,7 +36,8 @@ urdbkgsc = {28: 1.0269982359153347,
             30: 0.9775021015829128}
 
 import pickle
-bkigti = pickle.load(open("/srg/a1/work/andrey/ART-XC/gc/allbki2.pickle", "rb"))
+"""
+#bkigti = pickle.load(open("/srg/a1/work/andrey/ART-XC/gc/allbki2.pickle", "rb"))
 allbki = reduce(lambda a, b: a | b, bkigti.values())
 
 
@@ -187,6 +188,7 @@ def run(fpath):
     bmap = fits.PrimaryHDU(data=bmap, header=locwcs.to_header())
     bmap.writeto("bmap.fits.gz", overwrite=True)
 
+"""
 
 if __name__ == "__main__":
     run(sys.argv[1])

@@ -22,7 +22,7 @@ def weigt_time_intervals(gtis, scales=urdbkgsc, defaultscale=1):
     se = np.ones(mgaps.size + 2, np.double)*np.sum([scales.get(key, defaultscale) for key in gtis])
     #se[1:-1][np.logical_not(mgaps)] = 0
     for key, gti in gtis.items():
-        mask = np.logical_not(gti.mask_outofgti_times(tc))
+        mask = np.logical_not(gti.mask_external(tc))
         se[1:-1][mask] -= scales.get(key, defaultscale)
     se[[0, -1]] = 0.
 

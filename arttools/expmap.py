@@ -1,4 +1,4 @@
-from .caldb import ARTQUATS
+from .caldb import get_boresight_by_device
 from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttInvHist, make_small_steps_quats
 from .vignetting import make_vignetting_for_urdn, make_overall_vignetting
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
@@ -39,7 +39,7 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs)
             print("urd %d has no individual gti, continue" % urd)
             continue
         print("urd %d progress:" % urd)
-        exptime, qval, locgti = hist_orientation_for_attdata(attdata*ARTQUATS[urd], gti, \
+        exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urd), gti, \
                                                              dtcorr.get(urd, lambda x: 1))
         vmap = make_vignetting_for_urdn(urd, **kwargs)
         emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum) + emap
@@ -77,7 +77,7 @@ def make_expmap_for_healpix(attdata, urdgtis, mpnum=MPNUM, dtcorr={}, subscale=4
             print("urd %d has no individual gti, continue" % urd)
             continue
         print("urd %d progress:" % urd)
-        exptime, qval, locgti = hist_orientation_for_attdata(attdata*ARTQUATS[urd], gti)
+        exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urd), gti)
         vmap = make_vignetting_for_urdn(urd)
         emap = AttHealpixHist.make_mp(2048, vmap, exptime, qval, mpnum, subscale=subscale) + emap
         print(" done!")

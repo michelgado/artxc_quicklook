@@ -3,12 +3,16 @@ import numpy as np
 from math import pi, cos, sin, sqrt
 from ._det_spatial import urd_to_vec, F, DL
 from .time import get_hdu_times, GTI, tGTI, emptyGTI
-from .caldb import ARTQUATS, T0
+from .caldb import T0, get_boresight_by_device
 from .mask import edges as medges
 from functools import reduce
 from scipy.optimize import minimize
 from datetime import datetime
 from astropy.time import Time
+
+
+#debug
+import matplotlib.pyplot as plt
 
 #============================================================================================
 """
@@ -21,7 +25,7 @@ gyrocorrectionbti = GTI([[6.24408483e+08, 6.24410523e+08], [6.24410643e+08, 6.30
 
 def define_required_correction(attdata):
     a1 = attdata.apply_gti(attdata.gti & gyrocorrectionbti)
-    a2 = attdata.apply_gti(attdata.gti & -gyrocorrectionbti)
+    a2 = attdata.apply_gti(attdata.gti & ~gyrocorrectionbti)
     return a2 + make_gyro_relativistic_correction(a1)
 
 def make_gyro_relativistic_correction(attdata):
@@ -77,21 +81,36 @@ class SlerpWithNaiveIndexing(Slerp):
     scipy quaternions interpolation class with indexing
     """
     def __getitem__(self, idx):
-        return Slerp(self.times[idx], self(self.times[idx]))
+        return Slerp(self.times[idx], self.rotations[idx])
 
     def __call__(self, tarr):
-        return Rotation(np.empty((0, 4), np.double)) if np.asarray(tarr).size == 0 else super().__call__(tarr)
+        return Rotation(np.empty((0, 4), np.double)) if np.asarray(tarr).size == 0 \
+                else super().__call__(tarr)
 
     def __add__(self, other):
         """
-        concatenate two set of quaternions
+        concatenate two set of quaternions, subject to interpolation
         """
         times = np.concatenate([self.times, other.times])
-        qself = self(self.times) if self.times.size else Rotation(np.empty((0, 4), np.double))
-        qother = other(other.times)
-        quats = np.concatenate([qself.as_quat(), qother.as_quat()])
-        ts, idx = np.unique(times, return_index=True)
-        return self.__class__(ts, Rotation(quats[idx]))
+        idxs = np.argsort(times)
+        quats = np.concatenate([self(self.times).as_quat(), other(other.times).as_quat()])[idxs]
+        times = times[idxs]
+
+
+        #TODO: 
+        # there are lots of errors cases to be considered
+        # here erorr raised due to inconsistent quaternions:
+        # i.e. time points are muxed, and rotations in them significantly different
+        # but, one can imagine, that sparse points are completed with more 
+        idxmix = np.searchsorted(self.times, other.times)
+        mask = np.logical_or(idxmix > 0, idxmix < self.times.size)
+        if np.any(mask):
+            if not np.allclose(self(other.times[mask]).as_quat(), 
+                               other(other.times[mask]).as_quat()): 
+                raise ValueError("concatenated quaternions are incompatible")
+
+        tuniq, uidx = np.unique(times, return_index=True)
+        return self.__class__(tuniq, Rotation(quats[uidx]))
 
     def __mul__(self, val):
         """
@@ -116,46 +135,50 @@ class AttDATA(SlerpWithNaiveIndexing):
             self.gti = GTI(gti)
         except Exception:
             self.gti = GTI(self.times[[0, -1]])
+        self._check_interpolation_quality()
 
-    def _try_to_reconstruct(self):
+    def _check_interpolation_quality(self):
         dt = np.diff(self.times, 1)
         dtmed = np.median(dt)
-        maskall = dt > 1.5*dtmed
-        if not np.any(maskall):
+        gaps = dt > 1.5*dtmed
+        if gaps.size > 0: 
+            gaps[[0, -1]] = False 
+
+        if not np.any(gaps):
             self.badrec = emptyGTI
             self.goodrec = emptyGTI
         else:
-            bti = GTI(self.times[medges(maskall) + [0, 1]])
+            #don't considere specific cases of the gaps at the end and beginning
+            #check derivatives
+            idx = np.where(gaps)[0]
 
-            idx = np.repeat(np.where(maskall)[0], 3).reshape((-1, 3)) + [-1, 0, 1]
-            idx[0, 0] = max(0, idx[0, 0])
-            idx[-1, 1] = min(dt.size - 1, idx[-1, 1])
+            q = self.rotations[idx]*Rotation.from_rotvec(self.rotvecs[idx - 1]*\
+                    self.timedelta[idx, np.newaxis]/self.timedelta[idx - 1, np.newaxis])
+            dvec = np.sum(self.rotations[idx + 1].apply(OPAX)*q.apply(OPAX), axis=1)
+            goodinterp = dvec > cos(pi/180.*10./3600)
 
-            rvecs = self.rotvecs[idx, :]
-            r1 = Rotation.from_rotvec(rvecs[:, 1, :]).inv()
-            print(rvecs[0, :, :], dt[idx[0]])
-            rlist1 = Rotation.from_rotvec(rvecs[:, 0, :]*dt[idx]/dt[idx - 1])*r1
-            rlist2 = Rotation.from_rotvec(rvecs[:, 2, :]*dt[idx]/dt[idx + 1])*r1
+            q = self.rotations[idx + 1]*Rotation.from_rotvec(self.rotvecs[idx + 1]*\
+                    -self.timedelta[idx, np.newaxis]/self.timedelta[idx + 1, np.newaxis])
+            dvec = np.sum(self.rotations[idx].apply(OPAX)*q.apply(OPAX), axis=1)
+            goodinterp = np.logical_and(goodinterp, dvec > cos(pi/180*10/3600))
 
-            print(self.prec)
-            maskgood = (np.arccos(rlist1.as_quat()[...,-1]) < self.prec) & (np.arccos(rlist2.as_quat()[...,-1]) < self.prec)
-            if np.any(maskgood):
-                goodrec = GTI(self.times[idx[maskgood, [1, 2]]])
-                goodrec.merge_close_intervals(0.01*dtmed)
-            else:
-                goodrec = emptyGTI
-            self.goodrec = goodrec
-            self.badrec = bti & -goodrec
+            ggaps = np.copy(gaps)
+            ggaps[ggaps] = goodinterp
+            bgaps = np.copy(gaps)
+            bgaps[bgaps] = np.logical_not(goodinterp)
+            self.goodinterp = GTI(self.times[medges(ggaps)])
+            self.badinterp = GTI(self.times[medges(bgaps)])
 
 
 
     def __add__(self, other):
         base = super().__add__(other)
         base.gti = self.gti | other.gti
+        self._check_interpolation_quality()
         return base
 
     def _get_clean(self):
-        mask = self.gti.mask_outofgti_times(self.times)
+        mask = self.gti.mask_external(self.times)
         quats = self(self.times[mask])
         return self.__class__(self.times[mask], quats, self.gti)
 
@@ -224,7 +247,7 @@ def read_gyro_fits(gyrohdu):
     mask = np.logical_and(masktimes, mask0quats)
     times, quats = times[mask], quats[mask]
     ts, uidx = np.unique(times, return_index=True)
-    return AttDATA(ts, Rotation(quats[uidx])*qgyro0*ARTQUATS["GYRO"])
+    return AttDATA(ts, Rotation(quats[uidx])*qgyro0*get_boresight_by_device("GYRO"))
 
 def read_bokz_fits(bokzhdu):
     """
@@ -244,7 +267,8 @@ def read_bokz_fits(bokzhdu):
     masktimes = bokzdata["TIME"] > T0
     mask = np.logical_and(mask0quats, masktimes)
     jyear = get_hdu_times(bokzhdu).jyear[mask]
-    qbokz = earth_precession_quat(jyear).inv()*Rotation.from_dcm(mat[mask])*qbokz0*ARTQUATS["BOKZ"]
+    qbokz = earth_precession_quat(jyear).inv()*Rotation.from_dcm(mat[mask])*qbokz0*\
+            get_boresight_by_device("BOKZ")
     ts, uidx = np.unique(bokzdata["TIME"][mask], return_index=True)
     return AttDATA(ts, qbokz[uidx])
 
@@ -283,9 +307,9 @@ def get_photons_vectors(urddata, URDN, attdata, subscale=1):
 
     return: cartesian vectors in form of numpy array of shape(..., 3)
     """
-    if not np.all(attdata.gti.mask_outofgti_times(urddata["TIME"])):
+    if not np.all(attdata.gti.mask_external(urddata["TIME"])):
         raise ValueError("some events are our of att gti")
-    qall = attdata(np.repeat(urddata["TIME"], subscale*subscale))*ARTQUATS[URDN]
+    qall = attdata(np.repeat(urddata["TIME"], subscale*subscale))*get_boresight_by_device(URDN)
     photonvecs = urd_to_vec(urddata, subscale)
     phvec = qall.apply(photonvecs)
     return phvec
@@ -463,6 +487,8 @@ def get_elongation_plane_norm(attdata, gti=None): #tGTI):
 
 
 class SurveyAtt(object):
+    """
+    """
     def __init__(self, polus, omega, tstart, tstop, sc_start_rotvec, sc_romega, sc_start_vec, roll):
         """
         initialize survey att container:
@@ -493,7 +519,7 @@ class SurveyAtt(object):
 
     def get_rotax(self, times):
         times = np.asarray(times)
-        mask = self.gti.mask_outofgti_times(times)
+        mask = self.gti.mask_external(times)
         if not np.all(mask):
             print("Warning!: some of the times are out of survey attdata")
         tloc = times[mask]
@@ -505,7 +531,7 @@ class SurveyAtt(object):
 
     def get_opax_vec(self, time):
         time = np.asarray(time)
-        mask = self.gti.mask_outofgti_times(time)
+        mask = self.gti.mask_external(time)
         if not np.all(mask):
             print("Warning!: some of the times are out of survey attdata")
         tloc = time[mask]
@@ -518,7 +544,7 @@ class SurveyAtt(object):
 
     def get_quaterninos(self, time):
         time = np.asarray(time)
-        mask = self.gti.mask_outofgti_times(time)
+        mask = self.gti.mask_external(time)
         if not np.all(mask):
             print("Warning!: some of the times are out of survey attdata")
         tloc = time[mask]
