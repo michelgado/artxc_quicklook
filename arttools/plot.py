@@ -8,7 +8,7 @@ from .caldb import get_energycal, get_shadowmask, get_energycal_by_urd, get_shad
 from .energy import get_events_energy
 from .telescope import URDNS
 from .orientation import get_photons_sky_coord, read_gyro_fits, read_bokz_fits, AttDATA, define_required_correction
-from .lightcurve import make_overall_lc
+from .lightcurve import make_overall_lc, weigt_time_intervals
 from .vignetting import load_raw_wignetting_function
 from astropy.io import fits
 from math import pi, cos, sin
@@ -126,11 +126,11 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
         tchk = (urdfile["HK"].data["TIME"][1:] + urdfile['HK'].data["TIME"][:-1])/2.
 
         print("processing:", urdfname)
-        locgti = (get_gti(urdfile, "STDGTI") if "STDGTI" in urdfile else get_gti(urdfile)) & gti & -urdgti.get(urdn, emptyGTI) # & -urdbti.get(urdn, emptyGTI)
+        locgti = (get_gti(urdfile, "STDGTI") if "STDGTI" in urdfile else get_gti(urdfile)) & gti & ~urdgti.get(urdn, emptyGTI) # & -urdbti.get(urdn, emptyGTI)
         locgti.merge_joint()
-        locbgti = (get_gti(urdfile, "STDGTI") if "STDGTI" in urdfile else get_gti(urdfile)) & (gti + [-200, 200]) & -bkggti.get(urdn, emptyGTI)
+        locbgti = (get_gti(urdfile, "STDGTI") if "STDGTI" in urdfile else get_gti(urdfile)) & (gti + [-200, 200]) & ~bkggti.get(urdn, emptyGTI)
         print("exposure in GTI:", locgti.exposure)
-        locgti = locgti & -urdbti.get(urdn, emptyGTI)
+        locgti = locgti & ~urdbti.get(urdn, emptyGTI)
         print("exposure after excluding BTI", locgti.exposure)
         if locgti.exposure == 0.:
             continue
@@ -170,9 +170,11 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
     urddtc = {urdn: deadtime_correction(hk) for urdn, hk in urdhk.items()}
 
     tevts = np.sort(np.concatenate([np.concatenate(e) for e in urdbkge.values()]))
+    """
     tgti = reduce(lambda a, b: a & b, urdgti.values())
-    te = np.concatenate([np.linspace(s, e, int((e-s)//100.) + 2) for s, e in tgti.arr])
-    mgaps = np.ones(te.size - 1, np.bool)
+    te, mgaps = tgti.arange(100)
+    #te = np.concatenate([np.linspace(s, e, int((e-s)//100.) + 2) for s, e in tgti.arr])
+    #mgaps = np.ones(te.size - 1, np.bool)
     if tgti.arr.size > 2:
         mgaps[np.cumsum([(int((e-s)//100.) + 2) for s, e in tgti.arr[:-1]]) - 1] = False
         mgaps[te[1:] - te[:-1] < 10] = False
@@ -188,6 +190,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
         urdbkg = {urdn: lambda x: np.ones(x.size)*tm*urdbkgsc[urdn]/7.62 for urdn in urdbkgsc}
     else:
         urdbkg = {urdn: interp1d(tc, rate*urdbkgsc[urdn]/7.61, bounds_error=False, fill_value=tm*urdbkgsc[urdn]/7.62) for urdn in urdbkgsc}
+    """
     tebkg, mgapsbkg, cratebkg, crerrbkg, bkgrate = make_overall_lc(tevts, bkggti, 25.)
     urdbkg = {urdn: constscale(urdbkgsc[urdn], bkgrate) for urdn in urdbkgsc}
 

@@ -1,4 +1,4 @@
-from .caldb import get_boresight_by_device 
+from .caldb import get_boresight_by_device
 from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttWCSHistmean, AttWCSHistinteg, convolve_profile, AttInvHist
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from .caldb import get_backprofile_by_urdn, get_shadowmask_by_urd
@@ -96,7 +96,7 @@ def make_bkgmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, time_corr={}, subsca
     """
 
     for urd in urdgtis:
-        gti = urdgtis[urd] & -overall_gti
+        gti = urdgtis[urd] & ~overall_gti
         if gti.size == 0:
             print("urd %d has no individual gti, continue" % urd)
             continue

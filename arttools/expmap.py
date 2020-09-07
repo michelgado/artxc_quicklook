@@ -34,7 +34,7 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs)
             print("\ndone!")
 
     for urd in urdgtis:
-        gti = urdgtis[urd] & -overall_gti
+        gti = urdgtis[urd] & ~overall_gti
         if gti.exposure == 0:
             print("urd %d has no individual gti, continue" % urd)
             continue
@@ -72,7 +72,7 @@ def make_expmap_for_healpix(attdata, urdgtis, mpnum=MPNUM, dtcorr={}, subscale=4
         print("\ndone!")
 
     for urd in urdgtis:
-        gti = urdgtis[urd] & -overall_gti
+        gti = urdgtis[urd] & ~overall_gti
         if gti.size == 0:
             print("urd %d has no individual gti, continue" % urd)
             continue

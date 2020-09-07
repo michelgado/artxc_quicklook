@@ -109,7 +109,8 @@ OPAXOFFSET = {TELTOURD[tel]: [x, y] for tel, x, y in fits.getdata(get_relevat_fi
 
 @lru_cache(maxsize=7)
 def get_boresight_by_device(dev):
-    return Rotation(fits.getdata(get_relevat_file("BORESIGHT", TELTOURD.get(dev, dev)), 1)[0])
+    print(dev)
+    return Rotation(fits.getdata(get_relevat_file("BORESIGHT", URDTOTEL.get(dev, dev)), 1)[0])
 
 
 @lru_cache(maxsize=5)

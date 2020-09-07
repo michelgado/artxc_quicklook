@@ -24,6 +24,16 @@ from astropy import time as atime
 gyrocorrectionbti = GTI([[6.24408483e+08, 6.24410523e+08], [6.24410643e+08, 6.30954575e+08]])
 
 def define_required_correction(attdata):
+    """
+    NAME
+        define_required_correction
+
+
+    Some of the orientation files are provided with fk5 for current epoch.
+    Those should be corrected and alternate in the standard form -> to the FK5 J2000.
+    The precise information on when to apply this corrections is stored in the CALDB files.
+
+    """
     a1 = attdata.apply_gti(attdata.gti & gyrocorrectionbti)
     a2 = attdata.apply_gti(attdata.gti & ~gyrocorrectionbti)
     return a2 + make_gyro_relativistic_correction(a1)
@@ -97,16 +107,16 @@ class SlerpWithNaiveIndexing(Slerp):
         times = times[idxs]
 
 
-        #TODO: 
+        #TODO:
         # there are lots of errors cases to be considered
         # here erorr raised due to inconsistent quaternions:
         # i.e. time points are muxed, and rotations in them significantly different
-        # but, one can imagine, that sparse points are completed with more 
+        # but, one can imagine, that sparse points are completed with more
         idxmix = np.searchsorted(self.times, other.times)
         mask = np.logical_or(idxmix > 0, idxmix < self.times.size)
         if np.any(mask):
-            if not np.allclose(self(other.times[mask]).as_quat(), 
-                               other(other.times[mask]).as_quat()): 
+            if not np.allclose(self(other.times[mask]).as_quat(),
+                               other(other.times[mask]).as_quat()):
                 raise ValueError("concatenated quaternions are incompatible")
 
         tuniq, uidx = np.unique(times, return_index=True)
@@ -141,8 +151,8 @@ class AttDATA(SlerpWithNaiveIndexing):
         dt = np.diff(self.times, 1)
         dtmed = np.median(dt)
         gaps = dt > 1.5*dtmed
-        if gaps.size > 0: 
-            gaps[[0, -1]] = False 
+        if gaps.size > 0:
+            gaps[[0, -1]] = False
 
         if not np.any(gaps):
             self.badrec = emptyGTI
@@ -583,6 +593,75 @@ class SurveyAtt(object):
         omega = surveys["Z_SPEED"]*pi/180./(24*3600.)
         roll = surveys["ROLL_ANGLE"]
         return cls(polus, omega, start, stop, sc_start_rotvec, sc_romega, sc_start_vec, roll)
+
+
+def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
+    """
+    let assume we have a set of interpolations of quaternions
+    this interpolation define rotations from one quaternions to a next one
+    after that we want to find which part of the trajectorie of vector offvec in rotation defined by interpolation slerp, will fall inside circular aperture around vector loc
+    """
+    if mask is None:
+        mask = np.ones(slerp.timedelta.size, np.bool)
+    """
+    scipy slerp works like q_i (q_i^-1 q_i+1 omega dt)
+
+    """
+    frac = np.zeros(slerp.timedelta.size, np.double)
+
+    rmod = np.sqrt(np.sum(slerp.rotvecs**2, axis=1))
+    rvec = slerp.rotvecs[mask]/rmod[mask, np.newaxis]
+    a0 = slerp.rotations[mask].inv().apply(loc)
+    cosa = np.sum(rvec*offvec, axis=1)
+    cosb = np.sum(rvec*a0, axis=1)
+    cose = cos(appsize*pi/180/3600)
+    """
+    despite the phase of a0 vec, in order to vector trajectorie to fall inside circula aperture following
+    conditions should be satisfied
+    alpha + epsilon < beta
+    alpha - epsilon > beta
+    """
+    alpha = np.arccos(cosa)
+    beta = np.arccos(cosb)
+    """
+    if alpha + beta < epsilon than the interpolation trajectroie is in the circular aperture despite the phase
+    """
+    maskallinsideapp = alpha + beta < appsize*pi/180/3600
+    frac[mask] = maskallinsideapp.astype(np.double)
+
+    maskoutofapp = np.logical_and(alpha + appsize*pi/180/3600 > beta,
+                                  alpha - appsize*pi/180/3600 < beta)
+    cosa, cosb, rmod, rvec, a0 = [arr[maskoutofapp] for arr in (cosa, cosb, rmod, rvec, a0)]
+    print(cosa, cosb, cose)
+    sinbsq = 1 - cosb**2
+
+    a = rvec*((cosa - cose*cosb)/sinbsq)[:, np.newaxis] + \
+        a0*((cose - cosa*cosb)/sinbsq)[:, np.newaxis]
+    """
+    rot vec projections
+    a = a0((cose - cosa*cosb)/sinbsq - rvec csosb(cose - cosa*cosb)/sinbsq
+    """
+    aort = np.cross(rvec, a0)
+    port = np.cross(rvec, offvec) #/sina[:, np.newaxis]
+    pdir = (offvec - rvec*cosa[:, np.newaxis]) #/sina[:, np.newaxis]
+    """
+    a1 and a2 - two vectors in the crosssection of the circles around rotation vector and loc
+    """
+    a1 = a - aort*(np.sqrt(sinbsq - cosa**2 - cose**2 + 2.*cose*cosa*cosb)/sinbsq)[:, np.newaxis]
+    a2 = a + aort*(np.sqrt(sinbsq - cosa**2 - cose**2 + 2.*cose*cosa*cosb)/sinbsq)[:, np.newaxis]
+
+    """
+    phi1 and phi2 - are angles, we should to rotate offvec in order to get in to the epsilon vicinity of loc
+    """
+    phi1 = np.arctan2(np.sum(a1*port, axis=1), np.sum(a1*pdir, axis=1))
+    phi2 = np.arctan2(np.sum(a2*port, axis=1), np.sum(a2*pdir, axis=1))
+
+    m2 = np.copy(mask)
+    m2[m2] = maskoutofapp
+
+    frac[m2] = np.maximum((np.minimum(phi2, rmod) - np.maximum(phi1, 0)), 0)/rmod #*slerp.timedelta[m2]
+    return frac
+
 
 def minimize_norm_to_survey(attdata, rpvec):
     """

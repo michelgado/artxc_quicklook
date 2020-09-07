@@ -3,10 +3,10 @@ from copy import copy
 
 class Intervals(object):
     """
-    this class provides a number of userfull function to work with 
+    this class provides a number of userfull function to work with
     consequitive ordered unintersected 1d intervals
     most userfull functions of the class are
-    *intersection interval1 & interval2 
+    *intersection interval1 & interval2
     *unification inverval1 | interval2
     and invertion ~interval
     """
@@ -47,11 +47,11 @@ class Intervals(object):
         """
         read Nx2 array, which is assumed to be a set of 1D intervals
         make a regularization of these intervals - intervals with start > stop will be removed, intersected intervals joined and all intervals will be sorted ascendingly
-        thus after regularization, the set of intervals consists of nonintersecting ordered 1d intervals 
+        thus after regularization, the set of intervals consists of nonintersecting ordered 1d intervals
 
         examples of usage:
             cretion of Intervals::
-                i1 = Intervals(np.array(Nx2)) 
+                i1 = Intervals(np.array(Nx2))
 
             intersections of two set of intervals:
                 i3 = i1 & i2 ([[0, 2]] & [[1, 10]] == [[1, 2]])
@@ -68,7 +68,7 @@ class Intervals(object):
             for the sake of usability some additional simple operations were added:
             all intervals can be shifted with + or -
             inew = i + floatval ([[0, 10]] + 5 == [[5, 15]] e.t.c.)
-            
+
             same operations can be used to change width simultaneously for all intervals in the set:
             inew = i + [floatval, floatval (([0, 10]] + [0, -1] == [[0, 9]] e.t.c.)
 
@@ -97,7 +97,7 @@ class Intervals(object):
             return self.__class__([[]])
         #both self.arr and other.arr already regularized
         tt = np.concatenate([self.arr.ravel(), other.arr.ravel()])
-        #in this set of edges all even are starts and odd and ends, but not ordered 
+        #in this set of edges all even are starts and odd and ends, but not ordered
         ms = np.ones(tt.size, np.int8)
         #mark all starts with 1 and stops with -1
         ms[1::2] = -1
@@ -106,7 +106,7 @@ class Intervals(object):
         tt = tt[idx]
         #rearrange arr in form of (N - 1 x 2), which look like [...,[x_i, x_i+1], [x_i+1, x_i+2],...]
         arr = np.lib.stride_tricks.as_strided(tt, (tt.size - 1, 2), tt.strides*2)
-        #make empty intervals instance, 
+        #make empty intervals instance,
         #all condintion on intervals are already fullfield, no regularization required, so pass __init__
         gres = self.__class__.__new__(self.__class__)
         # we would like to left intervals, bounded by edges, located inside the other intervals set
@@ -116,10 +116,10 @@ class Intervals(object):
     def merge_joint(self):
         """
         merge intervals which has stop_left == start_right
-        such intervals are technicaly permitted, 
-        it should be notted however, that due to machine precision, such intervals can 
-        be joined in _regularize subroutine (during comparison 
-        two different (stored in different memory cells) but equal float values can randomly 
+        such intervals are technicaly permitted,
+        it should be notted however, that due to machine precision, such intervals can
+        be joined in _regularize subroutine (during comparison
+        two different (stored in different memory cells) but equal float values can randomly
         be greater or lesser to each other
         """
         mask = np.ones(self.arr.shape[0] + 1, np.bool)
@@ -128,6 +128,8 @@ class Intervals(object):
         self.arr = self.arr[mask].reshape((-1, 2))
 
     def __invert__(self):
+        if self.size == 0:
+            return self.__class__([-np.inf, np.inf])
         arr = np.empty((self.shape[0] + 1, 2), np.double)
         arr[1:,0] = self[:, 1]
         arr[:-1, 1] = self[:, 0]
@@ -146,7 +148,7 @@ class Intervals(object):
         return self.arr.__getitem__(*args)
 
     def __or__(self, other):
-        #note, since during each init set of intervals are regularized, 
+        #note, since during each init set of intervals are regularized,
         #no additional actions are required to get union
         return self.__class__(np.concatenate([self.arr, other.arr]))
 

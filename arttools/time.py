@@ -34,12 +34,12 @@ class GTI(Intervals):
         arr = np.array([ts[:-1], ts[1:]]).T
         return cls(arr)
 
-    def make_tedges(self, ts):
+    def make_tedges(self, ts, joinsize=0):
         """
         assuming that ts is a series of ascending evenly spaced points,
-        produce new series of points, lying in the GTIs (with additional points at the edges of 
+        produce new series of points, lying in the GTIs (with additional points at the edges of
         intervals if requeired), and mask, showing position of the gaps between points clusted from
-        different intervals 
+        different intervals
         """
         gtloc = self & self.__class__(ts[[0, -1]])
         ts = ts[gtloc.mask_external(ts)]
@@ -47,7 +47,16 @@ class GTI(Intervals):
         idxgaps = newts.searchsorted((gtloc.arr[:-1, 1] + gtloc.arr[1:, 0])/2.)
         maskgaps = np.ones(newts.size - 1 if newts.size else 0, np.bool)
         maskgaps[idxgaps - 1] = False
-        return newts, maskgaps
+        #===============================================
+        #join time intervals at the edges of the gti, if they are two short
+        dt = np.diff(newts, 1)
+        dtmed = np.median(dt)
+        maskshort = np.ones(newts.size, np.bool)
+        maskshort[idxgaps + 1] = dt[idxgaps] > dtmed*joinsize
+        maskshort[idxgaps - 2] = dt[idxgaps - 2] > dtmed*joinsize
+        if maskshort.size:
+            maskshort[[0, -1]] = dt[[0, -1]] > dtmed*joinsize
+        return newts[maskshort], maskgaps[maskshort[:-1]]
 
     @property
     def exposure(self):
@@ -58,8 +67,8 @@ class GTI(Intervals):
 
     def local_arange(self, dt, epoch=None):
         """
-        for each interval in the set produces a series of evenly spaced points, 
-        return this points with mask, showing position of the gaps between intervals 
+        for each interval in the set produces a series of evenly spaced points,
+        return this points with mask, showing position of the gaps between intervals
         """
         te = np.concatenate(
                 [np.minimum(e, np.arange(int(np.ceil((e - s)/dt)) + 1)*dt + s) \
@@ -78,7 +87,7 @@ class GTI(Intervals):
         else:
             t0 = self.arr[:, 0] - (self.arr[:, 0] - epoch)%dt
         te = arange*dt + np.repeat(t0, tsize)
-        return self.make_tedges(te)
+        return self.make_tedges(te, joinsize)
 
 tGTI = GTI([-np.inf, np.inf])
 emptyGTI = GTI(np.empty((0, 2)))
@@ -95,7 +104,7 @@ def get_gti(ffile, gtiextname="GTI", excludebki=True):
     gti.merge_close_intervals(0.5)
     gti = gti & make_hv_gti(ffile["HK"].data)
     if excludebki:
-        gti = gti & -make_bki_gti(ffile)
+        gti = gti & ~make_bki_gti(ffile)
     return gti
 
 
@@ -258,7 +267,7 @@ def tarange(dt, gti, conservecrit=0.1):
     dtl = -dtl/2. if dtl < dt*conservecrit else dtl/2.
     return np.arange(gti[0] - dtl, gti[1] + dtl + 0.1*abs(dtl), dt)
 
-def make_ingti_times(time, ggti):
+def make_ingti_times(time, ggti, stick_frac=0.5):
     gti = gti_intersection(np.array([time[[0, -1]],]), ggti)
     idx = np.searchsorted(time, gti)
     tnew = np.empty(np.sum(idx[:,1] - idx[:,0]) + 2*idx.shape[0], np.double)
