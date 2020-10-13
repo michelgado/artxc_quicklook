@@ -36,9 +36,8 @@ urdbkgsc = {28: 1.0269982359153347,
             30: 0.9775021015829128}
 
 import pickle
-"""
 #bkigti = pickle.load(open("/srg/a1/work/andrey/ART-XC/gc/allbki2.pickle", "rb"))
-allbki = reduce(lambda a, b: a | b, bkigti.values())
+#allbki = reduce(lambda a, b: a | b, bkigti.values())
 
 
 def get_neighbours(fpath):
@@ -69,6 +68,7 @@ def analyze_survey(fpath, pastday=None):
         urdfiles += [os.path.join(pastday, "L0", l) for l in allfiles if "urd.fits" in l]
 
     attdata = AttDATA.concatenate([get_attdata(fname) for fname in set(gyrofiles)])
+    attdata = attdata.apply_gti(attdata.get_axis_movement_speed_gti(lambda x: (x > pi/180.*60./3600) & (x < pi/180.*120./3600.)))
     gtis = split_survey_mode(attdata)
 
     for k, sgti in enumerate(gtis):
@@ -82,9 +82,9 @@ def analyze_survey(fpath, pastday=None):
                                       "cmap%02d_%s.fits.gz" % (k, date),
                                       "bmap%02d_%s.fits.gz" % (k, date),
                                       "emap%02d_%s.fits.gz" % (k, date),
-                                      urdbti=bkigti,
                                       usedtcorr=False)
 
+"""
 
 def run(fpath):
     os.chdir(fpath)

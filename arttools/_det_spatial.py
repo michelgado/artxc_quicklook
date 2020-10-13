@@ -128,7 +128,10 @@ def urd_to_vec(urddata, subscale=1):
     shorcut for offset_to_vec(urd_to_offset())
     produces unit vectors corresponding to offset from optical axis which are required for photon to be scatterd in the pixel with rawx rawy coordinates
     """
-    return raw_xy_to_vec(*multiply_photons(urddata, subscale))
+    if subscale == 1:
+        return raw_xy_to_vec(urddata["RAW_X"], urddata["RAW_Y"])
+    else:
+        return raw_xy_to_vec(*urddata["RAW_X"], urddata["RAW_Y"], subscale)
 
 def weight_coordinate(PI, rawcoord, mask):
     """

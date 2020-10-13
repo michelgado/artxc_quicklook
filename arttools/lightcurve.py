@@ -36,6 +36,17 @@ def weigt_time_intervals(gtis, scales=urdbkgsc, defaultscale=1):
 
     return te, mgaps, se, scalefunc, cumscalefunc
 
+
+class Bkgrate(object):
+
+    def __init__(self, te, crate):
+        self.te = te
+        self.crate = crate
+
+    def __call__(self, times):
+        return self.crate[np.searchsorted(self.te, times) - 1]
+
+
 def make_overall_lc(times, urdgtis, dt=100, scales=urdbkgsc):
     """
     for stored background events occurence times (times) produces overall for 7 detectors background lightcurve with time resolution dt
@@ -45,20 +56,14 @@ def make_overall_lc(times, urdgtis, dt=100, scales=urdbkgsc):
     teg, mgapsg, se, scalef, cscalef = weigt_time_intervals(urdgtis)
     cidx = times.searchsorted(te)
     csf = cscalef(te)
-    ccts = stepsize(cidx)
-    crate = ccts/stepsize(csf)
-    crerr = np.sqrt(ccts)/stepsize(csf)
+    print(np.diff(csf, 1)[mgaps].min())
+    ccts = np.diff(cidx, 1)
+    crate = ccts/np.diff(csf, 1)
+    crerr = np.sqrt(ccts)/np.diff(csf, 1)
 
     crate[np.logical_not(mgaps)] = 0.
 
-    def bkgrate(times, urdn=None, scales=scales, fill_value=0.):
-        res = np.empty(times.size, np.double)
-        idx = te.searchsorted(times)
-        mask = (idx > 0) & (idx < crate.size)
-        res[np.logical_not(mask)] = fill_value
-        res[mask] = crate[idx[mask] - 1]
-        return res*urdbkgsc.get(urdn, 1.)
-    return te, mgaps, crate, crerr, bkgrate
+    return te, mgaps, crate, crerr, Bkgrate(te, crate)
 
 def make_constantcounts_timeedges(times, gti, cts=1000):
     idx = times.searchsorted(gti.arr)

@@ -108,9 +108,11 @@ class Intervals(object):
         arr = np.lib.stride_tricks.as_strided(tt, (tt.size - 1, 2), tt.strides*2)
         #make empty intervals instance,
         #all condintion on intervals are already fullfield, no regularization required, so pass __init__
+        #gres = self.__class__(arr[np.cumsum(ms[idx][:-1]) == 2])
         gres = self.__class__.__new__(self.__class__)
         # we would like to left intervals, bounded by edges, located inside the other intervals set
         gres.arr = np.copy(arr[np.cumsum(ms[idx][:-1]) == 2])
+        gres.arr = gres.arr[gres.arr[:, 0] < gres.arr[:, 1]]
         return gres
 
     def merge_joint(self):

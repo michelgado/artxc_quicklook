@@ -170,6 +170,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
     urddtc = {urdn: deadtime_correction(hk) for urdn, hk in urdhk.items()}
 
     tevts = np.sort(np.concatenate([np.concatenate(e) for e in urdbkge.values()]))
+    #pickle.dump([urdgti, urdhk, urdbkg, urdbkge, bkggti], open("/srg/a1/work/andrey/arttest.pickle", "wb"))
     """
     tgti = reduce(lambda a, b: a & b, urdgti.values())
     te, mgaps = tgti.arange(100)

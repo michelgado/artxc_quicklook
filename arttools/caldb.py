@@ -8,9 +8,11 @@ import datetime
 from astropy import time as atime
 import numpy as np
 from .telescope import URDTOTEL
-from .time import GTI
+from .time import GTI, get_gti
 from scipy.spatial.transform import Rotation
 from math import sin, cos, pi
+from .energy import get_events_energy
+import pickle
 
 
 """ ART-XC mjd ref used to compute onboard seconds"""
@@ -33,6 +35,7 @@ idxtabl.set_index("CAL_DATE_ISO", inplace=True)
 CUTAPP = None
 FLATVIGN = False
 FLATBKG = False
+el = None
 
 qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])
 qgyro0 = Rotation([0., 0., 0., 1.])
@@ -94,6 +97,38 @@ def get_caldata(urdn, ctype, gti=GTI([(atime.Time(datetime.datetime.now()) - ati
     caldata = caldata.iloc[idxloc].groupby(["CAL_DIR", "CAL_FILE"])
     return {g: GTI(caldata.iloc[idx][["tstart", "tstop"]].values) for g, idx in caldata.groups.items()}
 
+"""
+def apply_energycal(hdulist, gti=None):
+    URDN = hdulist["EVENTS"].header["URDN"]
+    if gti is None: gti = get_gti(hdulist)
+    ecals = get_caldata(URDN, "ENERGY", gti)
+    data = Table(hdulist["EVENTS"])
+    energy = np.empty(hdulist["EVENTS"].data.size, np.double)
+    grade = np.empty(hdulist["EVENTS"].data.size, np.double)
+    mask = np.ones(energy.size, np.bool)
+    calinfo = {"TSTART": [], "TSTOP": [], "CALNAME": [], "CALVER": [], "INSTRUME": []}
+
+    for e, gtiloc in ecals:
+        gtimask = gtiloc.mask_external(data["TIME"])
+        ecal = fits.open(e)
+        eloc, xc, yc, gloc = get_events_energy(data[gtimask], hdulist["HK"].data, ecal)
+        energy[gtimask] = eloc
+        grage[gtimask] = gloc
+        mask[gtimask] = False
+        for tstart, tstop in gtiloc.arr:
+            calinfo["TSTART"].append(tstart)
+            calinfo["TSTOP"].append(tstop)
+            calinfo["INSTRUME"].append(URDTOTEL[URDN])
+            calinfo["CALNAME"].append(e)
+            calinfo["CALVER"].append(ecal[0].header["VERSION"])
+    if np.any(mask):
+        raise ValueError("Some data is not covered with calibrations")
+    hdulist.append(fits.BintableHDU(data=Table(calinfo), name="CALIB")
+    #energy, xc, yc, grade = get_events_energy(hdulist["EVENTS"], hdulist["HK"]
+"""
+
+
+
 def get_cif(cal_cname, instrume):
     return idxtabl.query("INSTRUME=='%s' and CAL_CNAME=='%s'" % (instrume, cal_cname))
 
@@ -105,6 +140,13 @@ def get_relevat_file(cal_cname, instrume, date=datetime.datetime(2030, 10, 10)):
     return fpath
 
 OPAXOFFSET = {TELTOURD[tel]: [x, y] for tel, x, y in fits.getdata(get_relevat_file("OPT_AXIS", "NONE"))}
+OPAXOFFSET = {28:[21.28, 22.86],
+              22:[18.15, 21.02],
+              23:[20.65, 20.27],
+              24:[20.57, 21.97],
+              25:[22.21, 20.97],
+              26:[22.41, 23.03],
+              30:[20.6, 22.71]}
 
 
 @lru_cache(maxsize=7)
@@ -113,7 +155,7 @@ def get_boresight_by_device(dev):
     return Rotation(fits.getdata(get_relevat_file("BORESIGHT", URDTOTEL.get(dev, dev)), 1)[0])
 
 
-@lru_cache(maxsize=5)
+@lru_cache(maxsize=7)
 def get_vigneting_by_urd(urdn):
     """
     to do: put vignmap in the caldb
@@ -138,7 +180,7 @@ def get_shadowmask_by_urd(urdn):
 def get_shadowmask(urdfile):
     return get_shadowmask_by_urd(urdfile["EVENTS"].header["URDN"])
 
-@lru_cache()
+@lru_cache(maxsize=7)
 def get_energycal_by_urd(urdn):
     fpath = get_relevat_file('TCOEF', URDTOTEL[urdn])
     return fits.open(fpath)
@@ -146,7 +188,7 @@ def get_energycal_by_urd(urdn):
 def get_energycal(urdfile):
     return get_energycal_by_urd(urdfile["EVENTS"].header["URDN"])
 
-@lru_cache()
+@lru_cache(maxsize=7)
 def get_backprofile_by_urdn(urdn):
     global FLATBKG
     bkg = fits.getdata(get_relevat_file("BKG", URDTOTEL[urdn]), 0)
@@ -156,7 +198,6 @@ def get_backprofile_by_urdn(urdn):
 
 def get_backprofile(urdfile):
     return get_backprofile_by_urdn(urdfile["EVENTS"].header["URDN"])
-
 
 def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=indexfname):
     indexfile_path = os.path.join(CALDB_path, indexfile)
@@ -168,8 +209,24 @@ def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=in
                 return_path = os.path.join(CALDB_path, entry['CAL_DIR'], entry['CAL_FILE'])
                 #print(return_path)
                 return return_path
-        return None
-
     except:
         print ('No index file here:' + indexfile_path)
-        return None
+
+@lru_cache(maxsize=14)
+def make_background_brightnes_profile(urdn, filterfunc):
+    global el
+    if el is None:
+        el = pickle.load(open("/srg/a1/work/andrey/ART-XC/background/bkghist2.pickle", "rb"))
+
+    x = np.arange(1, 47)
+    y = np.arange(1, 47)
+    e = np.arange(4.5, 150., 1.)
+    g = np.arange(0, 17)
+
+    eidx = np.arange(e.size)[filterfunc(energy=e)]
+    gidx = np.arange(g.size)[filterfunc(grade=g)]
+    return el[0][urdn][1:-1, 1:-1, :, gidx].sum(axis=3)[:, :, eidx].sum(axis=2)/el[1][urdn].exposure
+
+def get_filtered_backgrounds_ratio(urdn, f1, f2):
+    return np.sum(make_background_brightnes_profile(urdn, f1))/np.sum(make_background_brightnes_profile(urdn, f2))
+

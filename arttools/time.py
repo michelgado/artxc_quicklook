@@ -41,12 +41,24 @@ class GTI(Intervals):
         intervals if requeired), and mask, showing position of the gaps between points clusted from
         different intervals
         """
+        dtmed = np.median(np.diff(ts, 1))
         gtloc = self & self.__class__(ts[[0, -1]])
+        if joinsize > 0:
+            gtloc.remove_short_intervals(joinsize*dtmed)
+        if gtloc.exposure == 0:
+            return np.array([]), np.array([])
+        #print(ts, gtloc.arr - ts[0])
+        #print(gtloc.arr[:, 1] - gtloc.arr[:, 0])
         ts = ts[gtloc.mask_external(ts)]
         newts = np.unique(np.concatenate([ts, gtloc.arr.ravel()]))
         idxgaps = newts.searchsorted((gtloc.arr[:-1, 1] + gtloc.arr[1:, 0])/2.)
         maskgaps = np.ones(newts.size - 1 if newts.size else 0, np.bool)
         maskgaps[idxgaps - 1] = False
+        #print(ts[:3] - ts[0], ts[-3:] - ts[0])
+        #print(newts[:3] - ts[0], ts[-3:] - ts[0])
+        #print(newts.size)
+        #print(idxgaps[:3], idxgaps[-3:])
+        #print(gtloc.arr - ts[0])
         #===============================================
         #join time intervals at the edges of the gti, if they are two short
         dt = np.diff(newts, 1)
@@ -54,9 +66,14 @@ class GTI(Intervals):
         maskshort = np.ones(newts.size, np.bool)
         maskshort[idxgaps + 1] = dt[idxgaps] > dtmed*joinsize
         maskshort[idxgaps - 2] = dt[idxgaps - 2] > dtmed*joinsize
-        if maskshort.size:
-            maskshort[[0, -1]] = dt[[0, -1]] > dtmed*joinsize
         return newts[maskshort], maskgaps[maskshort[:-1]]
+
+    def filter_data(self, data):
+        try:
+            return data[self.mask_external(data["TIME"])]
+        except IndexError:
+            #TODO in the log here should be a worning, that user is responsible himself for input data to be a time
+            return data[self.mask_external(data)]
 
     @property
     def exposure(self):
@@ -75,24 +92,34 @@ class GTI(Intervals):
                 for s, e in self.arr])
         return self.make_tedges(te)
 
-    def arange(self, dt, epoch=None, joinsize=0.2):
-        tsize = np.ceil((self.arr[:,1] - self.arr[:, 0])/dt).astype(np.int) + 1
-        ctot = np.empty(tsize.size + 1, np.int)
-        ctot[1:] = np.cumsum(tsize)
-        ctot[0] = 0
-        arange = np.arange(ctot[-1]) - np.repeat(ctot[:-1], tsize)
-        if epoch is None:
-            t0 = np.median((self.arr.ravel() + dt/2.)%dt) - dt/2. + (self.arr[:, 0]//dt)*dt
-            #t0 = self.arr[:, 0] - dt*(tsize%1)/2.
-        else:
-            t0 = self.arr[:, 0] - (self.arr[:, 0] - epoch)%dt
-        te = arange*dt + np.repeat(t0, tsize)
-        return self.make_tedges(te, joinsize)
+    def arange(self, dt, joinsize=0.2):
+        t0 = np.median(self.arr[:, 0]%dt) + (self.arr[0, 0]//dt - 1)*dt
+        te = np.unique(np.concatenate([np.arange((s - t0)//dt + 1, (e - t0)//dt + 1)*dt + t0 for s, e in self.arr]))
+        eidx = np.searchsorted(te, self.arr)
+        mempty = eidx[:, 0] != eidx[:, 1]
+        sidx = np.searchsorted(te, self.arr[mempty, 0])
+        m1 = np.ones(te.size, np.bool)
+        m1[sidx] = te[sidx] - self.arr[mempty, 0] > dt*joinsize
+        #print(np.array([self.arr[mempty, 0], te[sidx], self.arr[mempty, 1], te[sidx] - self.arr[mempty, 0], np.array(m1, dtype=np.double)]).T)
+        te = te[m1]
+
+        eidx = np.searchsorted(te, self.arr)
+        mempty = eidx[:, 0] != eidx[:, 1]
+        sidx = np.searchsorted(te, self.arr[mempty, 1]) - 1
+        m1 = np.ones(te.size, np.bool)
+        m1[sidx] = self.arr[mempty, 1] - te[sidx] > dt*joinsize
+        te = te[m1]
+
+        te = np.unique(np.concatenate([self.arr.ravel(), te]))
+        mgaps = self.mask_external((te[1:] + te[:-1])/2.)
+
+        return te, mgaps
+
 
 tGTI = GTI([-np.inf, np.inf])
 emptyGTI = GTI(np.empty((0, 2)))
 
-def get_gti(ffile, gtiextname="GTI", excludebki=True):
+def get_gti(ffile, gtiextname="GTI", excludebki=True, merge_interval_dt=None):
     if not gtiextname is None:
         gti = GTI(np.array([ffile[gtiextname].data["START"], ffile[gtiextname].data["STOP"]]).T)
     else:
@@ -101,7 +128,16 @@ def get_gti(ffile, gtiextname="GTI", excludebki=True):
             if hdu.name in ["GTI", "STD_GTI", "KVEA_GTI"]:
                 gti = gti & GTI.from_hdu(hdu)
 
-    gti.merge_close_intervals(0.5)
+    if not merge_interval_dt is None:
+        gti.merge_close_intervals(0.5)
+    else:
+        gaps = gti.arr.ravel()[1:-1].reshape((-1, 2)) # get bounds of the gaps between gti
+        crate = -np.subtract.reduce(np.searchsorted(ffile["EVENTS"].data["TIME"], gti.arr), axis=1)/(gti.arr[:,1] - gti.arr[:,0])
+        garr = np.copy(gti.arr)
+        garr[1:, 0] -= 3./crate[1:]
+        garr[:-1, 1] += 3./crate[:-1]
+        gti = GTI(garr)
+
     gti = gti & make_hv_gti(ffile["HK"].data)
     if excludebki:
         gti = gti & ~make_bki_gti(ffile)

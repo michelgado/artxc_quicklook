@@ -21,7 +21,7 @@ temporal solution to the SED1/2 relativistic corrections on board
 from astropy.coordinates import SkyCoord
 from astropy import time as atime
 
-gyrocorrectionbti = GTI([[6.24408483e+08, 6.24410523e+08], [6.24410643e+08, 6.30954575e+08]])
+gyrocorrectionbti = GTI([[624390347, 624399808], [6.24410643e+08, 6.30954575e+08]])
 
 def define_required_correction(attdata):
     """
@@ -34,8 +34,8 @@ def define_required_correction(attdata):
     The precise information on when to apply this corrections is stored in the CALDB files.
 
     """
-    a1 = attdata.apply_gti(attdata.gti & gyrocorrectionbti)
-    a2 = attdata.apply_gti(attdata.gti & ~gyrocorrectionbti)
+    a1 = attdata.apply_gti((attdata.gti & gyrocorrectionbti) + [0.4, -0.4])
+    a2 = attdata.apply_gti((attdata.gti & ~gyrocorrectionbti) + [0.4, -0.4])
     return a2 + make_gyro_relativistic_correction(a1)
 
 def make_gyro_relativistic_correction(attdata):
@@ -106,14 +106,14 @@ class SlerpWithNaiveIndexing(Slerp):
         quats = np.concatenate([self(self.times).as_quat(), other(other.times).as_quat()])[idxs]
         times = times[idxs]
 
-
         #TODO:
         # there are lots of errors cases to be considered
         # here erorr raised due to inconsistent quaternions:
         # i.e. time points are muxed, and rotations in them significantly different
         # but, one can imagine, that sparse points are completed with more
         idxmix = np.searchsorted(self.times, other.times)
-        mask = np.logical_or(idxmix > 0, idxmix < self.times.size)
+        mask = np.logical_and(idxmix > 0, idxmix < self.times.size)
+        print("quat crossing", mask.sum())
         if np.any(mask):
             if not np.allclose(self(other.times[mask]).as_quat(),
                                other(other.times[mask]).as_quat()):
@@ -179,8 +179,6 @@ class AttDATA(SlerpWithNaiveIndexing):
             self.goodinterp = GTI(self.times[medges(ggaps)])
             self.badinterp = GTI(self.times[medges(bgaps)])
 
-
-
     def __add__(self, other):
         base = super().__add__(other)
         base.gti = self.gti | other.gti
@@ -198,6 +196,21 @@ class AttDATA(SlerpWithNaiveIndexing):
         ts, mgaps = gti.make_tedges(self.times)
         quats = self(ts)
         return self.__class__(ts, quats, gti=gti)
+
+    def get_axis_movement_speed_gti(self, query = lambda x: x < pi/180.*100/3600, ax=OPAX):
+        """
+        create a gti for the selected query based on the axis movement speed
+
+        the trik is follows: slerp stors interpolation in form of rotations and rotvec
+        the interpolation works like follows: roatation*Quat(rotvec*(t - t0)/dt))
+        rotvec applied BEFORE the rotation, therefore, actual angular shift (not rotation aroud axis)
+        is defined by the opax*rotvec/dt, this expression gives actual angular speed arcsec/sec
+        of the defined axis
+        """
+        rmod = np.sqrt(np.sum(self.rotvecs**2, axis=1))
+        proj = np.sqrt(1. - (np.sum(ax*self.rotvecs, axis=1)/rmod)**2.)
+        vspeed = rmod*proj/self.timedelta
+        return GTI(self.times[medges(query(vspeed))])
 
     def get_optical_axis_movement_speed(self):
         """
@@ -236,6 +249,17 @@ class AttDATA(SlerpWithNaiveIndexing):
     def set_nodes(self, te):
         te, mgaps = self.gti.make_tedges(te)
         return AttDATA(te, self(te), gti=self.gti)
+
+    def circ_gti(self, vec, app=pi/180*100/3600., ax=OPAX):
+        te, gaps = self.gti.make_tedges(self.times)
+        vc = self((te[1:] + te[:-1])/2.).apply(ax)
+        mask = np.sum(vc*vec, axis=1) > cos(app)
+        mask[~gaps] = False
+        lgti = GTI(te[medges(mask)])
+        return lgti
+
+    def rect_gti(self, rect):
+        pass
 
 
 def read_gyro_fits(gyrohdu):
@@ -419,7 +443,6 @@ def get_wcs_roll_for_qval(wcs, qval):
     vimgyax = qval.apply(vimgyax, inverse=True)
     return (np.arctan2(vimgyax[:, 2], vimgyax[:, 1])*180./pi)%360.
 
-
 def get_axis_movement_speed(attdata):
     """
     for provided gyrodata computes angular speed
@@ -495,7 +518,6 @@ def get_elongation_plane_norm(attdata, gti=None): #tGTI):
     rvecm = rvecm/sqrt(np.sum(rvecm**2.))
     return rvecm
 
-
 class SurveyAtt(object):
     """
     """
@@ -525,7 +547,6 @@ class SurveyAtt(object):
         self.roll = roll[idx]
 
         self.gti = GTI(np.array([self.tstart, self.tstop]).T)
-
 
     def get_rotax(self, times):
         times = np.asarray(times)
@@ -594,7 +615,6 @@ class SurveyAtt(object):
         roll = surveys["ROLL_ANGLE"]
         return cls(polus, omega, start, stop, sc_start_rotvec, sc_romega, sc_start_vec, roll)
 
-
 def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
     """
     let assume we have a set of interpolations of quaternions
@@ -661,7 +681,6 @@ def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
 
     frac[m2] = np.maximum((np.minimum(phi2, rmod) - np.maximum(phi1, 0)), 0)/rmod #*slerp.timedelta[m2]
     return frac
-
 
 def minimize_norm_to_survey(attdata, rpvec):
     """

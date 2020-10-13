@@ -342,6 +342,9 @@ class AttCircHist(AttHist):
         return resimg
 
 
+DET_CORNERS = offset_to_vec(np.array([-24, 24, 24, -24])*DL, np.array([24, 24, -24, -24])*DL)
+DET_CORNERS = DET_CORNERS/np.sqrt(np.sum(DET_CORNERS**2, axis=1))[:, np.newaxis]
+
 class AttInvHist(object):
 
     def __init__(self, vmap, qin, qout, locwcs):
@@ -349,12 +352,13 @@ class AttInvHist(object):
         self.qout = qout
         self.vmap = vmap
         self.locwcs = locwcs
-        corners = np.array([-24, 24, 24, -24])*DL
-        self.corners = offset_to_vec(corners, np.roll(corners, 1))
-        self.corners = self.corners/np.sqrt(np.sum(self.corners**2., axis=1))[:, np.newaxis]
+        self._set_corners()
         self.img = np.zeros((int(self.locwcs.wcs.crpix[1]*2 + 1),
                              int(self.locwcs.wcs.crpix[0]*2 + 1)), np.double)
         self.y, self.x = np.mgrid[1:self.img.shape[0] + 1:1, 1:self.img.shape[1] + 1:1]
+
+    def _set_corners(self, vals=DET_CORNERS):
+        self.corners = vals
 
     def __call__(self):
         while True:
