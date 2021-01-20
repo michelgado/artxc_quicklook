@@ -86,6 +86,11 @@ class Intervals(object):
     def size(self):
         return self.arr.size
 
+
+    @property
+    def length(self):
+        return np.sum(self.arr[:, 1] - self.arr[:, 0])
+
     def __repr__(self):
         return self.arr.__repr__()
 

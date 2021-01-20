@@ -1,15 +1,63 @@
 from .caldb import get_boresight_by_device
 from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttInvHist, make_small_steps_quats
-from .vignetting import make_vignetting_for_urdn, make_overall_vignetting
+from .vignetting import make_vignetting_for_urdn, make_overall_vignetting, make_vignetting_from_inverse_psf
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from .lightcurve import weigt_time_intervals
 from ._det_spatial import vec_to_offset_pairs
 from .telescope import URDNS
 from functools import reduce
-from multiprocessing import cpu_count
+from multiprocessing import cpu_count, Pool, Process, Queue, RawArray
+from threading import Thread, Lock
 import numpy as np
 
 MPNUM = cpu_count()
+
+def make_mosaic_expmap_mp_worker(shape, wcs, vmapvals, x, y, qin, qout):
+    vmap = np.copy(np.frombuffer(vmapvals).reshape((x.size, y.size)))
+    vmap = RegularGridInterpolator((x, y), vmap)
+    sky = SkyImage(wcs, shape)
+
+    while True:
+        val = qin.get()
+        if val == -1:
+            break
+        qval, expval = val
+        sky.put_stright_on(qval, expval)
+    qout.put(sky.img)
+
+def collect(res, qout, lock):
+    val = qout.get()
+    lock.acquire()
+    res[0] = res[0] + val
+    lock.release()
+
+def make_mosaic_expmap_mp_executor(shape, wcs, vmap, qvals, exptime, mpnum):
+    qin = Queue(100)
+    qout = Queue()
+    lock = Lock()
+    res = [0., ]
+    threads = [Thread(target=collect, args=(res, qout, lock)) for _ in range(mpnum)]
+    for thread in threads:
+        thread.start()
+
+    vmapvals = RawArray(vmap.values.dtype.char, vmap.values.size)
+    np.copyto(np.frombuffer(vmapvals).reshape(vmap.values.shape), vmap.values)
+
+    pool = [Process(target=make_mosaic_expmap_mp_worker, args=(shape, wcs, vmapvals, vmap.grid[0], vmap.grid[1], qin, qout)) for _ in range(mpnum)]
+    for p in pool:
+        p.start()
+
+    for i in range(exptime.size):
+        qin.put([qvals[i], exptime[i]])
+        sys.stderr.write('\rdone {0:%}'.format(i/(exptime.size - 1)))
+
+    for p in pool:
+        qin.put(-1)
+
+    for thread in threads:
+        thread.join()
+
+    return res[0]
 
 def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs):
     """
@@ -22,6 +70,9 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs)
         crpix is expected to be exactly the central pixel of the image
     """
     emap = 0
+    xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
+    imgshape = [xsize, ysize]
+
     if dtcorr:
         overall_gti = emptyGTI
     else:
@@ -30,7 +81,8 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs)
             exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti)
             vmap = make_overall_vignetting()
             print("produce overall urds expmap")
-            emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum)
+            #emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum)
+            emap = make_mosaic_expmap_mp_executor(shape, wcs, vmap, qvals, exptime, mpnum)
             print("\ndone!")
 
     for urd in urdgtis:
@@ -42,10 +94,11 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs)
         exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urd), gti, \
                                                              dtcorr.get(urd, lambda x: 1))
         vmap = make_vignetting_for_urdn(urd, **kwargs)
-        emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum) + emap
+        emap = make_mosaic_expmap_mp_executor(shape, wcs, vmap, qvals, exptime, mpnum) + emap
+        #emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum) + emap
         print(" done!")
-    #make_vignetting_for_urdn.cache_clear()
     return emap
+
 
 def make_exposures(direction, te, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs):
     tec, mgaps, se, scalefunc, cumscalefunc = weigt_time_intervals(urdgtis)
@@ -58,6 +111,7 @@ def make_exposures(direction, te, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kw
     idx = np.argsort(dtn)
     dtn = np.histogram(ts[idx], te, weights=dtn[idx])[0]
     return te, dtn
+
 
 def make_expmap_for_healpix(attdata, urdgtis, mpnum=MPNUM, dtcorr={}, subscale=4):
     if dtcorr:

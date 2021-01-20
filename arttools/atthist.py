@@ -22,7 +22,6 @@ MPNUM = cpu_count()
 
 r0 = Rotation([0, 0, 0, 1])
 
-
 DELTASKY = 15./3600./180.*pi #previously I set it to be 5''
 """
 optica axis is shifted 11' away of the sattelite x axis, therefore we need some more fine resolution
@@ -352,13 +351,27 @@ class AttInvHist(object):
         self.qout = qout
         self.vmap = vmap
         self.locwcs = locwcs
-        self._set_corners()
+        clist = offset_to_vec(vmap.grid[0][[0, 0, -1, -1]]*1.01, vmap.grid[1][[0, -1, -1, 0]]*1.01) #np.array([np.ones(4, np.double), np.tan(1.01*vmap.grid[0][[0, 0, -1, -1]]*pi/180/60.), np.tan(1.01*vmap.grid[1][[0, -1, -1, 0]]*pi/180/60.)]).T
+        clist = clist/np.sqrt(np.sum(clist**2, axis=1))[:, np.newaxis]
+        self._set_corners(clist)
         self.img = np.zeros((int(self.locwcs.wcs.crpix[1]*2 + 1),
                              int(self.locwcs.wcs.crpix[0]*2 + 1)), np.double)
         self.y, self.x = np.mgrid[1:self.img.shape[0] + 1:1, 1:self.img.shape[1] + 1:1]
+        self.ra, self.dec = self.locwcs.all_pix2world(np.array([self.x.ravel(), self.y.ravel()]).T, 1).T
+        self.ra, self.dec = self.ra.reshape(self.x.shape), self.dec.reshape(self.x.shape)
+        self.vecs = pol_to_vec(*np.deg2rad([self.ra, self.dec]))
 
     def _set_corners(self, vals=DET_CORNERS):
         self.corners = vals
+
+    def single_step(self, qval, exptime):
+        ra, dec = vec_to_pol(qval.apply(self.corners))
+        x, y = self.locwcs.all_world2pix(np.array([ra, dec]).T*180./pi, 1).T
+        jl, jr = max(int(x.min()), 0), min(self.img.shape[1] - 1, int(x.max()+1))
+        il, ir = max(int(y.min()), 0), min(self.img.shape[0] - 1, int(y.max()+1))
+        vecs = self.vecs[il: ir + 1, jl: jr + 1]
+        xl, yl = vec_to_offset(qval.apply(vecs.reshape((-1, 3)), inverse=True))
+        self.img[il:ir+1, jl:jr+1] += self.vmap((xl, yl)).reshape(vecs.shape[:2])*exptime
 
     def __call__(self):
         while True:
@@ -366,15 +379,7 @@ class AttInvHist(object):
             if vals == -1:
                 break
             qval, exptime = vals
-            ra, dec = vec_to_pol(qval.apply(self.corners))
-            x, y = self.locwcs.all_world2pix(np.array([ra, dec]).T*180./pi, 1).T
-            jl, jr = max(int(x.min()), 0), min(self.img.shape[1], int(x.max()+1))
-            il, ir = max(int(y.min()), 0), min(self.img.shape[0], int(y.max()+1))
-            x, y = self.x[il:ir + 1, jl: jr + 1], self.y[il: ir + 1, jl: jr + 1]
-            ra, dec = self.locwcs.all_pix2world(np.array([x.ravel(), y.ravel()]).T, 1).T
-            vecs = pol_to_vec(ra*pi/180., dec*pi/180.)
-            xl, yl = vec_to_offset(qval.apply(vecs, inverse=True))
-            self.img[il:ir+1, jl:jr+1] += self.vmap((xl, yl)).reshape(x.shape)*exptime
+            self.single_step(qval, exptime)
 
         self.qout.put(self.img)
 

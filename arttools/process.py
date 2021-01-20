@@ -84,6 +84,9 @@ def analyze_survey(fpath, pastday=None):
                                       "emap%02d_%s.fits.gz" % (k, date),
                                       usedtcorr=False)
 
+
+
+
 """
 
 def run(fpath):

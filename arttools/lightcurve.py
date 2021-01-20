@@ -44,7 +44,7 @@ class Bkgrate(object):
         self.crate = crate
 
     def __call__(self, times):
-        return self.crate[np.searchsorted(self.te, times) - 1]
+        return self.crate[np.minimum(np.searchsorted(self.te, times) - 1, self.crate.size - 1)]
 
 
 def make_overall_lc(times, urdgtis, dt=100, scales=urdbkgsc):

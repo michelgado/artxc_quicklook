@@ -4,13 +4,14 @@ from . import mask
 from . import expmap
 from . import process
 from . import aux
+from . import datafilters
 
 __version__ = "0.2.1"
 
 
 """
 This library currently (2020.04.08) consist of several functions, separated in several modules.
-Higher level modules, depend on lower. 
+Higher level modules, depend on lower.
 
 There is also one module (caldb.py) which is separate and can be called by all others
 the overal structure can be described in the following scheme
@@ -18,13 +19,13 @@ the overal structure can be described in the following scheme
   LEVEL
     1             |      time.py    _det_spatial.py    energy.py
 #==================================================================================================================================
-* time.py - contains sevelra functions, which reduces the L0 data time 
+* time.py - contains sevelra functions, which reduces the L0 data time
 main functions and calsses are:
     ** GTI - general segment class (applied to the time in this implementation), stores a set of ordered uncrossing time segments.
-       has following usefull methods: & - provides intersection of two GTIs, | - provide union of two GTIs, 
+       has following usefull methods: & - provides intersection of two GTIs, | - provide union of two GTIs,
        single - gives inverse GTI interval
 
-        another helpfull methods of the class are: 
+        another helpfull methods of the class are:
             *** mask_outofgti_times - for a set of time points return mask, showing which are in GTI
             *** arange - for selected time resolution return edges of the time bins inside GTI
 
@@ -33,11 +34,11 @@ main functions and calsses are:
     ** deadtime_correction - based on houskipning extention of the file, return dead time corrections as a function of time
 
 * _det_spatial.py - contains functions, defining the detector spatial properties
-    
+
     ** raw_xy_to_offset             |
     ** offset_to_raw_xy             |       all these functions switch coordinates system (i.e. pixels to mm offset from the detecto center)
     ** raw_xy_to_vec                |       also, with known focal length, functions produce vectors from offset (based on thangential rule
-    ** offset_to_vec                |   
+    ** offset_to_vec                |
     ** vec_to_offset                |
     ** vec_to_offset_pairs          |
 
@@ -57,11 +58,11 @@ there is also a small mask.py module (the solo function in it is edges, which re
     depends on: time.py _det_spatial.py caldb.py
 
     ** vec_to_pol & pol_to_vec - converts decartian vector to spherical coordinates and back
-    ** AttDATA class 
+    ** AttDATA class
         a class, inheriting from scipy.spatial.transform.Slerp - quaternions interpolation class
         the reason, why we should have a separate class for our purposess are following:
-            attitude data may be not actual for specific time moments, for example, part of the att data was lost at the orbit correction, 
-            in that case, optical axis orientation can not be obtained by interpolating this points, 
+            attitude data may be not actual for specific time moments, for example, part of the att data was lost at the orbit correction,
+            in that case, optical axis orientation can not be obtained by interpolating this points,
             this information (as I think) should be stored with interpolated quaternions
 
         there are also several usefull functions added in this class
@@ -84,12 +85,12 @@ there is also a small mask.py module (the solo function in it is edges, which re
 #================================================================================================================
 * atthist.py - given the att information we frequentyle would need to produce high (spatial) resolution track of our optical axis on sky
                this is required for two important tasks: background map production and exposure map production.
-               for the performance reasons there are also subroutines aimed to histogram attitudes, and sum their exposures 
+               for the performance reasons there are also subroutines aimed to histogram attitudes, and sum their exposures
 
     depends on: time.py caldb.py orientation.py _det_spatial.py
 
     ** hist_orientation - histogram orientation by spherical coordinates and roll angles
-    ** make_small_steps_quats - produces a set of quaternions, which are sepatated not more than by a DELTASKY 
-                                (and DELTAROW in rotation) and corresponding time intervals, 
+    ** make_small_steps_quats - produces a set of quaternions, which are sepatated not more than by a DELTASKY
+                                (and DELTAROW in rotation) and corresponding time intervals,
 
 """

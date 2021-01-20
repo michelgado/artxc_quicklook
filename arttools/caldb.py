@@ -149,6 +149,10 @@ OPAXOFFSET = {28:[21.28, 22.86],
               30:[20.6, 22.71]}
 
 
+def get_optical_axis_offset_by_device(dev):
+    return OPAXOFFSET[dev]
+
+
 @lru_cache(maxsize=7)
 def get_boresight_by_device(dev):
     print(dev)
@@ -212,6 +216,12 @@ def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=in
     except:
         print ('No index file here:' + indexfile_path)
 
+
+#temporary solution for time shifts in different device relative to spacecraft time
+def get_device_timeshift(dev):
+    return 0.97 if dev == "gyro" else 1.55
+
+
 @lru_cache(maxsize=14)
 def make_background_brightnes_profile(urdn, filterfunc):
     global el
@@ -230,3 +240,13 @@ def make_background_brightnes_profile(urdn, filterfunc):
 def get_filtered_backgrounds_ratio(urdn, f1, f2):
     return np.sum(make_background_brightnes_profile(urdn, f1))/np.sum(make_background_brightnes_profile(urdn, f2))
 
+def default_useful_events_filter(energy=None, grade=None):
+    return ((energy > 4.) & (energy < 12.)), ((grade > -1) & (grade < 10.))
+
+def default_background_events_filter(energy=None, grade=None):
+    return ((energy > 40.) & (energy < 100.)), ((grade > -1) & (grade < 10.))
+
+
+@lru_cache(maxsize=7)
+def get_inverse_psf():
+    return fits.open("/srg/a1/work/srg/ARTCALDB/caldb_files/inverse_psf.fits")

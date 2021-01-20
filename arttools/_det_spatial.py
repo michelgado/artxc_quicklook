@@ -9,6 +9,7 @@ there are also functions which can be used to create masks on the urd data to ex
 import numpy as np
 from math import pi
 from .aux import cache_single_result_np
+from scipy.spatial.transform import Rotation
 
 DL = 0.595 # distance between strips in mm
 F = 2693. # focal length in mm
@@ -168,3 +169,20 @@ def get_shadowed_pix_mask_for_urddata(urddata, det_spat_mask):
     return: boolean mask wich allow to  remove events, which could not be associated with incident X-ray photon registation
     """
     return get_shadowed_pix_mask(urddata["RAW_X"], urddata["RAW_Y"], det_spat_mask) #equivalent to [det_spat_mask[i, j] for i, j in zip(rawx, rawy)]
+
+
+def offset_to_qcorr(x, y):
+    """
+    for x, y spatical cartesian coordinates produces a quaternion, which moves sphere to put center of coorddinates [1, 0, 0] in the x, y coordinate
+
+    it should be noterd, that additional quaternion, which changes  rotates image on pi is applied first
+    """
+    v1 = np.array([0., 1., 0.])
+    if type(x) is np.ndarray:
+        v1 = np.tile(v1, x.shape + (1,))
+    else:
+        x, y = np.array([x,]), np.array([y,])
+    q1 = Rotation.from_rotvec(v1*np.arctan2(-(23.5 - y)*DL, F)[:, np.newaxis])
+    v1 = q1.apply(np.roll(v1, 1, axis=-1))
+    q2 = Rotation.from_rotvec(v1*np.arctan2(-(23.5 - x)*DL, F)[:, np.newaxis])
+    return q2*q1

@@ -4,7 +4,7 @@ from scipy.integrate import cumtrapz
 from ._det_spatial import offset_to_raw_xy, DL, F, \
     offset_to_vec, vec_to_offset_pairs, vec_to_offset
 from .telescope import URDNS
-from .caldb import get_boresight_by_device
+from .caldb import get_boresight_by_device, get_inverse_psf, get_optical_axis_offset_by_device
 import numpy as np
 from math import log10, pi, sin, cos
 from functools import lru_cache
@@ -27,7 +27,6 @@ def load_raw_wignetting_function():
         rawvignfun = RegularGridInterpolator((vignfile["7 arcmin PSF"].data["E"], x, y), vignfile["5 arcmin PSF"].data["EFFAREA"])
     return rawvignfun
 
-
 def cutmask(mask):
     mx = mask.any(axis=0)
     my = mask.any(axis=1)
@@ -48,6 +47,37 @@ class PixInterpolator(object):
         result[mask] = self.values[rawx[mask], rawy[mask]]
         return result
 
+@lru_cache(maxsize=7)
+def make_vignetting_from_inverse_psf(urdn):
+    if not urdn is None:
+        shmask = get_shadowmask_by_urd(urdn)
+        x0, y0 = get_optical_axis_offset_by_device(urdn)
+        print(x0, y0)
+    else:
+        x0, y0 = 23.5, 23.5
+        shmask = np.ones((48, 48), np.bool)
+        shmask[[0, -1], :] = False
+        shmask[:, [0, -1]] = False
+    ipsf = get_inverse_psf()
+    nax1 = ipsf[1].header["NAXIS1"]
+    nax2 = ipsf[1].header["NAXIS2"]
+    x, y = np.mgrid[0:48:1, 0:48:1]
+    x1, y1 = x[shmask], y[shmask]
+
+    img = np.zeros((46*9 + 121, 46*9 + 121), np.double)
+    for xl, yl in zip(x1, y1):
+        if (xl - x0 + 26) < 0 or (xl - x0 + 26) > 52 or (yl - y0 + 26) < 0 or (yl - y0 + 26) > 52:
+            shmask[xl, yl] = False
+            continue
+        dx, dy = xl - x0, yl - y0
+        sl = img[(xl - 1)*9: (xl - 1)*9 + 121, (yl - 1)*9: (yl - 1)*9 + 121]
+        """
+        sl = img[int((xl - x0 + 23.)*9) + 60 - 60: int((xl - x0 + 23.)*9) + 60 + 61, int((yl - y0 + 23.)*9) + 60 - 60: int((yl - y0 + 23.)*9) + 60 + 61]
+        """
+        sl += ipsf[1].data[int(np.round(xl + 0.5 - x0)) + 26, int(np.round(yl + 0.5 - y0)) + 26, : sl.shape[0], :sl.shape[1]]
+
+    dx = (np.arange(img.shape[0]) - img.shape[0]//2)/9.*DL
+    return RegularGridInterpolator((dx, dx), img/img.max(), bounds_error=False, fill_value=0.)
 
 @lru_cache(maxsize=7)
 def make_vignetting_for_urdn(urdn, energy=7.2, flat=False, phot_index=None,
@@ -68,6 +98,9 @@ def make_vignetting_for_urdn(urdn, energy=7.2, flat=False, phot_index=None,
     return: scipy.interpolate.RegularGridInterpolator containing scalled effective area depending on offset in mm from the center of detector
 
     """
+
+    return make_vignetting_from_inverse_psf(urdn)
+
     shmask = get_shadowmask_by_urd(urdn).astype(np.uint8) if useshadowmask else np.ones((48, 48), np.uint8)
     shmask[[0, -1], :] = 0
     shmask[:, [0, -1]] = 0
@@ -161,8 +194,8 @@ def make_overall_vignetting(energy=7.2, *args,
         print("set subgrid to 2")
         subgrid = 2
     #x, y = np.meshgrid(np.linspace(-24., 24., 48*subgrid), np.np.linspace(-24., 24., 48*subgrid))
-    xmin, xmax = -24.*DL, 24.*DL
-    ymin, ymax = -24.*DL, 24.*DL
+    xmin, xmax = -28.*DL, 28.*DL
+    ymin, ymax = -28.*DL, 28.*DL
 
     vecs = offset_to_vec(np.array([xmin, xmax, xmax, xmin]),
                          np.array([ymin, ymin, ymax, ymax]))

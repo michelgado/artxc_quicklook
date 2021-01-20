@@ -3,12 +3,13 @@ import numpy as np
 from math import pi, cos, sin, sqrt
 from ._det_spatial import urd_to_vec, F, DL
 from .time import get_hdu_times, GTI, tGTI, emptyGTI
-from .caldb import T0, get_boresight_by_device
+from .caldb import T0, get_boresight_by_device, get_device_timeshift
 from .mask import edges as medges
 from functools import reduce
 from scipy.optimize import minimize
 from datetime import datetime
 from astropy.time import Time
+from astropy.io import fits
 
 
 #debug
@@ -262,6 +263,8 @@ class AttDATA(SlerpWithNaiveIndexing):
         pass
 
 
+
+
 def read_gyro_fits(gyrohdu):
     """
     reads gyro quaternion from fits file hdu and returns AttDATA  container
@@ -281,7 +284,9 @@ def read_gyro_fits(gyrohdu):
     mask = np.logical_and(masktimes, mask0quats)
     times, quats = times[mask], quats[mask]
     ts, uidx = np.unique(times, return_index=True)
-    return AttDATA(ts, Rotation(quats[uidx])*qgyro0*get_boresight_by_device("GYRO"))
+    ainit = AttDATA(ts, Rotation(quats[uidx])*qgyro0*get_boresight_by_device("GYRO"))
+    return ainit
+
 
 def read_bokz_fits(bokzhdu):
     """
@@ -518,6 +523,7 @@ def get_elongation_plane_norm(attdata, gti=None): #tGTI):
     rvecm = rvecm/sqrt(np.sum(rvecm**2.))
     return rvecm
 
+
 class SurveyAtt(object):
     """
     """
@@ -531,20 +537,18 @@ class SurveyAtt(object):
         """ start times for survey pices"""
         idx = np.argsort(self.tstart)
         self.tstart = self.tstart[idx]
-        self.polus = np.asarray(polus)[idx]
+        self.polus = np.asarray(polus)[idx].reshape((-1, 3))
         """ survey poluses"""
-        self.omega = np.asarray(omega)[idx]
+        self.omega = np.asarray(omega)[idx].ravel()
         """ survey rotational axis rotation around pole angular speed"""
         self.tstop = np.asarray(tstop)[idx]
-        self.sc_start_vec = np.asarray(sc_start_vec)[idx]
+        self.sc_start_vec = np.asarray(sc_start_vec)[idx].reshape((-1, 3))
         """ initial orientation of the spacecraft axis"""
-        self.sc_start_rotvec = np.asarray(sc_start_rotvec)[idx]
+        self.sc_start_rotvec = np.asarray(sc_start_rotvec)[idx].reshape((-1, 3))
         """ starting rotation vector of sc optical axis"""
         self.sc_romega = np.asarray(sc_romega)[idx]
         """ spacecraft optical axis rotation speed """
-        self.roll = np.asarray(roll)[idx]
-        """ roll angle of the spacecraft"""
-        self.roll = roll[idx]
+        self.roll = np.asarray(roll)[idx].ravel()
 
         self.gti = GTI(np.array([self.tstart, self.tstop]).T)
 
@@ -554,6 +558,7 @@ class SurveyAtt(object):
         if not np.all(mask):
             print("Warning!: some of the times are out of survey attdata")
         tloc = times[mask]
+        print(tloc)
         idx = np.searchsorted(self.tstart, tloc) - 1
         print(idx[0])
         pole_phase = (tloc - self.tstart[idx])*self.omega[idx]
@@ -604,9 +609,9 @@ class SurveyAtt(object):
     def read_survey_fits(cls, ffile):
         surveys = np.copy(ffile[1].data)[ffile[1].data["TYPE"] == "SURVEY"]
         start = (Time([datetime.fromisoformat(t) for t in surveys["START"].astype(str)]) - \
-                Time(51543.875, format="mjd")).sec
+                Time(51543.875, format="mjd")).sec - 3.*3600.
         stop = (Time([datetime.fromisoformat(t) for t in surveys["STOP"].astype(str)]) - \
-                Time(51543.875, format="mjd")).sec
+                Time(51543.875, format="mjd")).sec - 3.*3600.
         polus = pol_to_vec(surveys["RA_P"]*pi/180, surveys["DEC_P"]*pi/180)
         sc_start_rotvec = pol_to_vec(surveys["RA_Z0"]*pi/180, surveys["DEC_Z0"]*pi/180)
         sc_start_vec = polus # Rotation.from_rotvec(sc_start_rotvec*-30*pi/180).apply(polus) # pol_to_vec(surveys["RA"]*pi/180, surveys["DEC"]*pi/180)
@@ -719,3 +724,13 @@ def align_with_z_quat(vec):
     q[:3] = vrot*sin(alpha/2.)
     q[3] = cos(alpha/2.)
     return Rotation(q)
+
+def get_attdata(fname):
+    ffile = fits.open(fname)
+    attdata = read_gyro_fits(ffile["ORIENTATION"]) if "gyro" in fname else read_bokz_fits(ffile["ORIENTATION"])
+    tshift = get_device_timeshift("gyro" if "gyro" in fname else "bokz")
+    attdata.times = attdata.times - tshift
+    attdata.gti.arr = attdata.gti.arr - tshift
+    if "gyro" in fname:
+        attdata = define_required_correction(attdata)
+    return attdata
