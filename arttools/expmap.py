@@ -1,5 +1,6 @@
 from .caldb import get_boresight_by_device
 from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttInvHist, make_small_steps_quats
+from .mosaic import SkyImage
 from .vignetting import make_vignetting_for_urdn, make_overall_vignetting, make_vignetting_from_inverse_psf
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from .lightcurve import weigt_time_intervals
@@ -59,7 +60,7 @@ def make_mosaic_expmap_mp_executor(shape, wcs, vmap, qvals, exptime, mpnum):
 
     return res[0]
 
-def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs):
+def make_expmap_for_wcs(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, dtcorr={}, **kwargs):
     """
     produce exposure map on the provided wcs area, with provided GTI and attitude data
 
@@ -69,9 +70,11 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs)
     2) wcs is expected to be astropy.wcs.WCS class,
         crpix is expected to be exactly the central pixel of the image
     """
-    emap = 0
-    xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
-    imgshape = [xsize, ysize]
+    if shape is None:
+        ysize, xsize = int(wcs.wcs.crpix[0]*2 + 1), int(wcs.wcs.crpix[1]*2 + 1)
+        shape = [xsize, ysize]
+
+    sky = SkyImage(wcs, shape=shape)
 
     if dtcorr:
         overall_gti = emptyGTI
@@ -81,8 +84,10 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs)
             exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti)
             vmap = make_overall_vignetting()
             print("produce overall urds expmap")
+            sky._set_core(vmap.grid[0], vmap.grid[1], vmap.values)
+            sky.interpolate_thread(qval, exptime, mpnum)
             #emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum)
-            emap = make_mosaic_expmap_mp_executor(shape, wcs, vmap, qvals, exptime, mpnum)
+            #emap = make_mosaic_expmap_mp_executor(shape, wcs, vmap, qval, exptime, mpnum)
             print("\ndone!")
 
     for urd in urdgtis:
@@ -93,11 +98,13 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs)
         print("urd %d progress:" % urd)
         exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urd), gti, \
                                                              dtcorr.get(urd, lambda x: 1))
-        vmap = make_vignetting_for_urdn(urd, **kwargs)
-        emap = make_mosaic_expmap_mp_executor(shape, wcs, vmap, qvals, exptime, mpnum) + emap
+        vmap = make_vignetting_for_urdn(urd) #, **kwargs)
+        sky._set_core(vmap.grid[0], vmap.grid[1], vmap.values)
+        sky.interpolate_thread(qval, exptime, mpnum)
+        #emap = make_mosaic_expmap_mp_executor(shape, wcs, vmap, qvals, exptime, mpnum) + emap
         #emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum) + emap
         print(" done!")
-    return emap
+    return sky.img
 
 
 def make_exposures(direction, te, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs):
