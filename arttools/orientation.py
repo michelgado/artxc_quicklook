@@ -438,15 +438,26 @@ def get_wcs_roll_for_qval(wcs, qval):
     return:
         for each quaternion returns roll angle
     """
-    ra, dec = vec_to_pol(qval.apply([1, 0, 0]))
-    x, y = wcs.all_world2pix(np.array([ra, dec]).T*180./pi, 1).T
+    ra, dec = np.rad2deg(vec_to_pol(qval.apply([1, 0, 0])))
+    radec = np.array([np.ravel(ra), np.ravel(dec)]).T
+    x, y = wcs.all_world2pix(radec, 1).T
     r1, d1 = (wcs.all_pix2world(np.array([x, y - max(1./wcs.wcs.cdelt[1], 50.)]).T, 1)).T
     r2, d2 = (wcs.all_pix2world(np.array([x, y + max(1./wcs.wcs.cdelt[1], 50.)]).T, 1)).T
     vbot = pol_to_vec(r1*pi/180., d1*pi/180.)
     vtop = pol_to_vec(r2*pi/180., d2*pi/180.)
-    vimgyax = vbot - vtop
+    vimgyax = vtop - vbot
     vimgyax = qval.apply(vimgyax, inverse=True)
-    return (np.arctan2(vimgyax[:, 2], vimgyax[:, 1])*180./pi)%360.
+    return np.arctan2(vimgyax[:, 1], vimgyax[:, 2])
+
+def make_quat_for_wcs(wcs, x, y, roll):
+    vec = pol_to_vec(*np.deg2rad(wcs.all_pix2world(np.array([x, y]).reshape((-1, 2)), 1)[0]))
+    alpha = np.arccos(np.sum(vec*OPAX))
+    rvec = np.cross(OPAX, vec)
+    rvec = rvec/np.sqrt(np.sum(rvec**2))
+    q0 = Rotation.from_rotvec(rvec*alpha)
+    beta = get_wcs_roll_for_qval(wcs, q0)[0]
+    print(beta*180/pi)
+    return Rotation.from_rotvec(vec*(roll - beta))*q0
 
 def get_axis_movement_speed(attdata):
     """

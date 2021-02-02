@@ -85,7 +85,8 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, dtcorr={
             vmap = make_overall_vignetting()
             print("produce overall urds expmap")
             sky._set_core(vmap.grid[0], vmap.grid[1], vmap.values)
-            sky.interpolate_thread(qval, exptime, mpnum)
+            #sky.interpolate_thread(qval[:2], exptime[:2], mpnum)
+            sky.convolve(qval, exptime, mpnum)
             #emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum)
             #emap = make_mosaic_expmap_mp_executor(shape, wcs, vmap, qval, exptime, mpnum)
             print("\ndone!")
@@ -100,12 +101,12 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, dtcorr={
                                                              dtcorr.get(urd, lambda x: 1))
         vmap = make_vignetting_for_urdn(urd) #, **kwargs)
         sky._set_core(vmap.grid[0], vmap.grid[1], vmap.values)
-        sky.interpolate_thread(qval, exptime, mpnum)
+        sky.convolve(qval, exptime, mpnum)
+        #sky.interpolate_thread(qval, exptime, mpnum)
         #emap = make_mosaic_expmap_mp_executor(shape, wcs, vmap, qvals, exptime, mpnum) + emap
         #emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum) + emap
         print(" done!")
     return sky.img
-
 
 def make_exposures(direction, te, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs):
     tec, mgaps, se, scalefunc, cumscalefunc = weigt_time_intervals(urdgtis)

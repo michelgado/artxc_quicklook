@@ -68,16 +68,18 @@ class Corners(object):
         return np.logical_not(np.any(np.sum(self.orts[np.newaxis, :, :]*vecs[:, np.newaxis, :], axis=2) > 0, axis=1))
 
     def expand(self, dtheta):
+        """
+        expand convex moving straight lines, limiting each side of the  convex, on the angle dtheta
+        negative angle should be used with caution, since the sum of the angles on vertixes inside convex shrinks with convex surface area and some corners
+        can appear on the oposite side of the sphere
+        """
         vproj = self.vertices + np.roll(self.vertices, -1, axis=0)
         vproj = vproj/np.sqrt(np.sum(vproj**2, axis=1))[:, np.newaxis]
         neworts = self.orts*cos(dtheta) - vproj*sin(dtheta)
         neworts = neworts/np.sqrt(np.sum(neworts**2, axis=1))[:, np.newaxis]
         newcorners = np.cross(neworts, np.roll(neworts, 1, axis=0))
         newcorners = newcorners/np.sqrt(np.sum(newcorners**2, axis=1))[:, np.newaxis]
-        #return newcorners
         return Corners(newcorners)
-
-
 
 def random_orthogonal_vec(vec):
     """
@@ -166,7 +168,6 @@ def get_angle_betwee_three_vectors(vec1, vec2, vec3):
     v13 = 1/np.sqrt(np.sum(v13**2, axis=-1))*v13
     alpha = np.arccos(np.sum(v12*v13, axis=-1))
     return alpha
-
 
 def get_vec_triangle_area(vec1, vec2, vec3):
     v12 = np.cross(vec1, vec2, axis=-1)
@@ -513,7 +514,3 @@ def expand_convex_hull(vertices, dtheta):
                      axis[2]*cos(dtheta) + (axis[0] - cos(alpha)*axis[2])*sin(dtheta)/sin(alpha),
                      axis[3]*cos(dtheta) + (axis[1] - cos(beta)*axis[3])*sin(dtheta)/sin(beta),])
     return newax/np.sqrt(np.sum(newax**2, axis=1))[:, np.newaxis]
-
-
-
-
