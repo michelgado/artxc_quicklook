@@ -136,3 +136,5 @@ def make_quick_bkgmap_for_wcs(wcs, attdata, urdgtis, time_corr={}):
         print("run convolve")
         bkgimg = convolve_profile(attdata, wcs, bkg, urdgtis[urd], time_corr.get(urd, lambda x: 1.)) + bkgimg
     return bkgimg
+
+

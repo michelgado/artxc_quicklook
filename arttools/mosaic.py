@@ -11,20 +11,28 @@ from itertools import cycle
 from math import sin, cos, sqrt, pi
 import asyncio
 import matplotlib.pyplot as plt
+from copy import copy
 
 
 def put_stright_on(vals, bkg, rmap):
     return vals
+
+def get_source_photon_probability(core, bkg, rate):
+    return rate*core/(bkg + rate*core)
+
+def get_zerosource_photstat(core, bkg, rate):
+    return np.log(bkg/(bkg + core*rate))
 
 
 class SkyImage(object):
     """
     stores an image of the sky and allows to put specific core on the sky coordinates
     """
-    def __init__(self, locwcs, vmap=None, shape=None):
+    def __init__(self, locwcs, vmap=None, shape=None, rfun=get_source_photon_probability):
         self.locwcs = locwcs
         self.shape = shape if not shape is None else [int(locwcs.wcs.crpix[1]*2 + 1), int(locwcs.wcs.crpix[0]*2 + 1)]
         self.img = np.zeros(self.shape, np.double)
+        self.rfun = rfun
 
         self.y, self.x = np.mgrid[1:self.img.shape[0] + 1:1, 1:self.img.shape[1] + 1:1]
         self.ra, self.dec = self.locwcs.all_pix2world(np.array([self.x.ravel(), self.y.ravel()]).T, 1).T
@@ -52,7 +60,7 @@ class SkyImage(object):
         return il, ir, jl, jr
 
 
-    def interpolate_for_qval(self, qval, norm, img=None):
+    def interpolate_vmap_for_qval(self, qval, norm, img=None):
         img = self.img if img is None else img
         ra, dec = vec_to_pol(qval.apply(self.corners))
         x, y = self.locwcs.all_world2pix(np.rad2deg([ra, dec]).T, 1).T - 0.5
@@ -83,13 +91,13 @@ class SkyImage(object):
             if val == -1:
                 break
             quat, norm = val
-            sky.interpolate_for_qval(qval, norm)
+            sky.interpolate_vmap_for_qval(qval, norm)
         qout.put(sky.image)
 
     def interpolate_mp(self, qvals, norms, mpnum=None):
         if mpnum is None:
             for i in range(norms.size):
-                self.interpolate_for_qval(qvals[i], norms[i])
+                self.interpolate_vmap_for_qval(qvals[i], norms[i])
         else:
             vmapvals = RawArray(self.vmap.values.dtype.char, self.vmap.values.size)
             np.copyto(np.frombuffer(vmapvals).reshape(self.vmap.values.shape), self.vmap.values)
@@ -119,16 +127,16 @@ class SkyImage(object):
                 collector.join()
 
     @staticmethod
-    def init_buffer(cache, numpy_buffer):
+    def init_imgs_buffer(cache, numpy_buffer):
         cache[current_thread()] = next(numpy_buffer)
 
 
-    def interpolate_thread(self, qvals, norms, mpnum=2):
+    def interpolate(self, qvals, norms, mpnum=2):
         imgs = [np.zeros(self.img.shape, np.double) for _ in range(mpnum)]
         cache = {}
-        pool = ThreadPool(mpnum, initializer=SkyImage.init_buffer,
+        pool = ThreadPool(mpnum, initializer=SkyImage.init_imgs_buffer,
                           initargs=(cache, iter(imgs)))
-        pool.map(lambda args: self.interpolate_for_qval(*args, img=cache.get(current_thread())),
+        pool.map(lambda args: self.interpolate_vmap_for_qval(*args, img=cache.get(current_thread())),
                  zip(qvals, norms))
         self.img += sum(imgs)
 
@@ -147,8 +155,42 @@ class SkyImage(object):
             tmpimg = np.zeros(img.shape, np.double)
             q = make_quat_for_wcs(self.locwcs, self.img.shape[1]//2, self.img.shape[0]//2, angle)
             il, ir, jl, jr = self._get_quat_rectangle(q)
-            self.interpolate_for_qval(q, 1, tmpimg)
+            self.interpolate_vmap_for_qval(q, 1, tmpimg)
             core = np.copy(tmpimg[il: ir, jl: jr])
             tmpimg[il: ir, jl: jr] = 0.
             self.spread_events(tmpimg, self.locwcs, qvals[idx].apply(OPAX), norm[idx])
             img += convolve(tmpimg, core, mode="same")
+
+    @staticmethod
+    def init_img_and_vmap_buffers(imgcache, numpy_buffer, vmapcache, vmap):
+        cthread = current_thread()
+        cache[cthread] = next(numpy_buffer)
+        vmapcache[cthread] = copy(vmap)
+
+    def thread_permute_worker(self, q, bkg, scale, i, j):
+        cthread = current_thread()
+        self.vmapcache[cthread].values = self.iPSF[i, j]
+        self.permute_with_rmap(q, bkg, scale, self.vmapcache[cthread], self.imgcache[cthread])
+
+    def permute_with_rmap(self, qval, bkg, scale, vmap=None, img=None):
+        vmap = self.vmap if vmap is None else vmap
+        img = self.img if img is None else img
+        ra, dec = vec_to_pol(qval.apply(self.corners))
+        x, y = self.locwcs.all_world2pix(np.rad2deg([ra, dec]).T, 1).T - 0.5
+        jl, jr = max(int(x.min()), 0), min(img.shape[1], int(x.max()+1))
+        il, ir = max(int(y.min()), 0), min(img.shape[0], int(y.max()+1))
+        vecs = self.vecs[il:ir, jl:jr]
+        xl, yl = vec_to_offset(qval.apply(vecs.reshape((-1, 3)), inverse=True))
+        img[il:ir, jl:jr] += scale*self.rfun(vmap((xl, yl)).reshape((ir - il, jr - jl)),
+                                                bkg, self.rmap[il:ir, jl:jr])
+
+    def permute_thread(self, iPSF, rmap, qvals, x01, y01, bkgs, scales):
+        self.vmapcache = {}
+        self.imgcache = {}
+        self.iPSF = iPSF
+        self.rmap = rmap
+        imgs = [np.zeros(self.img.shape) for _ in range(mpnum)]
+        pool = ThreadPool(mpnum, initializer=SkyImage.init_img_and_vmap_buffers,
+                          initargs=(self.imgcache, iter(imgs), self.vmapcache, self.vmap))
+        pool.map(self.thread_permute_worker, args=zip(qvals, bkgs, scales, x01, y01))
+        return np.sum(imgs)
