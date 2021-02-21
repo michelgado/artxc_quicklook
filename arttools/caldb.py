@@ -11,7 +11,7 @@ from .telescope import URDTOTEL
 from .time import GTI, get_gti
 from scipy.spatial.transform import Rotation
 from math import sin, cos, pi
-from .energy import get_events_energy
+#from .energy import get_events_energy
 import pickle
 
 
@@ -36,6 +36,7 @@ CUTAPP = None
 FLATVIGN = False
 FLATBKG = False
 el = None
+bkggti = None
 
 qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])
 qgyro0 = Rotation([0., 0., 0., 1.])
@@ -221,17 +222,54 @@ def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=in
 def get_device_timeshift(dev):
     return 0.97 if dev == "gyro" else 1.55
 
+def get_background_for_urdn(urdn):
+    global el, bkggti
+    x = np.arange(48)
+    y = np.arange(48)
+    e = np.arange(4., 150., 1.)
+    g = np.arange(0, 16)
+    grid = {"RAW_X": x, "RAW_Y": y, "ENERGY": e, "GRADE": g}
+
+    if el is None:
+        el, bkggti = pickle.load(open("/srg/a1/work/andrey/ART-XC/background/bkghist2.pickle", "rb"))
+    return grid, el.get(urdn)/bkggti.get(urdn).exposure
+
+def get_overall_background():
+    global el, bkggti
+    x = np.arange(0, 48)
+    y = np.arange(0, 48)
+    e = np.arange(4., 150., 1.)
+    g = np.arange(0, 16)
+    grid = {"RAW_X": x, "RAW_Y": y, "ENERGY": e, "GRADE": g}
+
+    if el is None:
+        el, bkggti = pickle.load(open("/srg/a1/work/andrey/ART-XC/background/bkghist2.pickle", "rb"))
+    return grid, sum(el.values())
+
+@lru_cache(maxsize=1)
+def get_crabspec():
+    spec, ee, ge = pickle.load(open("/srg/a1/work/andrey/ART-XC/Crab/crabspec2.pkl", "rb"))
+    grid = {"ENERGY": ee, "GRADE": ge}
+    return grid, spec
+
+def get_crabspec_for_filters(filters):
+    grid, spec = get_crabspec()
+    emask = filters["ENERGY"].apply(grid["ENERGY"])
+    emasks = np.logical_and(emask[1:], emask[:-1])
+    gmask = filters["GRADE"].apply(grid["GRADE"])
+    return {"ENERGY": grid["ENERGY"][emask], "GRADE": grid['GRADE'][gmask]}, spec[emasks, :][:, gmask]
 
 @lru_cache(maxsize=14)
 def make_background_brightnes_profile(urdn, filterfunc):
-    global el
-    if el is None:
-        el = pickle.load(open("/srg/a1/work/andrey/ART-XC/background/bkghist2.pickle", "rb"))
-
+    """
+    saved background is a 4d cube which is accumulated from the detector in the
+    several observations of empty fields.
+    the axis of the cube corresponds to the RAW_X, RAW_Y, ENERGY and grade axis
+    """
     x = np.arange(1, 47)
     y = np.arange(1, 47)
     e = np.arange(4.5, 150., 1.)
-    g = np.arange(0, 17)
+    g = np.arange(0, 16)
 
     eidx = np.arange(e.size)[filterfunc(energy=e)]
     gidx = np.arange(g.size)[filterfunc(grade=g)]
@@ -246,7 +284,17 @@ def default_useful_events_filter(energy=None, grade=None):
 def default_background_events_filter(energy=None, grade=None):
     return ((energy > 40.) & (energy < 100.)), ((grade > -1) & (grade < 10.))
 
-
 @lru_cache(maxsize=7)
 def get_inverse_psf():
     return fits.open("/srg/a1/work/srg/ARTCALDB/caldb_files/inverse_psf.fits")
+
+
+@lru_cache(maxsize=1)
+def get_inverse_psf_data():
+    ipsf = pickle.load(open("/srg/a1/work/andrey/ART-XC/PSF/invert_psf_v8_53pix.pickle", "rb"))
+    return ipsf
+
+@lru_cache(maxsize=1)
+def get_inversed_psf_data_packed():
+    ipsf = fits.open("/srg/a1/work/andrey/ART-XC/iPSF.fits")
+    return ipsf

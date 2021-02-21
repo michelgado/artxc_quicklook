@@ -5,6 +5,8 @@ from . import expmap
 from . import process
 from . import aux
 from . import datafilters
+from . import filters
+from . import psf
 
 __version__ = "0.2.1"
 

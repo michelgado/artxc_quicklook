@@ -2,17 +2,20 @@ import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 from scipy.signal import convolve
 #from scipy.spatial.transform import Rotation
-from multiprocessing import Pool, Process, Queue, RawArray
+from multiprocessing import Pool, Process, Queue, RawArray, cpu_count
 from multiprocessing.pool import ThreadPool
 from threading import Thread, Lock, current_thread
 from .orientation import vec_to_pol, pol_to_vec, OPAX, make_quat_for_wcs, get_wcs_roll_for_qval
 from ._det_spatial import offset_to_vec, vec_to_offset
+from .psf import unpack_inverse_psf
 from itertools import cycle
 from math import sin, cos, sqrt, pi
 import asyncio
 import matplotlib.pyplot as plt
 from copy import copy
 
+
+MPNUM = cpu_count()
 
 def put_stright_on(vals, bkg, rmap):
     return vals
@@ -45,11 +48,11 @@ class SkyImage(object):
         self.corners = vals
 
     def _set_core(self, x, y, core):
-        self.rg = RegularGridInterpolator((x, y), core, bounds_error=False, fill_value=0.)
+        self.vmap = RegularGridInterpolator((x, y), core, bounds_error=False, fill_value=0.)
         self._set_corners(offset_to_vec(x[[0, 0, -1, -1]], y[[0, -1, -1, 0]]))
 
     def _update_interpolation_core_values(self, core):
-        self.rg.values = core
+        self.vmap.values = core
 
     def _get_quat_rectangle(self, qval):
         ra, dec = vec_to_pol(qval.apply(self.corners))
@@ -68,7 +71,7 @@ class SkyImage(object):
         il, ir = max(int(y.min()), 0), min(self.img.shape[0], int(y.max()+1))
         vecs = self.vecs[il:ir, jl:jr]
         xl, yl = vec_to_offset(qval.apply(vecs.reshape((-1, 3)), inverse=True))
-        img[il:ir, jl:jr] += norm*self.rg((xl, yl)).reshape((ir - il, jr - jl))
+        img[il:ir, jl:jr] += norm*self.vmap((xl, yl)).reshape((ir - il, jr - jl))
 
     @staticmethod
     def collector(res, lock, qout):
@@ -164,33 +167,45 @@ class SkyImage(object):
     @staticmethod
     def init_img_and_vmap_buffers(imgcache, numpy_buffer, vmapcache, vmap):
         cthread = current_thread()
-        cache[cthread] = next(numpy_buffer)
+        imgcache[cthread] = next(numpy_buffer)
         vmapcache[cthread] = copy(vmap)
 
     def thread_permute_worker(self, q, bkg, scale, i, j):
         cthread = current_thread()
-        self.vmapcache[cthread].values = self.iPSF[i, j]
-        self.permute_with_rmap(q, bkg, scale, self.vmapcache[cthread], self.imgcache[cthread])
+        print("unpack inverse psf at", i, j)
+        self.vmapcache[cthread].values = unpack_inverse_psf(i, j) #self.iPSF[i, j]
+        self.permute_with_rmap(q, bkg, scale, self.mask, self.vmapcache[cthread], self.imgcache[cthread])
 
-    def permute_with_rmap(self, qval, bkg, scale, vmap=None, img=None):
+    def permute_with_rmap(self, qval, bkg, scale, mask, vmap=None, img=None):
         vmap = self.vmap if vmap is None else vmap
         img = self.img if img is None else img
         ra, dec = vec_to_pol(qval.apply(self.corners))
         x, y = self.locwcs.all_world2pix(np.rad2deg([ra, dec]).T, 1).T - 0.5
         jl, jr = max(int(x.min()), 0), min(img.shape[1], int(x.max()+1))
         il, ir = max(int(y.min()), 0), min(img.shape[0], int(y.max()+1))
+        m = mask[il:ir, jl: jr]
+        """
         vecs = self.vecs[il:ir, jl:jr]
         xl, yl = vec_to_offset(qval.apply(vecs.reshape((-1, 3)), inverse=True))
         img[il:ir, jl:jr] += scale*self.rfun(vmap((xl, yl)).reshape((ir - il, jr - jl)),
                                                 bkg, self.rmap[il:ir, jl:jr])
+        """
+        vecs = self.vecs[il:ir, jl:jr][m]
+        print(vecs.shape)
+        xl, yl = vec_to_offset(qval.apply(vecs, inverse=True))
+        img[il:ir, jl:jr][m] += scale*self.rfun(vmap((xl, yl)),
+                                                bkg, self.rmap[il:ir, jl:jr][m])
 
-    def permute_thread(self, iPSF, rmap, qvals, x01, y01, bkgs, scales):
+
+    def permute_thread(self, rmap, qvals, x01, y01, bkgs, scales, mask, mpnum=MPNUM):
+        print("check info", scales.shape, rmap.shape, len(qvals), x01.size, y01.shape, mask.shape)
         self.vmapcache = {}
         self.imgcache = {}
-        self.iPSF = iPSF
         self.rmap = rmap
+        self.mask = mask
         imgs = [np.zeros(self.img.shape) for _ in range(mpnum)]
         pool = ThreadPool(mpnum, initializer=SkyImage.init_img_and_vmap_buffers,
                           initargs=(self.imgcache, iter(imgs), self.vmapcache, self.vmap))
-        pool.map(self.thread_permute_worker, args=zip(qvals, bkgs, scales, x01, y01))
-        return np.sum(imgs)
+        print(list(self.imgcache.keys()), list(self.vmapcache.keys()))
+        pool.map(lambda args: self.thread_permute_worker(*args), zip(qvals, bkgs, scales, x01, y01))
+        return np.sum(imgs, axis=0)

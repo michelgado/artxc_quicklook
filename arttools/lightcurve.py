@@ -46,6 +46,15 @@ class Bkgrate(object):
     def __call__(self, times):
         return self.crate[np.minimum(np.searchsorted(self.te, times) - 1, self.crate.size - 1)]
 
+    def _scale(self, val):
+        return Bkgrate(self.te, self.crate*val)
+
+    def __and__(self, other):
+        times = np.concatenate(self.te, other.te)
+        rates = np.concatenate(self.crate, other.crate)
+        idx = np.argsort(times)
+        times = times[idx]
+        rates = rates[idx]
 
 def make_overall_lc(times, urdgtis, dt=100, scales=urdbkgsc):
     """

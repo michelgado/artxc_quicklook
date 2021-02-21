@@ -371,7 +371,8 @@ def make_wcs_for_attdata(attdata, gti=tGTI, pixsize=20./3600.):
         wcs for provided attitude informaion
     """
     locgti = gti & attdata.gti
-    qvtot = attdata(attdata.times[locgti.mask_external(attdata.times)])
+    #qvtot = attdata(attdata.times[locgti.mask_external(attdata.times)])
+    qvtot = attdata(locgti.arange(1)[0])
     return make_wcs_for_quats(qvtot, pixsize)
 
 def split_survey_mode(attdata, gti=tGTI):

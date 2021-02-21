@@ -1,8 +1,9 @@
 from .caldb import get_boresight_by_device, get_backprofile_by_urdn, get_shadowmask_by_urd, \
-                    make_background_brightnes_profile
+                    make_background_brightnes_profile, get_background_for_urdn, get_overall_background
 from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttWCSHistmean, AttWCSHistinteg, convolve_profile, AttInvHist
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from ._det_spatial import DL, dxya, offset_to_vec, vec_to_offset, vec_to_offset_pairs
+from .lightcurve import make_overall_lc
 from .telescope import URDNS
 from functools import reduce
 from multiprocessing import cpu_count
@@ -137,4 +138,57 @@ def make_quick_bkgmap_for_wcs(wcs, attdata, urdgtis, time_corr={}):
         bkgimg = convolve_profile(attdata, wcs, bkg, urdgtis[urd], time_corr.get(urd, lambda x: 1.)) + bkgimg
     return bkgimg
 
+def get_background_surface_brigtnress(urdn, filters, fill_value=np.nan):
+    grid, datacube = get_background_for_urdn(urdn)
+    menergy = filters["ENERGY"].apply(grid["ENERGY"])
+    menergys = np.logical_and(menergy[1:], menergy[:-1])
+    mgrade = filters["GRADE"].apply(grid["GRADE"])
+    profile = datacube[:, :, menergys, :][:, :, :, mgrade].sum(axis=(2, 3))
+    y, x = np.meshgrid(grid["RAW_Y"], grid["RAW_X"])
+    shmask = filters.apply(np.column_stack([x.ravel(), y.ravel()]).ravel().view([("RAW_X", np.int), ("RAW_Y", np.int)])).reshape(x.shape)
+    profile[~shmask] = fill_value
+    return profile
 
+def get_background_spectrum(filters):
+    grid, datacube = get_overall_background()
+    menergy = filters["ENERGY"].apply(grid["ENERGY"])
+    menergys = np.logical_and(menergy[1:], menergy[:-1])
+    mgrade = filters["GRADE"].apply(grid["GRADE"])
+    rgrid = {"ENERGY": grid["ENERGY"][menergy], "GRADE": grid["GRADE"][mgrade]}
+    y, x = np.meshgrid(grid["RAW_Y"], grid["RAW_X"])
+    shmask = filters.apply(np.column_stack([x.ravel(), y.ravel()]).ravel().view([("RAW_X", np.int), ("RAW_Y", np.int)])).reshape(x.shape)
+    return rgrid, (datacube[:, :, menergys, :][:, :, :, mgrade]*shmask[:, :, np.newaxis, np.newaxis]).sum(axis=(0, 1))
+
+def get_background_events_weight(filters, udata):
+    grid, spec = get_background_spectrum(filters)
+    gidx = np.zeros(30, np.int)
+    gidx[grid["GRADE"]] = np.arange(grid["GRADE"].size)
+    idxe = np.searchsorted(grid["ENERGY"], udata["ENERGY"]) - 1
+    idxg = gidx[udata["GRADE"]]
+    return spec[idxe, idxg]/np.sum(spec)
+
+
+def get_background_lightcurve(tevts, urdgti, filters, timebin):
+    """
+    get surface brightness profiless
+    """
+    bkgprofiles = {urdn: get_background_surface_brigtnress(urdn, filters, fill_value=0.) for urdn in urdgti}
+    """
+    estimate background count rates ratio to the mean overall countrate
+    """
+    tweights = np.sum(list(bkgprofiles.values()))/len(bkgprofiles)
+    print(tweights)
+    bkgscales = {urdn: np.sum(d)/tweights for urdn, d in bkgprofiles.items()}
+    print(bkgscales)
+
+    """
+    estimated mean background rate for background in the desired parameters space (energy, grade, coordinates)
+    """
+    tebkg, mgapsbkg, cratebkg, crerrbkg, bkgrate = make_overall_lc(tevts, urdgti, timebin, bkgscales)
+    urdbkg = {urdn: bkgrate._scale(v) for urdn, v in bkgscales.items()}
+    return urdbkg
+
+def get_background_bands_ratio(filters1, filters2):
+    grid1, spec1 = get_background_spectrum(filters1)
+    grid2, spec2 = get_background_spectrum(filters2)
+    return np.sum(spec1)/np.sum(spec2)

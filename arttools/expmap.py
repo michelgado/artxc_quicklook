@@ -74,15 +74,20 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, dtcorr={
         ysize, xsize = int(wcs.wcs.crpix[0]*2 + 1), int(wcs.wcs.crpix[1]*2 + 1)
         shape = [xsize, ysize]
 
+    print(wcs)
+    print(shape)
+
     sky = SkyImage(wcs, shape=shape)
 
     if dtcorr:
         overall_gti = emptyGTI
     else:
         overall_gti = reduce(lambda a, b: a & b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
+        print(overall_gti.exposure)
         if overall_gti.exposure > 0:
             exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti)
             vmap = make_overall_vignetting()
+            print("exptime sum", exptime.sum())
             print("produce overall urds expmap")
             sky._set_core(vmap.grid[0], vmap.grid[1], vmap.values)
             #sky.interpolate_thread(qval[:2], exptime[:2], mpnum)
@@ -115,7 +120,7 @@ def make_exposures(direction, te, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kw
     vmap = make_overall_vignetting()
     offset = vec_to_offset_pairs(attdata(ts).apply(direction, inverse=True))
     scales = vmap(offset)
-    dtn = dtn*scales*scalefunc(ts)
+    dtn = dtn*scales/scalefunc(ts)
     idx = np.argsort(dtn)
     dtn = np.histogram(ts[idx], te, weights=dtn[idx])[0]
     return te, dtn
