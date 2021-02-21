@@ -332,6 +332,8 @@ def get_raw_bokz(bokzhdu):
     jyear = get_hdu_times(bokzhdu).jyear[mask]
     return bokzdata["TIME"][mask], earth_precession_quat(jyear).inv()*qbokz
 
+def get_events_quats(urddata, URDN, attdata):
+    return attdata(urddata["TIME"])*get_boresight_by_device(URDN)
 
 def get_photons_vectors(urddata, URDN, attdata, subscale=1):
     """

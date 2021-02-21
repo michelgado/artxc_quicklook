@@ -77,7 +77,7 @@ def offset_to_vec(x, y):
     outvec[..., 0] = F
     outvec[..., 1] = x
     outvec[..., 2] = -y
-    return outvec
+    return outvec/np.sqrt(np.sum(outvec**2, axis=1))[..., np.newaxis]
 
 #@cache_single_result_np
 def vec_to_offset(vec):
@@ -186,3 +186,8 @@ def offset_to_qcorr(x, y):
     v1 = q1.apply(np.roll(v1, 1, axis=-1))
     q2 = Rotation.from_rotvec(v1*np.arctan2(-(23.5 - x)*DL, F)[:, np.newaxis])
     return q2*q1
+
+def get_qcorr_for_urddata(udata):
+    return offset_to_qcorr(udata["RAW_X"], udata["RAW_Y"])
+
+

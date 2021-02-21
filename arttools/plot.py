@@ -25,6 +25,7 @@ from matplotlib.colors import LogNorm
 from functools import reduce
 from collections import  namedtuple
 import pickle
+import glob
 
 eband = namedtuple("eband", ["emin", "emax"])
 
@@ -90,6 +91,58 @@ def get_attdata(fname):
     if "gyro" in fname:
         attdata = define_required_correction(attdata)
     return attdata
+
+
+def make_skyimage_for_urdset_by_gti(urdflist, attflist, outctsname, gti=tGTI, photsplitnside=1,
+                                   pixsize=20/3600., usedtcorr=True, weightphotons=False,
+                                   locwcs=None,
+                                   **kwargs):
+    attdata = AttDATA.concatenate([get_attdata(fname) for fname in set(attflist)])
+    attdata = attdata.apply_gti(gti + [-30, 30])
+    gti = attdata.gti & gti
+
+    urdgti = {URDN:emptyGTI for URDN in URDNS}
+    vecs = []
+
+    for urdfname in urdflist[:]:
+        urdfile = fits.open(urdfname)
+        urdn = urdfile["EVENTS"].header["URDN"]
+        tchk = (urdfile["HK"].data["TIME"][1:] + urdfile['HK'].data["TIME"][:-1])/2.
+        print("processing:", urdfname)
+
+        locgti = (get_gti(urdfile, "STDGTI") if "STDGTI" in urdfile else get_gti(urdfile)) & gti & ~urdgti.get(urdn, emptyGTI) # & -urdbti.get(urdn, emptyGTI)
+        locgti.merge_joint()
+        locbgti = (get_gti(urdfile, "STDGTI") if "STDGTI" in urdfile else get_gti(urdfile)) & (gti + [-200, 200]) & ~bkggti.get(urdn, emptyGTI)
+        print("exposure in GTI:", locgti.exposure)
+        locgti = locgti & ~urdbti.get(urdn, emptyGTI)
+        print("exposure after excluding BTI", locgti.exposure)
+        if locgti.exposure == 0.:
+            continue
+        urdgti[urdn] = urdgti.get(urdn, emptyGTI) | locgti
+
+        urddata = np.copy(urdfile["EVENTS"].data) #hint: do not apply bool mask to a fitsrec - it's a stright way to the memory leak :)
+        urddata = urddata[(locgti).mask_external(urddata["TIME"])]
+
+        hkdata = np.copy(urdfile["HK"].data)
+        hkdata = hkdata[(locgti + [-30, 30]).mask_external(hkdata["TIME"])]
+        urdhk[urdn] = urdhk.get(urdn, []) + [hkdata,]
+
+        energy, grade, flag = make_energies_flags_and_grades(urddata, hkdata, urdn)
+        timemask = locgti.mask_external(urddata["TIME"])
+        for bandname, band in ebands.items():
+            pickimg = np.all([energy > 4., energy < 12., grade > -1, grade < 10,
+                              flag == 0, locgti.mask_external(urddata["TIME"])], axis=0)
+            vecs.append(arttools.orientation.get_photons_vectors(urddata[pickimg], urdn, attdata, photsplitnside))
+        vecs = np.concatenate(vecs, axis=0)
+        ra, dec = arttools.orientation.vec_to_pol(vecs)
+        tgti = reduce(lambda a, b: a |b, urdgti.values())
+        locwcs = make_wcs_for_attdata(attdata, tgti, pixsize)
+        xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
+        img = np.zeros((ysize, xsize), np.double)
+        y, x = (locwcs.all_world2pix(np.rad2deg([ra, dec]).T, 1) - 0.5).astype(np.int).T
+        u, uc = np.unique(np.array([x, y]), axis=1, return_counts=True)
+        img[u[0], u[1]] = uc
+        fits.PrimaryHDU(data=img, header=locwcs.to_header()).write_to(outctsname)
 
 
 def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
@@ -206,6 +259,9 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
     bmap.writeto(outbkgname, overwrite=True)
 
 if __name__ == "__main__":
-    pass
+    gyrofiles, urdfiles, outimgname = sys.argv[1:2]
+    gyrofiles = glob.glob(gyrofiles)
+    urdfiles = glob.glob(urdfiles)
+    make_skyimage_for_urdset_by_gti(gyrofiles, urdfiles, outimgname)
     #pass, r, d - quasi cartesian coordinates of the vecteces
     #it should be noted that convex hull is expected to be alongated along equator after quaternion rotation

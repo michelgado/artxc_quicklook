@@ -1,6 +1,4 @@
 import numpy as np
-from copy import copy
-from collections import OrderedDict
 
 class Intervals(object):
     """
@@ -214,65 +212,28 @@ class Intervals(object):
         """
         self.arr = self._regularize(self.arr + [dt/2., -dt/2.]) - [dt/2., + dt/2.]
 
-    def mask_external(self, ts):
+    def mask_external(self, ts, open_bounds=False):
         """
         creates bitwise mask, which marks points out of intervals, sorted in the set
         example intervals i1 = [[0, 2], [4, 6]]
         ts = [1, 3, 5, 7]
         i1.mask_external(ts) = [true, false, true, false]
         """
-        return self.arr.ravel().searchsorted(ts)%2 == 1
+        idxs = np.argsort(ts)
+        idx = self.arr.ravel().searchsorted(ts[idxs]) #%2 == 1
+        mask = idx%2 == 1
+        if open_bounds:
+            idxb = np.where(mask[1:] & ~mask[:-1])[0]
+            mask[idxb] = self.arr.ravel()[idx[idxb]] == ts[idxb]
+        res = np.empty(mask.size, np.bool)
+        res[idxs] = mask[:]
+        return res
 
     def apply(self, ts):
-        return self.mask_external(ts)
+        return self.mask_external(ts, True)
 
     def __str__(self):
         return " ".join(["[%.1f, %.1f]" % tuple(a) for a in self.arr])
 
-
-
-class RationalSet(set):
-    def apply(self, vals):
-        return np.isin(self, vals)
-
-class RationalMultiSet(dict):
-    def __and__(self, other):
-        allfieds = set(list(self.keys()) + list(other.keys()))
-        return RationalMultiSet({k: self.get(k, other[k]) & other.get(k, self[k]) for k in allfields})
-
-    def __or__(self, other):
-        allfieds = set(list(self.keys()) + list(other.keys()))
-        return RationalMultiSet({k: self.get(k, other[k]) | other.get(k, self[k]) for k in allfields})
-
-    def apply(self, valsset):
-        return np.all([f.apply(valsset[k]) for k, f in self.items() if k in valsset], axis=0)
-
-class InversedIndexMask(OrderedDict):
-    def __init__(self, indexfunctions, mask):
-        """
-        indexfunction a zip of ordered according to mask axis order set of indexing functions
-        """
-        super.__init__(indexfunction)
-        self.mask = mask
-        self.shifts = np.concatenate([np.cumprod(self.mask.shape[1::-1])[::-1], [1,]])
-
-    def apply(self, fields):
-        if not np.all([f in self for f in if fields]):
-            raise ValueError("not all of the fields are present in query")
-        return self.mask.ravel()[sum(s*self[name](fields[name]) for s, name in zip(self.shifts, self))]
-
-    def __and__(self, other):
-        if self.mask.shape != other.mask.shape:
-            raise ValueError("incompatible masks")
-        if not all([key in other for key in self]) or not all([ket in self for key in other]):
-            raise ValueError("imcompatible fields")
-        return InversedIndexMask(self.items(), np.logical_and(mask))
-
-    def __or__(self, other):
-        if self.mask.shape != other.mask.shape:
-            raise ValueError("incompatible masks")
-        if not all([key in other for key in self]) or not all([ket in self for key in other]):
-            raise ValueError("imcompatible fields")
-        return InversedIndexMask(self.items(), np.logical_or(mask))
 
 
