@@ -5,6 +5,7 @@ from ._det_spatial import offset_to_raw_xy, DL, F, \
     offset_to_vec, vec_to_offset_pairs, vec_to_offset
 from .telescope import URDNS
 from .caldb import get_boresight_by_device, get_inverse_psf, get_optical_axis_offset_by_device
+from .psf import xy_to_opaxoffset, unpack_inverse_psf
 import numpy as np
 from math import log10, pi, sin, cos
 from functools import lru_cache
@@ -58,14 +59,17 @@ def make_vignetting_from_inverse_psf(urdn):
         shmask = np.ones((48, 48), np.bool)
         shmask[[0, -1], :] = False
         shmask[:, [0, -1]] = False
+    """
     ipsf = get_inverse_psf()
     nax1 = ipsf[1].header["NAXIS1"]
     nax2 = ipsf[1].header["NAXIS2"]
+    """
     x, y = np.mgrid[0:48:1, 0:48:1]
     x1, y1 = x[shmask], y[shmask]
+    x2, y2 = xy_to_opaxoffset(x1, y1, urdn)
 
     img = np.zeros((46*9 + 121, 46*9 + 121), np.double)
-    for xl, yl in zip(x1, y1):
+    for xl, yl, xo, yo in zip(x1, y1, x2, y2):
         if (xl - x0 + 26) < 0 or (xl - x0 + 26) > 52 or (yl - y0 + 26) < 0 or (yl - y0 + 26) > 52:
             shmask[xl, yl] = False
             continue
@@ -73,8 +77,9 @@ def make_vignetting_from_inverse_psf(urdn):
         sl = img[(xl - 1)*9: (xl - 1)*9 + 121, (yl - 1)*9: (yl - 1)*9 + 121]
         """
         sl = img[int((xl - x0 + 23.)*9) + 60 - 60: int((xl - x0 + 23.)*9) + 60 + 61, int((yl - y0 + 23.)*9) + 60 - 60: int((yl - y0 + 23.)*9) + 60 + 61]
-        """
         sl += ipsf[1].data[int(np.round(xl + 0.5 - x0)) + 26, int(np.round(yl + 0.5 - y0)) + 26, : sl.shape[0], :sl.shape[1]]
+        """
+        sl += np.copy(unpack_inverse_psf(xo, yo))
 
     dx = (np.arange(img.shape[0]) - img.shape[0]//2)/9.*DL
     return RegularGridInterpolator((dx, dx), img/img.max(), bounds_error=False, fill_value=0.)

@@ -125,7 +125,6 @@ def make_exposures(direction, te, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kw
     dtn = np.histogram(ts[idx], te, weights=dtn[idx])[0]
     return te, dtn
 
-
 def make_expmap_for_healpix(attdata, urdgtis, mpnum=MPNUM, dtcorr={}, subscale=4):
     if dtcorr:
         overall_gti = emptyGTI

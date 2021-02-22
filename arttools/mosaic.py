@@ -13,6 +13,8 @@ from math import sin, cos, sqrt, pi
 import asyncio
 import matplotlib.pyplot as plt
 from copy import copy
+from ctypes import c_bool
+import sys
 
 
 MPNUM = cpu_count()
@@ -57,28 +59,32 @@ class SkyImage(object):
     def _get_quat_rectangle(self, qval):
         ra, dec = vec_to_pol(qval.apply(self.corners))
         x, y = self.locwcs.all_world2pix(np.rad2deg([ra, dec]).T, 1).T - 0.5
-        print("x", x)
+        #print("x", x)
         jl, jr = max(int(x.min()), 0), min(self.img.shape[1], int(x.max()+1))
         il, ir = max(int(y.min()), 0), min(self.img.shape[0], int(y.max()+1))
         return il, ir, jl, jr
 
 
     def interpolate_vmap_for_qval(self, qval, norm, img=None):
+        #print("in")
         img = self.img if img is None else img
+        #print("set img")
         ra, dec = vec_to_pol(qval.apply(self.corners))
+        #print("set corners ra dec")
         x, y = self.locwcs.all_world2pix(np.rad2deg([ra, dec]).T, 1).T - 0.5
+        #print("set corners x y")
         jl, jr = max(int(x.min()), 0), min(self.img.shape[1], int(x.max()+1))
         il, ir = max(int(y.min()), 0), min(self.img.shape[0], int(y.max()+1))
+        #print("set corners i j")
         vecs = self.vecs[il:ir, jl:jr]
+        #print("set cell vectors")
         xl, yl = vec_to_offset(qval.apply(vecs.reshape((-1, 3)), inverse=True))
         img[il:ir, jl:jr] += norm*self.vmap((xl, yl)).reshape((ir - il, jr - jl))
 
-    @staticmethod
-    def collector(res, lock, qout):
+    def collector(self, qout):
         val = qout.get()
-        lock.acquire()
-        res[0] = res[0] + val
-        lock.release()
+        self.img = self.img + val
+        #print("check val", val.sum(), self.img.sum())
 
     @staticmethod
     def worker(locwcs, shape, x, y, vmapvals, qin, qout):
@@ -108,7 +114,7 @@ class SkyImage(object):
             qin = Queue(100)
             qout = Queue()
             res = [self.img, ]
-            collectors = [Thread(target=self.collector, args=(res, lock, qout)) for _ in range(mpnum)]
+            collectors = [Thread(target=self.collector, args=(qout,)) for _ in range(mpnum)]
             for collector in collectors:
                 collector.start()
 
@@ -164,17 +170,6 @@ class SkyImage(object):
             self.spread_events(tmpimg, self.locwcs, qvals[idx].apply(OPAX), norm[idx])
             img += convolve(tmpimg, core, mode="same")
 
-    @staticmethod
-    def init_img_and_vmap_buffers(imgcache, numpy_buffer, vmapcache, vmap):
-        cthread = current_thread()
-        imgcache[cthread] = next(numpy_buffer)
-        vmapcache[cthread] = copy(vmap)
-
-    def thread_permute_worker(self, q, bkg, scale, i, j):
-        cthread = current_thread()
-        print("unpack inverse psf at", i, j)
-        self.vmapcache[cthread].values = unpack_inverse_psf(i, j) #self.iPSF[i, j]
-        self.permute_with_rmap(q, bkg, scale, self.mask, self.vmapcache[cthread], self.imgcache[cthread])
 
     def permute_with_rmap(self, qval, bkg, scale, mask, vmap=None, img=None):
         vmap = self.vmap if vmap is None else vmap
@@ -183,29 +178,98 @@ class SkyImage(object):
         x, y = self.locwcs.all_world2pix(np.rad2deg([ra, dec]).T, 1).T - 0.5
         jl, jr = max(int(x.min()), 0), min(img.shape[1], int(x.max()+1))
         il, ir = max(int(y.min()), 0), min(img.shape[0], int(y.max()+1))
-        m = mask[il:ir, jl: jr]
-        """
-        vecs = self.vecs[il:ir, jl:jr]
-        xl, yl = vec_to_offset(qval.apply(vecs.reshape((-1, 3)), inverse=True))
-        img[il:ir, jl:jr] += scale*self.rfun(vmap((xl, yl)).reshape((ir - il, jr - jl)),
-                                                bkg, self.rmap[il:ir, jl:jr])
-        """
+        m = self.mask[il:ir, jl: jr]
         vecs = self.vecs[il:ir, jl:jr][m]
-        print(vecs.shape)
         xl, yl = vec_to_offset(qval.apply(vecs, inverse=True))
-        img[il:ir, jl:jr][m] += scale*self.rfun(vmap((xl, yl)),
-                                                bkg, self.rmap[il:ir, jl:jr][m])
+        aval = self.rfun(vmap((xl, yl)), bkg, scale*self.rmap[il:ir, jl:jr][m])
+        img[il:ir, jl:jr][m] += aval
 
+    def permute_thread_pool_worker(self, args):
+        sl, i, j = args
+        img = self.imgbuffer.pop(0)
+        vmap = self.vmapbuffer.pop(0)
+        vmap.values = unpack_inverse_psf(i, j)
+        for q, b, s in zip(self.qvals[sl], self.bkgs[sl], self.scales[sl]):
+            self.permute_with_rmap(q, b, s, vmap, img)
+        self.imgbuffer.append(img)
+        self.vmapbuffer.append(vmap)
 
     def permute_thread(self, rmap, qvals, x01, y01, bkgs, scales, mask, mpnum=MPNUM):
-        print("check info", scales.shape, rmap.shape, len(qvals), x01.size, y01.shape, mask.shape)
-        self.vmapcache = {}
-        self.imgcache = {}
         self.rmap = rmap
         self.mask = mask
-        imgs = [np.zeros(self.img.shape) for _ in range(mpnum)]
-        pool = ThreadPool(mpnum, initializer=SkyImage.init_img_and_vmap_buffers,
-                          initargs=(self.imgcache, iter(imgs), self.vmapcache, self.vmap))
-        print(list(self.imgcache.keys()), list(self.vmapcache.keys()))
-        pool.map(lambda args: self.thread_permute_worker(*args), zip(qvals, bkgs, scales, x01, y01))
-        return np.sum(imgs, axis=0)
+        self.imgbuffer = [np.zeros(self.img.shape, np.double) for _ in range(mpnum)]
+        self.vmapbuffer = [RegularGridInterpolator((self.vmap.grid[0], self.vmap.grid[1]), self.vmap.values, bounds_error=False, fill_value=0.0) for _ in range(mpnum)]
+        pool = ThreadPool(mpnum)
+
+        ijpairs, iidx, counts = np.unique(np.array([x01, y01]), axis=1, return_counts=True, return_inverse=True)
+        isidx = np.argsort(iidx)
+        ii = np.concatenate([[0,], np.cumsum(counts[:-1])])
+        self.bkgs = bkgs[isidx]
+        self.scales = scales[isidx]
+        self.qvals = qvals[isidx]
+        slices = [slice(s, e) for s, e in zip(ii, ii + counts)]
+
+        pool.map(self.permute_thread_pool_worker, zip(slices, ijpairs[0], ijpairs[1]))
+        return np.sum(self.imgbuffer, axis=0)
+
+    @staticmethod
+    def permute_mp_worker(rmapv, maskv, shape, locwcs, vmapgrid, qin, qout, rfun):
+        rmap = np.empty(shape, np.double)
+        mask = np.empty(shape, np.bool)
+        vmap = RegularGridInterpolator(vmapgrid, np.empty((vmapgrid[0].size, vmapgrid[1].size), np.double), fill_value=0., bounds_error=False)
+        np.copyto(rmap, np.frombuffer(rmapv).reshape(shape))
+        np.copyto(mask, np.frombuffer(maskv, np.bool).reshape(shape))
+        sky = SkyImage(locwcs, vmap)
+        sky.rmap = rmap
+        sky.mask = mask
+        while True:
+            vals = qin.get()
+            if vals == -1:
+                break
+            i, j, quats, bkgs, scales = vals
+            sky.vmap.values = unpack_inverse_psf(i, j)
+            for q, b, s in zip(quats, bkgs, scales):
+                sky.permute_with_rmap(q, b, s)
+        qout.put(sky.img)
+
+    def permute_mp(self, rmap, qvals, x01, y01, bkgs, scales, mask, mpnum=MPNUM):
+        rmapv = RawArray(rmap.dtype.char, rmap.size)
+        maskv = RawArray(c_bool, mask.size)
+        np.copyto(np.frombuffer(rmapv).reshape(rmap.shape), rmap)
+        np.copyto(np.frombuffer(maskv, np.bool).reshape(rmap.shape), mask)
+        lock = Lock()
+        qin = Queue(100)
+        qout = Queue()
+        res = [self.img, ]
+        collectors = [Thread(target=self.collector, args=(qout,)) for _ in range(mpnum)]
+        for collector in collectors:
+            collector.start()
+
+        pool = [Process(target=self.permute_mp_worker, args = \
+                        (rmapv, maskv, rmap.shape, self.locwcs, self.vmap.grid, qin, qout, self.rfun)) \
+                        for _ in range(mpnum)]
+
+        ijpairs, iidx, counts = np.unique(np.array([x01, y01]), axis=1, return_counts=True, return_inverse=True)
+        isidx = np.argsort(iidx)
+        ii = np.concatenate([[0,], np.cumsum(counts[:-1])])
+        bkgs = bkgs[isidx]
+        scales = scales[isidx]
+        qvals = qvals[isidx]
+        b = [bkgs[s:e] for s, e in zip(ii, ii + counts)]
+        s = [scales[s:e] for s, e in zip(ii, ii + counts)]
+        q = [qvals[s:e] for s, e in zip(ii, ii + counts)]
+
+        for worker in pool:
+            worker.start()
+
+        for i in range(counts.size):
+            qin.put([ijpairs[0, i], ijpairs[1, i], q[i], b[i], s[i]])
+            sys.stderr.write('\rdone {0:%}'.format(i/(counts.size - 1)))
+
+        for worker in pool:
+            qin.put(-1)
+
+        for collector in collectors:
+            collector.join()
+
+        return self.img

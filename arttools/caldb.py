@@ -231,7 +231,7 @@ def get_background_for_urdn(urdn):
     grid = {"RAW_X": x, "RAW_Y": y, "ENERGY": e, "GRADE": g}
 
     if el is None:
-        el, bkggti = pickle.load(open("/srg/a1/work/andrey/ART-XC/background/bkghist2.pickle", "rb"))
+        el, bkggti = pickle.load(open(os.path.join(ARTCALDBPATH, "bkghist2.pickle"), "rb"))
     return grid, el.get(urdn)/bkggti.get(urdn).exposure
 
 def get_overall_background():
@@ -243,12 +243,12 @@ def get_overall_background():
     grid = {"RAW_X": x, "RAW_Y": y, "ENERGY": e, "GRADE": g}
 
     if el is None:
-        el, bkggti = pickle.load(open("/srg/a1/work/andrey/ART-XC/background/bkghist2.pickle", "rb"))
+        el, bkggti = pickle.load(open(os.path.join(ARTCALDBPATH, "bkghist2.pickle"), "rb"))
     return grid, sum(el.values())
 
 @lru_cache(maxsize=1)
 def get_crabspec():
-    spec, ee, ge = pickle.load(open("/srg/a1/work/andrey/ART-XC/Crab/crabspec2.pkl", "rb"))
+    spec, ee, ge = pickle.load(open(os.path.join(ARTCALDBPATH, "crabspec2.pkl"), "rb"))
     grid = {"ENERGY": ee, "GRADE": ge}
     return grid, spec
 
@@ -286,15 +286,18 @@ def default_background_events_filter(energy=None, grade=None):
 
 @lru_cache(maxsize=7)
 def get_inverse_psf():
-    return fits.open("/srg/a1/work/srg/ARTCALDB/caldb_files/inverse_psf.fits")
-
+    return fits.open(os.path.join(ARTCALDBPATH, "inverse_psf.fits"))
 
 @lru_cache(maxsize=1)
 def get_inverse_psf_data():
-    ipsf = pickle.load(open("/srg/a1/work/andrey/ART-XC/PSF/invert_psf_v8_53pix.pickle", "rb"))
+    ipsf = pickle.load(open(os.path.join(ARTCALDBPATH, "invert_psf_v9_53pix.pickle"), "rb"))
+    return ipsf
+
+def get_inversed_psf_data_packed():
+    ipsf = fits.open(os.path.join(ARTCALDBPATH, "iPSF.fits"))
     return ipsf
 
 @lru_cache(maxsize=1)
-def get_inversed_psf_data_packed():
-    ipsf = fits.open("/srg/a1/work/andrey/ART-XC/iPSF.fits")
+def get_inverse_psf_datacube_packed():
+    ipsf = np.copy(get_inversed_psf_data_packed()["iPSF"].data)
     return ipsf
