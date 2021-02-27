@@ -24,6 +24,11 @@ from astropy import time as atime
 
 gyrocorrectionbti = GTI([[624390347, 624399808], [6.24410643e+08, 6.30954575e+08]])
 
+
+def normalize(vecs):
+    return vecs/np.sqrt(np.sum(vecs**2, axis=-1))[..., np.newaxis]
+
+
 def define_required_correction(attdata):
     """
     NAME
@@ -355,6 +360,10 @@ def get_photons_vectors(urddata, URDN, attdata, subscale=1):
     phvec = qall.apply(photonvecs)
     return phvec
 
+def add_ra_dec(urddata, urdn, attdata):
+    ra, dec = np.rad2deg(get_photons_sky_coord(urddata, urdn, attdata))
+    return np.lib.recfunctions.append_fields(udata, ["RA", "DEC"], [ra, dec], usemask=False)
+
 def get_photons_sky_coord(urddata, URDN, attdata, subscale=1):
     """
     converts eventlist event pixel information in to the ra and dec spherical coordinates of fk5 system
@@ -394,16 +403,48 @@ def quat_to_pol_and_roll(qfin, opaxis=[1, 0, 0], north=[0, 0, 1]):
     return:
         ra, dec, roll - attitude fk5 coordinates (ra, dec) and roll angle relative to north axis ! note that all angles are returned in radians
     """
-    opticaxis = qfin.apply(opaxis)
-    dec = np.arctan(opticaxis[:,2]/np.sqrt(opticaxis[:,1]**2 + opticaxis[:,0]**2))
-    ra = np.arctan2(opticaxis[:,1], opticaxis[:,0])%(2.*pi)
+    opticaxis = normalize(qfin.apply(opaxis))
+    dec = np.arcsin(opticaxis[:,2])
+    ra = np.arctan2(opticaxis[:,1], opticaxis[:,0])
 
-    yzprojection = np.cross(opticaxis, north)
-    yzprojection = yzprojection/np.sqrt(np.sum(yzprojection**2., axis=1))[:, np.newaxis]
+    yzprojection = normalize(np.cross(opticaxis, north))
 
     rollangle = np.arctan2(np.sum(yzprojection*qfin.apply([0, 1, 0]), axis=1),
                            np.sum(yzprojection*qfin.apply([0, 0, 1]), axis=1))
     return ra, dec, rollangle
+
+def ra_dec_roll_to_quat(ra, dec, roll, opaxis=[1, 0, 0], north=[0, 0, 1]):
+    """
+    inverse to quat to poll and roll
+    take as input 2 polar coordinates and roll angle and produces corresponding quaternion
+
+    for clarity in this implementation quaternion is produced with 3 consequtive rotation
+    1) rotate opax orthoganaly to galactic north z
+    2) rise opax towards galactic north
+    3) rotate is around obtained dirrection for roll angle
+
+    --------
+    Params:
+        quat - a set of quaternions in form of scipy.spatial.transform.Rotation container
+        opaxis - optical axis vector in sc frame
+        north - axis relative to which roll angle will be defined
+
+    return:
+        quaternions
+    """
+    vecs = pol_to_vec(*np.deg2rad([ra, dec])).reshape((-1, 3))
+    north = np.array(north)
+    proj = normalize(vecs - north*np.sum(vecs*north, axis=1)[:, np.newaxis])
+    alpha = np.arctan2(proj[:, 1], proj[:, 0])
+    qlon = Rotation.from_rotvec(north[np.newaxis, :]*alpha[:, np.newaxis])
+    print(proj - qlon.apply([1, 0, 0]))
+    rr = normalize(np.cross(proj, north))
+    qlat = Rotation.from_rotvec(rr*np.arcsin(np.sum(vecs*north, axis=1))[:, np.newaxis])
+    print(qlat.apply(proj) - vecs)
+    qrot = Rotation.from_rotvec(vecs*pi/2)*Rotation.from_rotvec(vecs*np.deg2rad(roll)[:, np.newaxis])
+    return qrot*qlat*qlon
+    #return qlat*qlon
+
 
 def earth_precession_quat(jyear):
     """
@@ -738,10 +779,21 @@ def align_with_z_quat(vec):
     q[3] = cos(alpha/2.)
     return Rotation(q)
 
+
+
 def get_attdata(fname):
     ffile = fits.open(fname)
-    attdata = read_gyro_fits(ffile["ORIENTATION"]) if "gyro" in fname else read_bokz_fits(ffile["ORIENTATION"])
-    tshift = get_device_timeshift("gyro" if "gyro" in fname else "bokz")
+    if "gyro" in fname:
+        attdata = read_gyro_fits(ffile["ORIENTATION"])
+        tshift = get_device_timeshift("gyro")
+    elif "bokz" in fname:
+        read_bokz_fits(ffile["ORIENTATION"])
+        tshift = get_device_timeshift("bokz")
+    elif "RA" in ffile[1].data.dtype.names:
+        tshift = get_device_timeshift("gyro")
+        d = ffile[1].data
+        attdata = AttDATA(d["TIME"], ra_dec_roll_to_quat(d["RA"], d["DEC"], d["ROLL"])*get_boresight_by_device("GYRO"))
+
     attdata.times = attdata.times - tshift
     attdata.gti.arr = attdata.gti.arr - tshift
     if "gyro" in fname:
