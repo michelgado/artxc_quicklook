@@ -7,7 +7,7 @@ from .planwcs import make_wcs_for_attdata
 from .caldb import get_energycal, get_shadowmask, get_energycal_by_urd, get_shadowmask_by_urd, urdbkgsc, OPAXOFFSET
 from .energy import get_events_energy
 from .telescope import URDNS
-from .orientation import get_photons_sky_coord, read_gyro_fits, read_bokz_fits, AttDATA, define_required_correction
+from .orientation import get_photons_sky_coord, read_gyro_fits, read_bokz_fits, AttDATA, define_required_correction, get_attdata, get_photons_vectors, vec_to_pol
 from .lightcurve import make_overall_lc, weigt_time_intervals
 from .vignetting import load_raw_wignetting_function
 from astropy.io import fits
@@ -26,6 +26,8 @@ from functools import reduce
 from collections import  namedtuple
 import pickle
 import glob
+
+import arttools
 
 eband = namedtuple("eband", ["emin", "emax"])
 
@@ -83,66 +85,57 @@ def make_sky_image(urddata, urdn, attdata, locwcs, photsplitside=10, weight_with
     return img/photsplitside/photsplitside
 
 
-def get_attdata(fname):
-    ffile = fits.open(fname)
-    attdata = read_gyro_fits(ffile["ORIENTATION"]) if "gyro" in fname else read_bokz_fits(ffile["ORIENTATION"])
-    attdata.times = attdata.times - (0.97 if "gyro" in fname else 1.55)
-    attdata.gti.arr = attdata.gti.arr - (0.97 if "gyro" in fname else 1.55)
-    if "gyro" in fname:
-        attdata = define_required_correction(attdata)
-    return attdata
-
-
 def make_skyimage_for_urdset_by_gti(urdflist, attflist, outctsname, gti=tGTI, photsplitnside=1,
-                                   pixsize=20/3600., usedtcorr=True, weightphotons=False,
+                                   pixsize=10/3600., usedtcorr=True, weightphotons=False,
                                    locwcs=None,
                                    **kwargs):
     attdata = AttDATA.concatenate([get_attdata(fname) for fname in set(attflist)])
     attdata = attdata.apply_gti(gti + [-30, 30])
     gti = attdata.gti & gti
 
+    imgfilter = arttools.filters.IndependentFilters(\
+                    {"ENERGY": arttools.interval.Intervals([4., 12.]),
+                     "GRADE": arttools.filters.RationalSet(range(10))})
+
+
     urdgti = {URDN:emptyGTI for URDN in URDNS}
     vecs = []
+    ra, dec = [], []
 
     for urdfname in urdflist[:]:
         urdfile = fits.open(urdfname)
         urdn = urdfile["EVENTS"].header["URDN"]
-        tchk = (urdfile["HK"].data["TIME"][1:] + urdfile['HK'].data["TIME"][:-1])/2.
         print("processing:", urdfname)
 
         locgti = (get_gti(urdfile, "STDGTI") if "STDGTI" in urdfile else get_gti(urdfile)) & gti & ~urdgti.get(urdn, emptyGTI) # & -urdbti.get(urdn, emptyGTI)
         locgti.merge_joint()
-        locbgti = (get_gti(urdfile, "STDGTI") if "STDGTI" in urdfile else get_gti(urdfile)) & (gti + [-200, 200]) & ~bkggti.get(urdn, emptyGTI)
-        print("exposure in GTI:", locgti.exposure)
-        locgti = locgti & ~urdbti.get(urdn, emptyGTI)
-        print("exposure after excluding BTI", locgti.exposure)
         if locgti.exposure == 0.:
             continue
+        imgfilter["RAWXY"] = arttools.filters.get_shadowmask_filter(urdn)
+        imgfilter["TIME"] = locgti
+
         urdgti[urdn] = urdgti.get(urdn, emptyGTI) | locgti
 
         urddata = np.copy(urdfile["EVENTS"].data) #hint: do not apply bool mask to a fitsrec - it's a stright way to the memory leak :)
-        urddata = urddata[(locgti).mask_external(urddata["TIME"])]
+        if not ("ENERGY" in urddata.dtype.names and "GRADE" in urddata.dtype.names):
+            urddata = arttools.energy.add_energies_and_grades(urddata, urdfile["HK"].data,
+                                                    arttools.caldb.get_energycal_by_urd(urdn))
+        if not ("RA" in urddata.dtype.names and "DEC" in urddata.dtype.names):
+            urddata = arttools.orientation.add_ra_dec(urddata, urdn, attdata)
 
-        hkdata = np.copy(urdfile["HK"].data)
-        hkdata = hkdata[(locgti + [-30, 30]).mask_external(hkdata["TIME"])]
-        urdhk[urdn] = urdhk.get(urdn, []) + [hkdata,]
+        urddata = urddata[imgfilter.apply(urddata)]
+        ra.append(urddata["RA"])
+        dec.append(urddata["DEC"])
 
-        energy, grade, flag = make_energies_flags_and_grades(urddata, hkdata, urdn)
-        timemask = locgti.mask_external(urddata["TIME"])
-        for bandname, band in ebands.items():
-            pickimg = np.all([energy > 4., energy < 12., grade > -1, grade < 10,
-                              flag == 0, locgti.mask_external(urddata["TIME"])], axis=0)
-            vecs.append(arttools.orientation.get_photons_vectors(urddata[pickimg], urdn, attdata, photsplitnside))
-        vecs = np.concatenate(vecs, axis=0)
-        ra, dec = arttools.orientation.vec_to_pol(vecs)
-        tgti = reduce(lambda a, b: a |b, urdgti.values())
-        locwcs = make_wcs_for_attdata(attdata, tgti, pixsize)
-        xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
-        img = np.zeros((ysize, xsize), np.double)
-        y, x = (locwcs.all_world2pix(np.rad2deg([ra, dec]).T, 1) - 0.5).astype(np.int).T
-        u, uc = np.unique(np.array([x, y]), axis=1, return_counts=True)
-        img[u[0], u[1]] = uc
-        fits.PrimaryHDU(data=img, header=locwcs.to_header()).write_to(outctsname)
+    ra, dec = np.concatenate(ra), np.concatenate(dec)
+    tgti = reduce(lambda a, b: a |b, urdgti.values())
+    locwcs = make_wcs_for_attdata(attdata, tgti, pixsize)
+    xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
+    img = np.zeros((ysize, xsize), np.double)
+    y, x = (locwcs.all_world2pix(np.array([ra, dec]).T, 1) - 0.5).astype(np.int).T
+    u, uc = np.unique(np.array([x, y]), axis=1, return_counts=True)
+    img[u[0], u[1]] = uc
+    fits.PrimaryHDU(data=img, header=locwcs.to_header()).writeto(outctsname)
 
 
 def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,

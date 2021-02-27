@@ -38,6 +38,7 @@ class SkyImage(object):
         self.shape = shape if not shape is None else [int(locwcs.wcs.crpix[1]*2 + 1), int(locwcs.wcs.crpix[0]*2 + 1)]
         self.img = np.zeros(self.shape, np.double)
         self.rfun = rfun
+        self.lock = Lock()
 
         self.y, self.x = np.mgrid[1:self.img.shape[0] + 1:1, 1:self.img.shape[1] + 1:1]
         self.ra, self.dec = self.locwcs.all_pix2world(np.array([self.x.ravel(), self.y.ravel()]).T, 1).T
@@ -66,25 +67,20 @@ class SkyImage(object):
 
 
     def interpolate_vmap_for_qval(self, qval, norm, img=None):
-        #print("in")
         img = self.img if img is None else img
-        #print("set img")
         ra, dec = vec_to_pol(qval.apply(self.corners))
-        #print("set corners ra dec")
         x, y = self.locwcs.all_world2pix(np.rad2deg([ra, dec]).T, 1).T - 0.5
-        #print("set corners x y")
         jl, jr = max(int(x.min()), 0), min(self.img.shape[1], int(x.max()+1))
         il, ir = max(int(y.min()), 0), min(self.img.shape[0], int(y.max()+1))
-        #print("set corners i j")
         vecs = self.vecs[il:ir, jl:jr]
-        #print("set cell vectors")
         xl, yl = vec_to_offset(qval.apply(vecs.reshape((-1, 3)), inverse=True))
         img[il:ir, jl:jr] += norm*self.vmap((xl, yl)).reshape((ir - il, jr - jl))
 
     def collector(self, qout):
         val = qout.get()
+        self.lock.acquire()
         self.img = self.img + val
-        #print("check val", val.sum(), self.img.sum())
+        self.lock.release()
 
     @staticmethod
     def worker(locwcs, shape, x, y, vmapvals, qin, qout):
@@ -171,7 +167,7 @@ class SkyImage(object):
             img += convolve(tmpimg, core, mode="same")
 
 
-    def permute_with_rmap(self, qval, bkg, scale, mask, vmap=None, img=None):
+    def permute_with_rmap(self, qval, bkg, scale, vmap=None, img=None):
         vmap = self.vmap if vmap is None else vmap
         img = self.img if img is None else img
         ra, dec = vec_to_pol(qval.apply(self.corners))
@@ -217,9 +213,11 @@ class SkyImage(object):
         rmap = np.empty(shape, np.double)
         mask = np.empty(shape, np.bool)
         vmap = RegularGridInterpolator(vmapgrid, np.empty((vmapgrid[0].size, vmapgrid[1].size), np.double), fill_value=0., bounds_error=False)
-        np.copyto(rmap, np.frombuffer(rmapv).reshape(shape))
         np.copyto(mask, np.frombuffer(maskv, np.bool).reshape(shape))
-        sky = SkyImage(locwcs, vmap)
+        rt = np.empty(mask.sum(), np.double)
+        np.copyto(rt, np.frombuffer(rmapv))
+        rmap[mask] = rt
+        sky = SkyImage(locwcs, vmap, rfun=rfun)
         sky.rmap = rmap
         sky.mask = mask
         while True:
@@ -228,16 +226,17 @@ class SkyImage(object):
                 break
             i, j, quats, bkgs, scales = vals
             sky.vmap.values = unpack_inverse_psf(i, j)
+            #print(i, j, bkgs.sum(), scales.sum(), sky.vmap.values.sum())
             for q, b, s in zip(quats, bkgs, scales):
                 sky.permute_with_rmap(q, b, s)
         qout.put(sky.img)
 
     def permute_mp(self, rmap, qvals, x01, y01, bkgs, scales, mask, mpnum=MPNUM):
-        rmapv = RawArray(rmap.dtype.char, rmap.size)
+        self.img[:, :] = 0.
         maskv = RawArray(c_bool, mask.size)
-        np.copyto(np.frombuffer(rmapv).reshape(rmap.shape), rmap)
+        rmapv = RawArray(rmap.dtype.char, int(mask.sum()))
+        np.copyto(np.frombuffer(rmapv), rmap[mask])
         np.copyto(np.frombuffer(maskv, np.bool).reshape(rmap.shape), mask)
-        lock = Lock()
         qin = Queue(100)
         qout = Queue()
         res = [self.img, ]
@@ -263,6 +262,7 @@ class SkyImage(object):
             worker.start()
 
         for i in range(counts.size):
+            #print(ijpairs[0, i], ijpairs[1, i], b[i].sum(), s[i].sum())
             qin.put([ijpairs[0, i], ijpairs[1, i], q[i], b[i], s[i]])
             sys.stderr.write('\rdone {0:%}'.format(i/(counts.size - 1)))
 
@@ -272,4 +272,7 @@ class SkyImage(object):
         for collector in collectors:
             collector.join()
 
-        return self.img
+        for worker in pool:
+            worker.join()
+
+        return np.copy(self.img)

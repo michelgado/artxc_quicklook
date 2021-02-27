@@ -409,8 +409,8 @@ def quat_to_pol_and_roll(qfin, opaxis=[1, 0, 0], north=[0, 0, 1]):
 
     yzprojection = normalize(np.cross(opticaxis, north))
 
-    rollangle = np.arctan2(np.sum(yzprojection*qfin.apply([0, 1, 0]), axis=1),
-                           np.sum(yzprojection*qfin.apply([0, 0, 1]), axis=1))
+    rollangle = np.arctan2(np.sum(yzprojection*qfin.apply([0, 0, 1]), axis=1),
+                           np.sum(yzprojection*qfin.apply([0, 1, 0]), axis=1))
     return ra, dec, rollangle
 
 def ra_dec_roll_to_quat(ra, dec, roll, opaxis=[1, 0, 0], north=[0, 0, 1]):
@@ -441,7 +441,7 @@ def ra_dec_roll_to_quat(ra, dec, roll, opaxis=[1, 0, 0], north=[0, 0, 1]):
     rr = normalize(np.cross(proj, north))
     qlat = Rotation.from_rotvec(rr*np.arcsin(np.sum(vecs*north, axis=1))[:, np.newaxis])
     print(qlat.apply(proj) - vecs)
-    qrot = Rotation.from_rotvec(vecs*pi/2)*Rotation.from_rotvec(vecs*np.deg2rad(roll)[:, np.newaxis])
+    qrot = Rotation.from_rotvec(-vecs*(pi + np.deg2rad(roll))[:, np.newaxis])
     return qrot*qlat*qlon
     #return qlat*qlon
 

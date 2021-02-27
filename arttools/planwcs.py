@@ -207,7 +207,9 @@ def minarea_ver2(vecs, pixsize=20./3600.):
     """
     vfidx = np.argmin(np.sum(vm*corners.vertices, axis=-1))
     alpha = get_angle_betwee_three_vectors(vm, corners.vertices[vfidx], [0, 0, 1])
+    print(alpha)
     size = int(np.arccos(np.sum(vm*corners.vertices[vfidx]))*180./pi/pixsize) + 2
+    print(size)
 
     locwcs = WCS(naxis=2)
     locwcs.wcs.crpix = [size, size]
