@@ -1,0 +1,13 @@
+#!python3
+import arttools
+import sys
+import glob
+
+gyrofiles, urdfiles, outimgname = sys.argv[1:4]
+gyrofiles = glob.glob(gyrofiles)
+urdfiles = glob.glob(urdfiles)
+print(gyrofiles)
+print(urdfiles)
+print(outimgname)
+arttools.plot.make_skyimage_for_urdset_by_gti(urdfiles, gyrofiles, outimgname)
+
