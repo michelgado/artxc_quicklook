@@ -72,7 +72,7 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, dtcorr={
     """
     if shape is None:
         ysize, xsize = int(wcs.wcs.crpix[0]*2 + 1), int(wcs.wcs.crpix[1]*2 + 1)
-        shape = [xsize, ysize]
+        shape = [(0, xsize), (0, ysize)]
 
     print(wcs)
     print(shape)
@@ -90,8 +90,8 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, dtcorr={
             print("exptime sum", exptime.sum())
             print("produce overall urds expmap")
             sky._set_core(vmap.grid[0], vmap.grid[1], vmap.values)
-            #sky.interpolate_thread(qval[:2], exptime[:2], mpnum)
-            sky.convolve(qval, exptime, mpnum)
+            sky.interpolate_mp(qval[:], exptime[:], mpnum)
+            #sky.convolve(qval, exptime, mpnum)
             #emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum)
             #emap = make_mosaic_expmap_mp_executor(shape, wcs, vmap, qval, exptime, mpnum)
             print("\ndone!")
@@ -106,8 +106,8 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, dtcorr={
                                                              dtcorr.get(urd, lambda x: 1))
         vmap = make_vignetting_for_urdn(urd) #, **kwargs)
         sky._set_core(vmap.grid[0], vmap.grid[1], vmap.values)
-        sky.convolve(qval, exptime, mpnum)
-        #sky.interpolate_thread(qval, exptime, mpnum)
+        #sky.convolve(qval, exptime, mpnum)
+        sky.interpolate_mp(qval, exptime, mpnum)
         #emap = make_mosaic_expmap_mp_executor(shape, wcs, vmap, qvals, exptime, mpnum) + emap
         #emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum) + emap
         print(" done!")

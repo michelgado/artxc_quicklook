@@ -2,9 +2,7 @@
 _det spatial module contains all simple function which treate spatial entities in the detector coordinate system - Y, Z along rawx rawy axis and X normal to the detectors plane
 whith that module you can convery spatial distances  in the detector plane from pixels to mm, convert offsets to vectors, corresponding to photons trajectoris in the detector plane
 there are also functions which can be used to create masks on the urd data to exclude pixels, located in the colimator and protection shawdow (since only part of the detector is open)
-
 """
-
 
 import numpy as np
 from math import pi
@@ -79,6 +77,7 @@ def offset_to_vec(x, y):
     outvec[..., 2] = -y
     return outvec/np.sqrt(np.sum(outvec**2, axis=1))[..., np.newaxis]
 
+
 #@cache_single_result_np
 def vec_to_offset(vec):
     """
@@ -90,6 +89,7 @@ def vec_to_offset(vec):
     returns: pair of numbers or arrays which are offsets in mm along rawx and rawy axis, corresponding to vector offset from optical axis
     """
     return vec[...,1]*F/vec[...,0], -vec[...,2]*F/vec[...,0]
+
 
 #@cache_single_result_np
 def vec_to_offset_pairs(vec):
@@ -189,5 +189,3 @@ def offset_to_qcorr(x, y):
 
 def get_qcorr_for_urddata(udata):
     return offset_to_qcorr(udata["RAW_X"], udata["RAW_Y"])
-
-

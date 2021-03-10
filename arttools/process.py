@@ -64,11 +64,18 @@ def analyze_survey(fpath, pastday=None):
 
     if not pastday is None:
         allfiles = os.listdir(os.path.join(pastday, "L0"))
-        gyrofiles += [os.path.join(pastday, "L0", l) for l in allfiles if "bokz.fits" in l]
+        gyrofiles += [os.path.join(pastday, "L0", l) for l in allfiles if "gyro.fits" in l]
         urdfiles += [os.path.join(pastday, "L0", l) for l in allfiles if "urd.fits" in l]
 
     attdata = AttDATA.concatenate([get_attdata(fname) for fname in set(gyrofiles)])
-    attdata = attdata.apply_gti(attdata.get_axis_movement_speed_gti(lambda x: (x > pi/180.*60./3600) & (x < pi/180.*120./3600.)))
+    gti = attdata.get_axis_movement_speed_gti(lambda x: (x > pi/180.*60./3600) & (x < pi/180.*120./3600.))
+    gti.remove_short_intervals(3.)
+    if gti.exposure == 0:
+        return None
+
+    print("overall exposure", gti.exposure)
+
+    attdata = attdata.apply_gti(gti + [3, -3])
     gtis = split_survey_mode(attdata)
 
     for k, sgti in enumerate(gtis):

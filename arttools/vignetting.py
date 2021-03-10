@@ -2,7 +2,7 @@ from .caldb import get_shadowmask_by_urd, get_vigneting_by_urd, OPAXOFFSET
 from scipy.interpolate import interp1d, RegularGridInterpolator
 from scipy.integrate import cumtrapz
 from ._det_spatial import offset_to_raw_xy, DL, F, \
-    offset_to_vec, vec_to_offset_pairs, vec_to_offset
+    offset_to_vec, vec_to_offset_pairs, vec_to_offset, offset_to_qcorr
 from .telescope import URDNS
 from .caldb import get_boresight_by_device, get_inverse_psf, get_optical_axis_offset_by_device
 from .psf import xy_to_opaxoffset, unpack_inverse_psf
@@ -67,6 +67,42 @@ def make_vignetting_from_inverse_psf(urdn):
     x, y = np.mgrid[0:48:1, 0:48:1]
     x1, y1 = x[shmask], y[shmask]
     x2, y2 = xy_to_opaxoffset(x1, y1, urdn)
+    q = offset_to_qcorr(x1, y1)
+    img = np.zeros((46*9 + 121 - 9, 46*9 + 121 - 9), np.double)
+    #xi, yi = np.mgrid[
+    #for
+
+
+    for xl, yl, xo, yo in zip(x1, y1, x2, y2):
+        if (xl - x0 + 26) < 0 or (xl - x0 + 26) > 52 or (yl - y0 + 26) < 0 or (yl - y0 + 26) > 52:
+            shmask[xl, yl] = False
+            continue
+        dx, dy = xl - x0, yl - y0
+        sl = img[(xl - 1)*9: (xl - 1)*9 + 121, (yl - 1)*9: (yl - 1)*9 + 121]
+        """
+        sl = img[int((xl - x0 + 23.)*9) + 60 - 60: int((xl - x0 + 23.)*9) + 60 + 61, int((yl - y0 + 23.)*9) + 60 - 60: int((yl - y0 + 23.)*9) + 60 + 61]
+        sl += ipsf[1].data[int(np.round(xl + 0.5 - x0)) + 26, int(np.round(yl + 0.5 - y0)) + 26, : sl.shape[0], :sl.shape[1]]
+        """
+        sl += np.copy(unpack_inverse_psf(xo, yo))
+
+    dx = (np.arange(img.shape[0]) - img.shape[0]//2)/9.*DL
+    return RegularGridInterpolator((dx, dx), img/img.max(), bounds_error=False, fill_value=0.)
+
+@lru_cache(maxsize=7)
+def make_vignetting_from_inverse_psf_ayut(urdn, egrid, spec):
+    if not urdn is None:
+        shmask = get_shadowmask_by_urd(urdn)
+        x0, y0 = get_optical_axis_offset_by_device(urdn)
+        print(x0, y0)
+    else:
+        x0, y0 = 23.5, 23.5
+        shmask = np.ones((48, 48), np.bool)
+        shmask[[0, -1], :] = False
+        shmask[:, [0, -1]] = False
+
+    x, y = np.mgrid[0:48:1, 0:48:1]
+    x1, y1 = x[shmask], y[shmask]
+    x2, y2 = xy_to_opaxoffset(x1, y1, urdn)
 
     img = np.zeros((46*9 + 121, 46*9 + 121), np.double)
     for xl, yl, xo, yo in zip(x1, y1, x2, y2):
@@ -83,6 +119,7 @@ def make_vignetting_from_inverse_psf(urdn):
 
     dx = (np.arange(img.shape[0]) - img.shape[0]//2)/9.*DL
     return RegularGridInterpolator((dx, dx), img/img.max(), bounds_error=False, fill_value=0.)
+
 
 @lru_cache(maxsize=7)
 def make_vignetting_for_urdn(urdn, energy=7.2, flat=False, phot_index=None,
@@ -199,8 +236,8 @@ def make_overall_vignetting(energy=7.2, *args,
         print("set subgrid to 2")
         subgrid = 2
     #x, y = np.meshgrid(np.linspace(-24., 24., 48*subgrid), np.np.linspace(-24., 24., 48*subgrid))
-    xmin, xmax = -28.*DL, 28.*DL
-    ymin, ymax = -28.*DL, 28.*DL
+    xmin, xmax = -40.*DL, 40.*DL
+    ymin, ymax = -40.*DL, 40.*DL
 
     vecs = offset_to_vec(np.array([xmin, xmax, xmax, xmin]),
                          np.array([ymin, ymin, ymax, ymax]))
@@ -228,5 +265,13 @@ def make_overall_vignetting(energy=7.2, *args,
         quat = get_boresight_by_device(urdn)
         newvmap += vmap(vec_to_offset_pairs(quat.apply(vecs, inverse=True))).reshape(shape)*urdweights.get(urdn, 1.)
 
-    vmap = RegularGridInterpolator((x[:, 0], y[0]), newvmap, bounds_error=False, fill_value=0)
+    mask = newvmap > 0.
+    mx = mask.any(axis=1)
+    my = mask.any(axis=0)
+    mask = mx[:, np.newaxis] & my[np.newaxis, :]
+    print(x.shape, mask.shape, newvmap.shape)
+    vmapnew = np.copy(newvmap[mx, :][:, my])
+    vmapnew[np.isnan(vmapnew)] = 0.0
+
+    vmap = RegularGridInterpolator((x[:, 0][mx], y[0][my]), vmapnew, bounds_error=False, fill_value=0)
     return vmap

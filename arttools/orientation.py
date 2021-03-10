@@ -23,6 +23,7 @@ from astropy.coordinates import SkyCoord
 from astropy import time as atime
 
 gyrocorrectionbti = GTI([[624390347, 624399808], [6.24410643e+08, 6.30954575e+08]])
+gyrocorrectionbti = emptyGTI #GTI([[624390347, 624399808], [6.24410643e+08, 6.30954575e+08]])
 
 
 def normalize(vecs):

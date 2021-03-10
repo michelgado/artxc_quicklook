@@ -81,6 +81,12 @@ class Corners(object):
         newcorners = newcorners/np.sqrt(np.sum(newcorners**2, axis=1))[:, np.newaxis]
         return Corners(newcorners)
 
+    @property
+    def area(self):
+        return get_vec_triangle_area(self.vertices[np.zeros(self.vertices.shape[0] - 2).astype(np.int)],
+                                     self.vertices[1:-1],
+                                     self.vertices[2:]).sum()*(180./pi)**2.
+
 def random_orthogonal_vec(vec):
     """
     for a given 3D vector in form of np.array(3)
@@ -437,8 +443,8 @@ def switch_between_corners_to_plane_axis(corners_or_axis):
     corners (or axis) is a set of 4 vectors at the edges (or orthorgonal to stright lines limiting image) of a desired image
     the corners (or axis) should be ordered
     """
-    vecs = np.cross(corners_or_axis, np.roll(corners_or_axis, -1, axis=0))
-    return vecs[::-1, :]/np.sqrt(np.sum(vecs**2, axis=1))[::-1, np.newaxis]
+    vecs = np.cross(corners_or_axis, np.roll(corners_or_axis, 1, axis=0))
+    return vecs/np.sqrt(np.sum(vecs**2, axis=1))[:, np.newaxis]
 
 PRIME_NUMBERS = np.array([1,   2,   3,   5,   7,  11,  13,  17,  19,  23,  29,  31,  37,
                          41,  43,  47,  53,  59,  61,  67,  71,  73,  79,  83,  89,  97,
@@ -466,14 +472,27 @@ def split_rectangle_on_sphere(axis, snum):
     """
     alpha = acos(-np.sum(axis[0]*axis[2]))
     beta = acos(-np.sum(axis[1]*axis[3]))
+    print(alpha, beta)
 
     smallside = get_split_side(snum, int(round(sqrt(snum)*min(alpha, beta)/sqrt(alpha*beta))) + 1)
     bigside = snum//smallside
-    dalpha = np.linspace(0, alpha, bigside  + 1 if alpha > beta else smallside + 1)
-    dbeta = np.linspace(0, beta, bigside + 1 if beta > alpha else smallside + 1)
+    print(smallside, bigside)
+    #dalpha = np.linspace(0, alpha, bigside  + 1 if alpha > beta else smallside + 1)
+    #dbeta = np.linspace(0, beta, bigside + 1 if beta > alpha else smallside + 1)
+    if alpha > beta:
+        smallside, bigside = bigside, smallside
 
-    xax = -(axis[0][np.newaxis, :]*np.cos(dalpha)[:, np.newaxis] + (-axis[2] - cos(alpha)*axis[0])[np.newaxis]*np.sin(dalpha)[:, np.newaxis]/sin(alpha))
-    yax = -(axis[1][np.newaxis, :]*np.cos(dbeta)[:, np.newaxis] + (-axis[3] - cos(beta)*axis[1])[np.newaxis]*np.sin(dbeta)[:, np.newaxis]/sin(beta))
+    rv1 = np.cross(axis[0], axis[2])
+    rv1 = rv1/np.sqrt(np.sum(rv1**2))
+    rv2 = np.cross(axis[1], axis[3])
+    rv2 = rv2/np.sqrt(np.sum(rv2**2))
+
+    r1 = Rotation.from_rotvec(-rv1[np.newaxis, :]*np.linspace(0., alpha, smallside + 1)[:, np.newaxis])
+    r2 = Rotation.from_rotvec(-rv2[np.newaxis, :]*np.linspace(0., beta, bigside + 1)[:, np.newaxis])
+    xax = r1.apply(axis[0])
+    yax = r2.apply(axis[1])
+    print(xax.shape)
+
     """
     xax2 = axis[2][np.newaxis, :]*np.cos(dalpha)[-2::-1, np.newaxis] + (axis[0] - cos(alpha)*axis[2])[np.newaxis]*np.sin(dalpha)[-2::-1, np.newaxis]/sin(alpha)
     yax2 = axis[3][np.newaxis, :]*np.cos(dbeta)[-2::-1, np.newaxis] + (axis[1] - cos(beta)*axis[3])[np.newaxis]*np.sin(dbeta)[-2::-1, np.newaxis]/sin(beta)
@@ -482,12 +501,14 @@ def split_rectangle_on_sphere(axis, snum):
     xax2 = xax2/np.sqrt(np.sum(xax2**2, axis=1))[:, np.newaxis]
     yax2 = yax2/np.sqrt(np.sum(yax2**2, axis=1))[:, np.newaxis]
     """
-    xax = xax/np.sqrt(np.sum(xax**2, axis=1))[:, np.newaxis]
-    yax = yax/np.sqrt(np.sum(yax**2, axis=1))[:, np.newaxis]
+    #xax = -(axis[0][np.newaxis, :]*np.cos(dalpha)[:, np.newaxis] + (-axis[2] - cos(alpha)*axis[0])[np.newaxis]*np.sin(dalpha)[:, np.newaxis]/sin(alpha))
+    #yax = -(axis[1][np.newaxis, :]*np.cos(dbeta)[:, np.newaxis] + (-axis[3] - cos(beta)*axis[1])[np.newaxis]*np.sin(dbeta)[:, np.newaxis]/sin(beta))
+    #xax = xax/np.sqrt(np.sum(xax**2, axis=1))[:, np.newaxis]
+    #yax = yax/np.sqrt(np.sum(yax**2, axis=1))[:, np.newaxis]
     grids = [np.array([xax[i%(xax.shape[0] - 1)], yax[i//(xax.shape[0] - 1)], -xax[i%(xax.shape[0] - 1) + 1], -yax[i//(xax.shape[0] - 1) + 1]]) for i in range(snum)]
 
-    if alpha > beta:
-        axisx = axis[0]*np.cos() + np.arange(bigside)[::-1]*axis[2]
+    #if alpha > beta:
+    #    axisx = axis[0]*np.cos() + np.arange(bigside)[::-1]*axis[2]
     return grids
 
 
