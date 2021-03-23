@@ -138,3 +138,7 @@ def get_events_crab_weights(grid, spec, udata):
     idxg = gidx[udata["GRADE"]]
     return spec[idxe, idxg]/np.sum(spec)
 
+def get_arf_energy_function(arf):
+    ec = (arf[1].data["ENERG_LO"] + arf[1].data["ENERG_HI"])/2.
+    return interp1d(ec, arf[1].data["SPECRESP"], bounds_error=False, fill_value=0.)
+

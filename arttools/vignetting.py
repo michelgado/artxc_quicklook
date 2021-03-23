@@ -1,11 +1,14 @@
 from .caldb import get_shadowmask_by_urd, get_vigneting_by_urd, OPAXOFFSET
 from scipy.interpolate import interp1d, RegularGridInterpolator
+from scipy.integrate import quad
 from scipy.integrate import cumtrapz
+from .energy  import get_arf_energy_function
 from ._det_spatial import offset_to_raw_xy, DL, F, \
     offset_to_vec, vec_to_offset_pairs, vec_to_offset, offset_to_qcorr
 from .telescope import URDNS
-from .caldb import get_boresight_by_device, get_inverse_psf, get_optical_axis_offset_by_device
-from .psf import xy_to_opaxoffset, unpack_inverse_psf
+from .interval import Intervals
+from .caldb import get_boresight_by_device, get_inverse_psf, get_optical_axis_offset_by_device, get_arf
+from .psf import xy_to_opaxoffset, unpack_inverse_psf, unpack_inverse_psf_ayut
 import numpy as np
 from math import log10, pi, sin, cos
 from functools import lru_cache
@@ -89,7 +92,8 @@ def make_vignetting_from_inverse_psf(urdn):
     return RegularGridInterpolator((dx, dx), img/img.max(), bounds_error=False, fill_value=0.)
 
 @lru_cache(maxsize=7)
-def make_vignetting_from_inverse_psf_ayut(urdn, egrid, spec):
+def make_vignetting_from_inverse_psf_ayut(urdn, emin=4., emax=12., phot_index=2.):
+    arf = get_arf_energy_function(get_arf())
     if not urdn is None:
         shmask = get_shadowmask_by_urd(urdn)
         x0, y0 = get_optical_axis_offset_by_device(urdn)
@@ -100,22 +104,63 @@ def make_vignetting_from_inverse_psf_ayut(urdn, egrid, spec):
         shmask[[0, -1], :] = False
         shmask[:, [0, -1]] = False
 
+    ee = np.array([4., 6., 8., 10., 12., 16., 20., 24., 30.])
+    eidx = np.searchsorted(ee, [emin, emax]) - [1, -1]
+    eidx[0] = max(eidx[0], 0)
+    eidx[1] = min(eidx[1], ee.size)
+    print(eidx)
+    eel = np.copy(ee[eidx[0]: eidx[1]])
+    eel[0] = max(emin, eel[0])
+    eel[-1] = min(emax, eel[-1])
+
+    w = [quad(lambda e: arf(e)*e**-phot_index, emin, emax)[0] for emin, emax in zip(eel[:-1], eel[1:])]
+    w = np.array(w)
+    w = w/w.sum()
+    print(w.size, w, eel, eidx)
+
     x, y = np.mgrid[0:48:1, 0:48:1]
     x1, y1 = x[shmask], y[shmask]
     x2, y2 = xy_to_opaxoffset(x1, y1, urdn)
 
-    img = np.zeros((46*9 + 121, 46*9 + 121), np.double)
+    img = np.zeros((46*9 + 121 - 9, 46*9 + 121 - 9), np.double)
     for xl, yl, xo, yo in zip(x1, y1, x2, y2):
-        if (xl - x0 + 26) < 0 or (xl - x0 + 26) > 52 or (yl - y0 + 26) < 0 or (yl - y0 + 26) > 52:
-            shmask[xl, yl] = False
-            continue
         dx, dy = xl - x0, yl - y0
         sl = img[(xl - 1)*9: (xl - 1)*9 + 121, (yl - 1)*9: (yl - 1)*9 + 121]
-        """
-        sl = img[int((xl - x0 + 23.)*9) + 60 - 60: int((xl - x0 + 23.)*9) + 60 + 61, int((yl - y0 + 23.)*9) + 60 - 60: int((yl - y0 + 23.)*9) + 60 + 61]
-        sl += ipsf[1].data[int(np.round(xl + 0.5 - x0)) + 26, int(np.round(yl + 0.5 - y0)) + 26, : sl.shape[0], :sl.shape[1]]
-        """
-        sl += np.copy(unpack_inverse_psf(xo, yo))
+        lipsf = np.sum(unpack_inverse_psf_ayut(xo, yo)[eidx[0]:eidx[1] - 1]*w[:, np.newaxis, np.newaxis], axis=0)
+        sl += lipsf
+
+    dx = (np.arange(img.shape[0]) - img.shape[0]//2)/9.*DL
+    return RegularGridInterpolator((dx, dx), img/img.max(), bounds_error=False, fill_value=0.)
+
+def make_vignetting_from_inverse_psf_ayut_cspec(urdn, egrid, cspec):
+    arf = get_arf_energy_function(get_arf())
+    if not urdn is None:
+        shmask = get_shadowmask_by_urd(urdn)
+        x0, y0 = get_optical_axis_offset_by_device(urdn)
+        print(x0, y0)
+    else:
+        x0, y0 = 23.5, 23.5
+        shmask = np.ones((48, 48), np.bool)
+        shmask[[0, -1], :] = False
+        shmask[:, [0, -1]] = False
+
+    ee = np.array([4., 6., 8., 10., 12., 16., 20., 24., 30.])
+    egloc = np.unique(np.concatenate([egrid, ee]))
+    ec = (egloc[1:] + egloc[:-1])/2.
+    cspec = np.concatenate([cspec/cspec.sum()/np.diff(egrid), [0, ]])
+    w = cspec[np.searchsorted(egrid, ec) - 1]*np.diff(egloc)
+    eidx = np.searchsorted(ee, ec) - 1
+
+    x, y = np.mgrid[0:48:1, 0:48:1]
+    x1, y1 = x[shmask], y[shmask]
+    x2, y2 = xy_to_opaxoffset(x1, y1, urdn)
+
+    img = np.zeros((46*9 + 121 - 9, 46*9 + 121 - 9), np.double)
+    for xl, yl, xo, yo in zip(x1, y1, x2, y2):
+        dx, dy = xl - x0, yl - y0
+        sl = img[(xl - 1)*9: (xl - 1)*9 + 121, (yl - 1)*9: (yl - 1)*9 + 121]
+        lipsf = np.sum(unpack_inverse_psf_ayut(xo, yo)[eidx]*w[:, np.newaxis, np.newaxis], axis=0)
+        sl += lipsf
 
     dx = (np.arange(img.shape[0]) - img.shape[0]//2)/9.*DL
     return RegularGridInterpolator((dx, dx), img/img.max(), bounds_error=False, fill_value=0.)

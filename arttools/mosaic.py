@@ -159,10 +159,25 @@ class SkyImage(object):
         xy = xy.astype(np.int)
         np.add.at(img, (xy[:, 1], xy[:, 0]), 1 if weights is None else weights)
 
-    def convolve(self, qvals, norm, shape, dalpha=pi/180./10., img=None):
+    def convolve_worker(self, args):
+        angle, idx = args
+        tmpimg = np.zeros(img.shape, np.double)
+        q = make_quat_for_wcs(self.locwcs, self.img.shape[1]//2, self.img.shape[0]//2, angle)
+        il, ir, jl, jr = self._get_quat_rectangle(q)
+        self.interpolate_vmap_for_qval(q, 1, tmpimg)
+        core = np.copy(tmpimg[il: ir, jl: jr])
+        tmpimg[il: ir, jl: jr] = 0.
+        self.spread_events(tmpimg, self.locwcs, qvals[idx].apply(OPAX), norm[idx])
+        return convolve(tmpimg, core, mode="same")
+
+
+    def convolve(self, qvals, norm, shape, dalpha=pi/180./2., img=None, mpnum=MPNUM):
         img = self.img if img is None else img
         angles = get_wcs_roll_for_qval(self.locwcs, qvals)
         u, ii = np.unique((angles/dalpha).astype(np.int), return_inverse=True)
+        pool = ThreadPool(mpnum)
+        img = sum(pool.imap(self.convolve_worker, zip(u*dalpha + dalpha/2., (np.where(ii == i)[0]  for i in xrange(u.size)))))
+        """
         for i, angle in enumerate(u*dalpha + dalpha/2.):
             idx = np.where(ii == i)[0]
             tmpimg = np.zeros(img.shape, np.double)
@@ -173,7 +188,7 @@ class SkyImage(object):
             tmpimg[il: ir, jl: jr] = 0.
             self.spread_events(tmpimg, self.locwcs, qvals[idx].apply(OPAX), norm[idx])
             img += convolve(tmpimg, core, mode="same")
-
+        """
 
     def permute_with_rmap(self, qval, bkg, scale, vmap=None, img=None):
         vmap = self.vmap if vmap is None else vmap
@@ -196,13 +211,6 @@ class SkyImage(object):
                 core = vmap((xl, yl))
                 rl = self.rmap[il:ir, jl:jr][mt]*scale
             aval = self.rfun(core, bkg, rl)
-            """
-            print(core)
-            print(mt.sum(), mt.size, il, ir, jl, jr)
-            print(xl.min(), xl.max(), yl.min(), yl.max())
-            #print("add this", aval.sum(),)
-            print("comute for", rl.size, aval.sum(), mt.sum())
-            """
             img[il:ir, jl:jr][mt] += aval
 
     def permute_thread_pool_worker(self, args):
@@ -336,17 +344,8 @@ class SkyImage(object):
     @classmethod
     def permute_mp_2_worker(cls, args):
         shape, rmap, emap, mask, qvals, x01, y01, bkgs, scales, locwcs = args
-        #print(shape, x01.size)
-        """
-        import matplotlib.pyplot as plt
-        plt.subplot(131)
-        plt.imshow(emap)
-        plt.subplot(132)
-        plt.imshow(rmap)
-        """
         vmap = get_ipsf_interpolation_func()
         sky = cls(locwcs, vmap, shape)
-        #print(sky.img.shape, mask.shape)
         ctot = np.zeros(sky.img.shape, np.double)
         for i in range(2):
             sky.img[:, :] = 0.
@@ -356,11 +355,6 @@ class SkyImage(object):
             rmap = np.copy(sky.img/emap)
             if not np.any(mask):
                 break
-        """
-        plt.subplot(133)
-        plt.imshow(ctot)
-        plt.show()
-        """
         return sky.shape, ctot
 
     def permute_mp_2(self, rmap, emap, qvals, x01, y01, bkgs, scales, mask, mdet, mpnum=MPNUM):
@@ -395,90 +389,8 @@ class SkyImage(object):
 
         qvecs = qvals.apply([1, 0, 0])
         masks = ThreadPool(mpnum).map(lambda g: g.check_inside_polygon(qvecs), grid)
-
-        """
-        print(masks[7].sum())
-        sky = SkyImage(self.locwcs, self.vmap, shapes[7])
-        sky.mask = mslice[7]
-        sky.rmap = rslice[7]
-        sky.detm = np.zeros(sky.mask.shape, np.bool)
-        import pyds9
-        from astropy.io import fits
-        import matplotlib.pyplot as plt
-        ds9 = pyds9.DS9("test")
-        time.sleep(4.)
-        ra, dec = np.rad2deg(vec_to_pol(sky.vecs.reshape((-1, 3))))
-        print(ra.min(), ra.max(), dec.min(), dec.max())
-        print(ra.size, dec.size)
-        for r, d in zip(ra[::100], dec[::100]):
-            ds9.set("regions", 'fk5; circle %.5f %.5f 50" # color="cyan"' % (r, d))
-        ra, dec = np.rad2deg(vec_to_pol(qvals[masks[7]].apply([1, 0, 0])))
-        print(ra.min(), ra.max(), dec.min(), dec.max())
-        ds9.set_pyfits(fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(emap, header=self.locwcs.to_header())]))
-        for r, d in zip(ra[::50], dec[::50]):
-            ds9.set("regions", 'fk5; circle %.5f %.5f 50"' % (r, d))
-
-        ra, dec = np.rad2deg(vec_to_pol(sky.vecs[[0, -1, -1, 0], [0, 0, -1, -1]]))
-        print("fk5; polygon " + " ".join(np.array([ra, dec]).T.ravel().astype(np.str)) + ' # color="red"' )
-        print("compute on", mslice[7].sum())
-        ds9.set("regions", "fk5; polygon " + " ".join(np.array([ra, dec]).T.ravel().astype(np.str))  + ' # color="red"')
-
-        ra, dec = np.rad2deg(vec_to_pol(qvals[masks[7]][6].apply([1, 0, 0])))
-        ds9.set("regions", 'fk5; circle %.6f %.6f 60" # color="red"' % (ra, dec))
-        sky.vmap.values = unpack_inverse_psf(x01[masks[7]][6], y01[masks[7]][6])
-        plt.imshow(sky.vmap.values)
-        plt.show()
-
-        sky.permute_with_rmap(qvals[masks[7]][6], bkgs[masks[7]][6], scales[masks[7]][6])
-        plt.imshow(sky.img)
-        plt.show()
-        sky.permute_banch(rslice[7], qvals[masks[7]], x01[masks[7]], y01[masks[7]], bkgs[masks[7]], scales[masks[7]], mslice[7])
-        import matplotlib.pyplot as plt
-        plt.subplot(131)
-        plt.imshow(eslice[7])
-        plt.subplot(132)
-        plt.imshow(rslice[7])
-        plt.subplot(133)
-        plt.imshow(sky.img)
-        plt.show()
-        """
-
         pool = Pool(mpnum)
-        """
-        import pyds9
-        import time
-        from astropy.io import fits
-        ds9 = pyds9.DS9("tmp")
-        time.sleep(3)
-        import matplotlib.pyplot as plt
-        from copy import copy
-        for k in range(snum):
-            #print(shapes[0], eslice[0].sum())
-            ra, dec = np.rad2deg(vec_to_pol(qvecs[masks[k]]))
-            #wcs = copy(self.locwcs)
-            #wcs.wcs.crpix = wcs.wcs.crpix - [shapes[k][1][0], shapes[k][0][0]]
-            print("events", masks[k].sum())
-            r = self.permute_mp_2_worker([shapes[k], rslice[k], eslice[k], mslice[k], qvals[masks[k]],
-                                      x01[masks[k]], y01[masks[k]], bkgs[masks[k]], scales[masks[k]], self.locwcs])
-            i = k%smallside
-            j = k//smallside
-            self.img[:, :] = 0.
-            self.img[x[i]:x[i + 1], y[j]: y[j + 1]] = 1. #r[:, :]
-
-            ds9.set_pyfits(fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(data=self.img, header=self.locwcs.to_header())]))
-            for r, d in zip(ra, dec):
-                ds9.set("regions", 'fk5; circle %.6f %.6f 30"' % (r, d))
-            time.sleep(30.)
-            #plt.imshow(r)
-        pause
-        """
         for shape, r in pool.imap(self.permute_mp_2_worker, zip(shapes, rslice, eslice, mslice, (qvals[m] for m in masks),
                                                                 (x01[m] for m in masks), (y01[m] for m in masks),
                                                                 (bkgs[m] for m in masks), (scales[m] for m in masks), cycle([self.locwcs,]))):
-            print(shape, r.shape, type(r))
-            #plt.imshow(r)
-            #plt.show()
             np.copyto(self.img[shape[0][0]:shape[0][1], shape[1][0]: shape[1][1]], r)
-        from matplotlib.colors import LogNorm
-        plt.imshow(self.img, norm=LogNorm())
-        plt.show()

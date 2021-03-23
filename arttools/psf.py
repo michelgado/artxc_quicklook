@@ -1,5 +1,5 @@
 from .caldb import get_optical_axis_offset_by_device, get_inverse_psf_data, \
-        get_inversed_psf_data_packed, get_inverse_psf_datacube_packed
+        get_inversed_psf_data_packed, get_inverse_psf_datacube_packed, get_ayut_inverse_psf_datacube_packed
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
@@ -40,13 +40,56 @@ def unpack_inverse_psf(i, j):
         ja, ia = ia, ja
     k = (ia + 1)*ia//2 + ja
     data = get_inverse_psf_datacube_packed()[k]
+    if abs(j) > abs(i):
+        data = np.transpose(data)
     if i < 0:
         data = np.flip(data, axis=0)
     if j < 0:
         data = np.flip(data, axis=1)
-    if abs(j) > abs(i):
-        data = np.transpose(data)
     return data
+
+ayutee = np.array([4., 6., 8., 10., 12., 16., 20., 24., 30.])
+
+def unpack_inverse_psf_ayut(i, j, e=None):
+    """
+    inverse psf is an integral of the product of psf and vignetting over ART-XC detectors pixels
+    since this characteristics is a result of integral we cannot use differential approximation to extract
+    PSF - (for psf we can use only one parameter - offset from optical axis)
+    But! we can account for pixel symmetries and store only 1/8 of the data since rest can be restored with
+    the help of square pixel symmetries - transposition and two mirror mappings
+
+    k = i*(i - 1)/2 + j
+
+
+    i = int(sqrt(k + 1/4) + 1/2)
+    j = k - i*(i-1)
+
+    symmetries
+    i < 0 : inverse y
+    j < 0 : inverse x
+    i < j : transpose
+    """
+    ia = abs(i)
+    ja = abs(j)
+    if ja > ia:
+        ja, ia = ia, ja
+    k = (ia + 1)*ia//2 + ja
+    data = get_ayut_inverse_psf_datacube_packed()
+    data = data[k]
+    if abs(j) > abs(i):
+        print("tranpose")
+        data = np.transpose(data, axes=(0, 2, 1))
+    if i < 0:
+        print("invert  x")
+        data = np.flip(data, axis=1)
+    if j < 0:
+        print("invert  y")
+        data = np.flip(data, axis=2)
+    if not e is None:
+        return data[np.searchsorted(ayutee, e) - 1]
+    else:
+        return data
+
 
 def get_ipsf_interpolation_func():
     ipsf = get_inversed_psf_data_packed()

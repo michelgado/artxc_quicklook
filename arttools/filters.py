@@ -88,7 +88,7 @@ class IndependentFilters(dict):
 
 def get_shadowmask_filter(urdn):
     shmask = get_shadowmask_by_urd(urdn)
-    if urdn == 2:
+    if urdn == 22:
         shmask[[45, 46], :] = False
     return InversedIndexMask(zip(["RAW_X", "RAW_Y"], [strightindex, strightindex]), shmask)
 

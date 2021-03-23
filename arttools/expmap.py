@@ -60,7 +60,7 @@ def make_mosaic_expmap_mp_executor(shape, wcs, vmap, qvals, exptime, mpnum):
 
     return res[0]
 
-def make_expmap_for_wcs(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, dtcorr={}, **kwargs):
+def make_expmap_for_wcs(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, dtcorr={}, kind="direct", **kwargs):
     """
     produce exposure map on the provided wcs area, with provided GTI and attitude data
 
@@ -74,6 +74,8 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, dtcorr={
         ysize, xsize = int(wcs.wcs.crpix[0]*2 + 1), int(wcs.wcs.crpix[1]*2 + 1)
         shape = [(0, xsize), (0, ysize)]
 
+    if kind not in ["direct", "convolve"]:
+        raise ValueError("only  convolve and direct option for exposure mosiac is available")
     print(wcs)
     print(shape)
 
@@ -90,8 +92,10 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, dtcorr={
             print("exptime sum", exptime.sum())
             print("produce overall urds expmap")
             sky._set_core(vmap.grid[0], vmap.grid[1], vmap.values)
-            sky.interpolate_mp(qval[:], exptime[:], mpnum)
-            #sky.convolve(qval, exptime, mpnum)
+            if kind == "direct":
+                sky.interpolate_mp(qval[:], exptime[:], mpnum)
+            elif kind == "convolve":
+                sky.convolve(qval, exptime, mpnum)
             #emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum)
             #emap = make_mosaic_expmap_mp_executor(shape, wcs, vmap, qval, exptime, mpnum)
             print("\ndone!")
@@ -106,8 +110,10 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, dtcorr={
                                                              dtcorr.get(urd, lambda x: 1))
         vmap = make_vignetting_for_urdn(urd) #, **kwargs)
         sky._set_core(vmap.grid[0], vmap.grid[1], vmap.values)
-        #sky.convolve(qval, exptime, mpnum)
-        sky.interpolate_mp(qval, exptime, mpnum)
+        if kind == "direct":
+            sky.interpolate_mp(qval[:], exptime[:], mpnum)
+        elif kind == "convolve":
+            sky.convolve(qval, exptime, mpnum)
         #emap = make_mosaic_expmap_mp_executor(shape, wcs, vmap, qvals, exptime, mpnum) + emap
         #emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum) + emap
         print(" done!")

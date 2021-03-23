@@ -134,8 +134,8 @@ def get_gti(ffile, gtiextname="GTI", excludebki=True, merge_interval_dt=None):
         gaps = gti.arr.ravel()[1:-1].reshape((-1, 2)) # get bounds of the gaps between gti
         crate = -np.subtract.reduce(np.searchsorted(ffile["EVENTS"].data["TIME"], gti.arr), axis=1)/(gti.arr[:,1] - gti.arr[:,0])
         garr = np.copy(gti.arr)
-        garr[1:, 0] -= 3./crate[1:]
-        garr[:-1, 1] += 3./crate[:-1]
+        garr[1:, 0] -= 5./crate[1:]
+        garr[:-1, 1] += 5./crate[:-1]
         gti = GTI(garr)
 
     gti = gti & make_hv_gti(ffile["HK"].data)

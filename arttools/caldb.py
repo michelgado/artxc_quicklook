@@ -301,3 +301,16 @@ def get_inversed_psf_data_packed():
 def get_inverse_psf_datacube_packed():
     ipsf = np.copy(get_inversed_psf_data_packed()["iPSF"].data)
     return ipsf
+
+def get_ayut_inversed_psf_data_packed():
+    ipsf = fits.open(os.path.join(ARTCALDBPATH, "iPSF_ayut.fits"))
+    return ipsf
+
+@lru_cache(maxsize=1)
+def get_ayut_inverse_psf_datacube_packed():
+    ipsf = np.copy(get_ayut_inversed_psf_data_packed()[1].data)
+    return ipsf
+
+
+def get_arf():
+    return fits.open(os.path.join(ARTCALDBPATH, "artxc_arf_v000.fits"))
