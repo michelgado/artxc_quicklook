@@ -1,4 +1,6 @@
 from collections import OrderedDict
+import numpy as np
+
 
 URDNS = (28, 22, 23, 24, 25, 26, 30)
 TELESCOPES = ("T1", "T2", "T3", "T4", "T5", "T6", "T7")
@@ -30,8 +32,11 @@ def ordered_map(function, *tdicts, **kwargs):
 
 def do_for_all_telescopes(function):
     def newfunc(*tdicts, **kargs):
-        return ordered_map(function, **tdicts, **kwargs)
+        return ordered_map(function, *tdicts, **kwargs)
     return newfunc
 
 def to_ordered(d):
     return OrderedDict(zip(URDNS, [d[urdn] for urdn in URDNS]))
+
+def concat_data_in_order(urddicts):
+    return np.concatenate([urddicts[urdn] for urdn in URDNS if urdn in urddicts])
