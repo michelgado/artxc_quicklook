@@ -258,12 +258,15 @@ class AttDATA(SlerpWithNaiveIndexing):
         return AttDATA(te, self(te), gti=self.gti)
 
     def circ_gti(self, vec, app=pi/180*100/3600., ax=OPAX):
+        """
         te, gaps = self.gti.make_tedges(self.times)
         vc = self((te[1:] + te[:-1])/2.).apply(ax)
         mask = np.sum(vc*vec, axis=1) > cos(app)
         mask[~gaps] = False
         lgti = GTI(te[medges(mask)])
-        return lgti
+        """
+        frac, gti = slerp_circ_aperture_exposure(self, vec, app, ax)
+        return gti
 
     def rect_gti(self, rect):
         pass
@@ -500,7 +503,6 @@ def make_quat_for_wcs(wcs, x, y, roll):
     rvec = rvec/np.sqrt(np.sum(rvec**2))
     q0 = Rotation.from_rotvec(rvec*alpha)
     beta = get_wcs_roll_for_qval(wcs, q0)[0]
-    print(beta*180/pi)
     return Rotation.from_rotvec(vec*(roll - beta))*q0
 
 def get_axis_movement_speed(attdata):
@@ -712,7 +714,6 @@ def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
     maskoutofapp = np.logical_and(alpha + appsize*pi/180/3600 > beta,
                                   alpha - appsize*pi/180/3600 < beta)
     cosa, cosb, rmod, rvec, a0 = [arr[maskoutofapp] for arr in (cosa, cosb, rmod, rvec, a0)]
-    print(cosa, cosb, cose)
     sinbsq = 1 - cosb**2
 
     a = rvec*((cosa - cose*cosb)/sinbsq)[:, np.newaxis] + \
@@ -738,9 +739,13 @@ def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
 
     m2 = np.copy(mask)
     m2[m2] = maskoutofapp
+    t1 = slerp.times[:-1][m2] + slerp.timedelta[m2]*np.maximum(phi1, 0)/rmod
+    t2 = slerp.times[:-1][m2] + slerp.timedelta[m2]*np.minimum(phi2, rmod)/rmod
+    gti = GTI(np.array([t1, t2]).T)
+    gti.merge_joint()
 
     frac[m2] = np.maximum((np.minimum(phi2, rmod) - np.maximum(phi1, 0)), 0)/rmod #*slerp.timedelta[m2]
-    return frac
+    return frac, gti
 
 def minimize_norm_to_survey(attdata, rpvec):
     """
@@ -788,7 +793,7 @@ def get_attdata(fname):
         attdata = read_gyro_fits(ffile["ORIENTATION"])
         tshift = get_device_timeshift("gyro")
     elif "bokz" in fname:
-        read_bokz_fits(ffile["ORIENTATION"])
+        attdata = read_bokz_fits(ffile["ORIENTATION"])
         tshift = get_device_timeshift("bokz")
     elif "RA" in ffile[1].data.dtype.names:
         tshift = get_device_timeshift("gyro")
@@ -800,3 +805,7 @@ def get_attdata(fname):
     if "gyro" in fname:
         attdata = define_required_correction(attdata)
     return attdata
+
+
+def attdata_for_urd(att, urdn):
+    return att*get_boresight_by_device(urdn)
