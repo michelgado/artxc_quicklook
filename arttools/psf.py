@@ -4,7 +4,8 @@ import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
 def xy_to_opaxoffset(x, y, urdn):
-    x0, y0 = get_optical_axis_offset_by_device(urdn)
+    print("urdn:", urdn)
+    x0, y0 = (23, 23) if urdn is None else get_optical_axis_offset_by_device(urdn)
     return np.round(x + 0.5 - x0).astype(np.int), np.round(y + 0.5 - y0).astype(np.int)
 
 def rawxy_to_opaxoffset(urddata, urdn):
@@ -77,13 +78,10 @@ def unpack_inverse_psf_ayut(i, j, e=None):
     data = get_ayut_inverse_psf_datacube_packed()
     data = data[k]
     if abs(j) > abs(i):
-        print("tranpose")
         data = np.transpose(data, axes=(0, 2, 1))
     if i < 0:
-        print("invert  x")
         data = np.flip(data, axis=1)
     if j < 0:
-        print("invert  y")
         data = np.flip(data, axis=2)
     if not e is None:
         return data[np.searchsorted(ayutee, e) - 1]

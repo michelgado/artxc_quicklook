@@ -213,7 +213,6 @@ def minarea_ver2(vecs, pixsize=20./3600.):
     """
     vfidx = np.argmin(np.sum(vm*corners.vertices, axis=-1))
     alpha = get_angle_betwee_three_vectors(vm, corners.vertices[vfidx], [0, 0, 1])
-    print(alpha)
     size = int(np.arccos(np.sum(vm*corners.vertices[vfidx]))*180./pi/pixsize) + 2
     print(size)
 
@@ -241,22 +240,13 @@ def minarea_ver2(vecs, pixsize=20./3600.):
     alpha = minimize(minarea, [alpha,], method="Nelder-Mead").x[0]
     cdmat = np.array([[cos(alpha), -sin(alpha)], [sin(alpha), cos(alpha)]])
     locwcs.wcs.pc = cdmat
-    #xc, yc = locwcs.all_world2pix([[rac, decc],], 1)[0]
     x, y = locwcs.all_world2pix(np.array([ra, dec]).T*180./pi, 1).T
-    #print(x.max(), x.min(), y.max(), y.min())
     sizex = max(int(x.max() - locwcs.wcs.crpix[0]), int(locwcs.wcs.crpix[0] - x.min())) #int((x.max() - x.min())//2)
     sizey = max(int(y.max() - locwcs.wcs.crpix[1]), int(locwcs.wcs.crpix[1] - y.min())) #int((y.max() - y.min())//2)
     print("final alpha guess", alpha, "and corresponding size", sizex, sizey)
-    #print("obtained xysizes", sizex, sizey)
     locwcs.wcs.crpix = [sizex + 1 - sizex%2, sizey + 1 - sizey%2]
-    #print(locwcs.wcs.crpix)
-
-    """
-    ra, dec = locwcs.all_pix2world([[1, sizex*2], [1, sizey*2], [sizex*2, sizey*2], [sizex*2, 1], [1, 1]], 1).T
-    plt.plot(ra*pi/180., dec*pi/180., "k", lw=2)
-    plt.show()
-    """
     return locwcs
+
 
 def min_area_wcs_for_vecs(vecs, pixsize=20./3600.):
     """
@@ -382,6 +372,18 @@ def make_wcs_for_attdata(attdata, gti=tGTI, pixsize=20./3600.):
     #qvtot = attdata(attdata.times[locgti.mask_external(attdata.times)])
     qvtot = attdata(locgti.arange(1)[0])
     return make_wcs_for_quats(qvtot, pixsize)
+
+def make_wcs_for_vec_edges(vecs, alpha=None, pixsize=10./3600.):
+    cvec = Corners(vecs)
+    locwcs = WCS(naxis=2)
+    locwcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    locwcs.wcs.cdelt = [pixsize, pixsize]
+    locwcs.wcs.radesys = "FK5"
+
+
+
+
+
 
 def split_survey_mode(attdata, gti=tGTI):
     aloc = attdata.apply_gti(gti)

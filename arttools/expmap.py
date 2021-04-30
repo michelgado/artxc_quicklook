@@ -88,7 +88,7 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, dtcorr={
         print(overall_gti.exposure)
         if overall_gti.exposure > 0:
             exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti)
-            vmap = make_overall_vignetting()
+            vmap = make_overall_vignetting(**kwargs)
             print("exptime sum", exptime.sum())
             print("produce overall urds expmap")
             sky._set_core(vmap.grid[0], vmap.grid[1], vmap.values)
@@ -108,7 +108,7 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, dtcorr={
         print("urd %d progress:" % urd)
         exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urd), gti, \
                                                              dtcorr.get(urd, lambda x: 1))
-        vmap = make_vignetting_for_urdn(urd) #, **kwargs)
+        vmap = make_vignetting_for_urdn(urd, **kwargs)
         sky._set_core(vmap.grid[0], vmap.grid[1], vmap.values)
         if kind == "direct":
             sky.interpolate_mp(qval[:], exptime[:], mpnum)
@@ -121,14 +121,26 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, dtcorr={
 
 def make_exposures(direction, te, attdata, urdgtis, mpnum=MPNUM, dtcorr={}, **kwargs):
     tec, mgaps, se, scalefunc, cumscalefunc = weigt_time_intervals(urdgtis)
-    overall_gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
-    ts, qval, dtn, locgti = make_small_steps_quats(attdata.set_nodes(te), gti=overall_gti)
-    vmap = make_overall_vignetting()
-    offset = vec_to_offset_pairs(attdata(ts).apply(direction, inverse=True))
-    scales = vmap(offset)
-    dtn = dtn*scales/scalefunc(ts)
-    idx = np.argsort(dtn)
-    dtn = np.histogram(ts[idx], te, weights=dtn[idx])[0]
+    gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
+    print("gti exposure", gti.exposure)
+    ts, qval, dtq, locgti = make_small_steps_quats(attdata, gti=gti, tedges=te)
+    print("dtq sum", dtq.sum())
+    tel = np.empty(ts.size*2, np.double)
+    tel[::2] = ts - dtq/2.
+    tel[1::2] = ts + dtq/2.
+    tel = np.sort(tel)
+    tetot, gaps = gti.make_tedges(tel)
+    dtn = np.zeros(te.size - 1, np.double)
+    for urdn in urdgtis:
+        teu, gaps = urdgtis[urdn].make_tedges(tel)
+        dtu = np.diff(teu)[gaps]
+        tc = (teu[1:] + teu[:-1])[gaps]/2.
+        qlist = attdata(tc)*get_boresight_by_device(urdn)
+        vmap = make_vignetting_for_urdn(urdn, **kwargs)
+        vval = vmap(vec_to_offset_pairs(qlist.apply(direction, inverse=True)))
+        idx = np.searchsorted(te, tc) - 1
+        mloc = (idx >= 0) & (idx < te.size - 1)
+        np.add.at(dtn, idx[mloc], vval[mloc]*dtu[mloc])
     return te, dtn
 
 def make_expmap_for_healpix(attdata, urdgtis, mpnum=MPNUM, dtcorr={}, subscale=4):

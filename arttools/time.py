@@ -195,14 +195,6 @@ def make_hv_gti(hkdata):
     return GTI(hkdata["TIME"][maskedges(hkdata["HV"] < -95.) + [0, -1]])
 
 
-
-
-
-
-
-
-
-
 #==================================================================================================
 #below is old gti version, which spared for the compatibility reasons
 

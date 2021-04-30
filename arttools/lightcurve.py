@@ -1,6 +1,7 @@
 from .energy import get_events_energy
 from .time import deadtime_correction, make_ingti_times, tarange, get_gti, gti_intersection, GTI
 from .caldb import get_energycal, urdbkgsc
+from collections import defaultdict
 from scipy.interpolate import interp1d
 import numpy as np
 from functools import reduce
@@ -10,7 +11,7 @@ from functools import reduce
 def stepsize(arr):
     return arr[1:] - arr[:-1]
 
-def weigt_time_intervals(gtis, scales=urdbkgsc, defaultscale=1):
+def weigt_time_intervals(gtis, scales={}, defaultscale=1):
     """
     for the provided dictionaries, containing keys and corresponding gtis and scales (also dictrs containing weights for keys in gtis)
     computes overall weights insided gtis which determined by which of keys were active in time intervals
@@ -55,6 +56,17 @@ class Bkgrate(object):
         idx = np.argsort(times)
         times = times[idx]
         rates = rates[idx]
+
+    def integrate_in_timebins(self, te):
+        tloc = np.unique(np.concatenate([te,  self.te]))
+        tc = (tloc[1:] + tloc[:-1])/2.
+        lct = self(tc)*np.diff(tloc)
+        idx = np.searchsorted(te, tc) - 1
+        m = (idx >= 0) & (idx < te.size - 1)
+        idx = idx[m]
+        lc = np.zeros(te.size - 1)
+        np.add.at(lc, idx, lct[m])
+        return lc
 
 def make_overall_lc(times, urdgtis, dt=100, scales=urdbkgsc):
     """

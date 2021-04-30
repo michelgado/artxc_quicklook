@@ -146,45 +146,33 @@ class AttDATA(SlerpWithNaiveIndexing):
     """
     prec = 10./3600*pi/180.
 
-    def __init__(self, *args, gti=None, **kwargs):
+    def __init__(self, *args, gti=None, hide_bad_interpolations=True, **kwargs):
         super().__init__(*args, **kwargs)
+        self.bt = np.array([])
+        self.bq = np.array([])
         try:
             self.gti = GTI(gti)
         except Exception:
             self.gti = GTI(self.times[[0, -1]])
-        self._check_interpolation_quality()
+        if hide_bad_interpolations:
+            bti = self._check_interpolation_quality()
+            mask = bti.mask_external(self.times)
+            self.bt, self.bq = self.times[mask], self(self.times[mask])
+            super().__init__(self.times[~mask], self(self.times[~mask]))
+        else:
+            self.gti = self.gti & ~self._check_interpolation_quality()
 
     def _check_interpolation_quality(self):
+        if self.gti.exposure == 0.:
+            return emptyGTI
+        tc, dt, dalphadt = self.get_optical_axis_movement_speed()
         dt = np.diff(self.times, 1)
-        dtmed = np.median(dt)
-        gaps = dt > 1.5*dtmed
-        if gaps.size > 0:
-            gaps[[0, -1]] = False
 
-        if not np.any(gaps):
-            self.badrec = emptyGTI
-            self.goodrec = emptyGTI
-        else:
-            #don't considere specific cases of the gaps at the end and beginning
-            #check derivatives
-            idx = np.where(gaps)[0]
-
-            q = self.rotations[idx]*Rotation.from_rotvec(self.rotvecs[idx - 1]*\
-                    self.timedelta[idx, np.newaxis]/self.timedelta[idx - 1, np.newaxis])
-            dvec = np.sum(self.rotations[idx + 1].apply(OPAX)*q.apply(OPAX), axis=1)
-            goodinterp = dvec > cos(pi/180.*10./3600)
-
-            q = self.rotations[idx + 1]*Rotation.from_rotvec(self.rotvecs[idx + 1]*\
-                    -self.timedelta[idx, np.newaxis]/self.timedelta[idx + 1, np.newaxis])
-            dvec = np.sum(self.rotations[idx].apply(OPAX)*q.apply(OPAX), axis=1)
-            goodinterp = np.logical_and(goodinterp, dvec > cos(pi/180*10/3600))
-
-            ggaps = np.copy(gaps)
-            ggaps[ggaps] = goodinterp
-            bgaps = np.copy(gaps)
-            bgaps[bgaps] = np.logical_not(goodinterp)
-            self.goodinterp = GTI(self.times[medges(ggaps)])
-            self.badinterp = GTI(self.times[medges(bgaps)])
+        q = self.rotations[1:]*self.rotations[:-1].inv()
+        q = Rotation.from_rotvec(q.as_rotvec()*((self.timedelta[1:] + self.timedelta[:-1])/self.timedelta[:-1])[:, np.newaxis])*self.rotations[:-1]
+        dvec = np.sum(self(self.times[2:]).apply(OPAX)*q.apply(OPAX), axis=1)
+        badinterp = dvec < cos(pi/180.*10./3600)
+        return GTI(self.times[medges(badinterp) + [0, 1]])
 
     def __add__(self, other):
         base = super().__add__(other)
@@ -227,6 +215,8 @@ class AttDATA(SlerpWithNaiveIndexing):
             dt - withd of the time bins
             dlaphadt - angular speed in time bin
         """
+        if self.gti.exposure == 0.:
+            return None, None, None
         te, mgaps = self.gti.make_tedges(self.times)
         tc = ((te[1:] + te[:-1])/2.)[mgaps]
         dt = (te[1:] - te[:-1])[mgaps]
@@ -266,13 +256,10 @@ class AttDATA(SlerpWithNaiveIndexing):
         lgti = GTI(te[medges(mask)])
         """
         frac, gti = slerp_circ_aperture_exposure(self, vec, app, ax)
-        return gti
+        return gti & self.gti
 
     def rect_gti(self, rect):
         pass
-
-
-
 
 def read_gyro_fits(gyrohdu):
     """

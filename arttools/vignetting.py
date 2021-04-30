@@ -51,6 +51,15 @@ class PixInterpolator(object):
         result[mask] = self.values[rawx[mask], rawy[mask]]
         return result
 
+
+
+def get_energycorr_for_offset(urdn, xo, yo):
+    shmask = get_shadowmask_by_urd(urdn)
+    x0, y0 = get_optical_axis_offset_by_device(urdn)
+
+
+
+
 @lru_cache(maxsize=7)
 def make_vignetting_from_inverse_psf(urdn):
     if not urdn is None:
@@ -72,9 +81,6 @@ def make_vignetting_from_inverse_psf(urdn):
     x2, y2 = xy_to_opaxoffset(x1, y1, urdn)
     q = offset_to_qcorr(x1, y1)
     img = np.zeros((46*9 + 121 - 9, 46*9 + 121 - 9), np.double)
-    #xi, yi = np.mgrid[
-    #for
-
 
     for xl, yl, xo, yo in zip(x1, y1, x2, y2):
         if (xl - x0 + 26) < 0 or (xl - x0 + 26) > 52 or (yl - y0 + 26) < 0 or (yl - y0 + 26) > 52:
@@ -87,17 +93,15 @@ def make_vignetting_from_inverse_psf(urdn):
         sl += ipsf[1].data[int(np.round(xl + 0.5 - x0)) + 26, int(np.round(yl + 0.5 - y0)) + 26, : sl.shape[0], :sl.shape[1]]
         """
         sl += np.copy(unpack_inverse_psf(xo, yo))
-
     dx = (np.arange(img.shape[0]) - img.shape[0]//2)/9.*DL
     return RegularGridInterpolator((dx, dx), img/img.max(), bounds_error=False, fill_value=0.)
 
 @lru_cache(maxsize=7)
-def make_vignetting_from_inverse_psf_ayut(urdn, emin=4., emax=12., phot_index=2., app=None):
+def make_vignetting_from_inverse_psf_ayut(urdn, emin=4., emax=12., phot_index=2., app=None, powi=1):
     arf = get_arf_energy_function(get_arf())
     if not urdn is None:
         shmask = get_shadowmask_by_urd(urdn)
         x0, y0 = get_optical_axis_offset_by_device(urdn)
-        print(x0, y0)
     else:
         x0, y0 = 23.5, 23.5
         shmask = np.ones((48, 48), np.bool)
@@ -108,7 +112,6 @@ def make_vignetting_from_inverse_psf_ayut(urdn, emin=4., emax=12., phot_index=2.
     eidx = np.searchsorted(ee, [emin, emax]) - [1, -1]
     eidx[0] = max(eidx[0], 0)
     eidx[1] = min(eidx[1], ee.size)
-    print(eidx)
     eel = np.copy(ee[eidx[0]: eidx[1]])
     eel[0] = max(emin, eel[0])
     eel[-1] = min(emax, eel[-1])
@@ -116,7 +119,6 @@ def make_vignetting_from_inverse_psf_ayut(urdn, emin=4., emax=12., phot_index=2.
     w = [quad(lambda e: arf(e)*e**-phot_index, emin, emax)[0] for emin, emax in zip(eel[:-1], eel[1:])]
     w = np.array(w)
     w = w/w.sum()
-    print(w.size, w, eel, eidx)
 
     x, y = np.mgrid[0:48:1, 0:48:1]
     x1, y1 = x[shmask], y[shmask]
@@ -135,24 +137,24 @@ def make_vignetting_from_inverse_psf_ayut(urdn, emin=4., emax=12., phot_index=2.
         lipsf = np.sum(unpack_inverse_psf_ayut(xo, yo)[eidx[0]:eidx[1] - 1]*w[:, np.newaxis, np.newaxis], axis=0)
         if not app is None:
             lipsf[psfmask] = 0.
-        sl += lipsf
-
+        if powi != 1:
+            sl += lipsf**powi
+        else:
+            sl += lipsf
     dx = (np.arange(img.shape[0]) - img.shape[0]//2)/9.*DL
     return RegularGridInterpolator((dx, dx), img/img.max(), bounds_error=False, fill_value=0.)
 
-def make_vignetting_from_inverse_psf_ayut_cspec(urdn, egrid, cspec, app=None):
+def make_vignetting_from_inverse_psf_ayut_cspec(urdn, egrid, cspec, app=None, powi=1):
     arf = get_arf_energy_function(get_arf())
     if not urdn is None:
         shmask = get_shadowmask_by_urd(urdn)
         x0, y0 = get_optical_axis_offset_by_device(urdn)
-        print(x0, y0)
     else:
         x0, y0 = 23.5, 23.5
         shmask = np.ones((48, 48), np.bool)
         shmask[[0, -1], :] = False
         shmask[:, [0, -1]] = False
 
-    print(cspec, type(cspec))
     if app is None:
         psfmask = None
     else:
@@ -177,14 +179,17 @@ def make_vignetting_from_inverse_psf_ayut_cspec(urdn, egrid, cspec, app=None):
         lipsf = np.sum(unpack_inverse_psf_ayut(xo, yo)[eidx]*w[:, np.newaxis, np.newaxis], axis=0)
         if not app is None:
             lipsf[psfmask] = 0.
-        sl += lipsf
+        if powi != 1:
+            sl += lipsf**powi
+        else:
+            sl += lipsf
 
     dx = (np.arange(img.shape[0]) - img.shape[0]//2)/9.*DL
     return RegularGridInterpolator((dx, dx), img/img.max(), bounds_error=False, fill_value=0.)
 
 
 def make_vignetting_for_urdn(urdn, energy=None, phot_index=None,
-                             emin=0, emax=np.inf, grid=None, cspec=None, app=None):
+                             emin=0, emax=np.inf, grid=None, cspec=None, app=None, powi=1):
     """
     for provided urd number  energy or photon index provided 2d interpolation function (RegularGridInterpolator) defining the profile of the effective area depending on offset
 
@@ -206,10 +211,10 @@ def make_vignetting_for_urdn(urdn, energy=None, phot_index=None,
 
     if not cspec is None:
         print(grid, cspec)
-        return make_vignetting_from_inverse_psf_ayut_cspec(urdn, grid, cspec, app)
+        return make_vignetting_from_inverse_psf_ayut_cspec(urdn, grid, cspec, app, powi)
 
     if not phot_index is None:
-        return make_vignetting_from_inverse_psf_ayut(urdn, emin, emax, phot_index, app)
+        return make_vignetting_from_inverse_psf_ayut(urdn, emin, emax, phot_index, app, powi)
 
     return make_vignetting_from_inverse_psf(urdn)
 

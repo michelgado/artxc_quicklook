@@ -19,6 +19,13 @@ import pickle
 MJDREF = 51543.875
 T0 = 617228538.1056 #first day of ART-XC work
 
+relativistic_corrections_gti = GTI([
+                  [6.24401146e+08, 6.24410608e+08],
+                  [6.24410643e+08, 6.26464675e+08],
+                  [6.26472730e+08, 6.27085963e+08],
+                  [6.27087894e+08, 6.28720330e+08],
+                  [6.28720417e+08, 6.30954255e+08]])
+
 ARTCALDBPATH = os.environ["ARTCALDB"]
 indexfname = "artxc_index.fits"
 
@@ -26,7 +33,6 @@ TELTOURD = {v:k for k, v in URDTOTEL.items()}
 
 idxtabl = Table(fits.getdata(os.path.join(ARTCALDBPATH, indexfname), 1))
 idxtabl["CAL_DATE"] = idxtabl["CAL_DATE"][:, 0]
-print(idxtabl["CAL_DATE"])
 idxtabl = idxtabl.to_pandas()
 idxtabl["CAL_DATE_ISO"] = (Time(idxtabl.REF_TIME.values, format="mjd") + \
                             TimeDelta(idxtabl.CAL_DATE.values, format="sec")).to_datetime()
@@ -156,7 +162,6 @@ def get_optical_axis_offset_by_device(dev):
 
 @lru_cache(maxsize=7)
 def get_boresight_by_device(dev):
-    print(dev)
     return Rotation(fits.getdata(get_relevat_file("BORESIGHT", URDTOTEL.get(dev, dev)), 1)[0])
 
 
@@ -217,7 +222,6 @@ def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=in
     except:
         print ('No index file here:' + indexfile_path)
 
-
 #temporary solution for time shifts in different device relative to spacecraft time
 def get_device_timeshift(dev):
     return 0.97 if dev == "gyro" else 1.55
@@ -248,7 +252,7 @@ def get_overall_background():
 
 @lru_cache(maxsize=1)
 def get_crabspec():
-    spec, ee, ge = pickle.load(open(os.path.join(ARTCALDBPATH, "crabspec2.pkl"), "rb"))
+    spec, ee, ge = pickle.load(open(os.path.join(ARTCALDBPATH, "crabspec3.pkl"), "rb"))
     grid = {"ENERGY": ee, "GRADE": ge}
     return grid, spec
 
@@ -258,6 +262,7 @@ def get_crabspec_for_filters(filters):
     emasks = np.logical_and(emask[1:], emask[:-1])
     gmask = filters["GRADE"].apply(grid["GRADE"])
     return {"ENERGY": grid["ENERGY"][emask], "GRADE": grid['GRADE'][gmask]}, spec[emasks, :][:, gmask]
+
 
 @lru_cache(maxsize=14)
 def make_background_brightnes_profile(urdn, filterfunc):
