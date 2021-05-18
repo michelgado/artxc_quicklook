@@ -2,7 +2,7 @@ from astropy.wcs import WCS
 from .time import tGTI, GTI
 from .mask import edges as medges
 from ._det_spatial import offset_to_vec, DL
-from .orientation import get_elongation_plane_norm, align_with_z_quat, vec_to_pol, minimize_norm_to_survey
+from .orientation import get_elongation_plane_norm, align_with_z_quat, vec_to_pol, minimize_norm_to_survey, normalize
 import numpy as np
 from math import cos, sin, pi, sqrt, asin, acos
 from scipy.spatial import ConvexHull
@@ -10,7 +10,74 @@ from scipy.optimize import minimize
 from scipy.spatial.transform import Rotation, Slerp
 import matplotlib.pyplot as plt
 
-class Corners(object):
+
+def get_vec_triangle_area(vec1, vec2, vec3):
+    v12 = np.cross(vec1, vec2, axis=-1)
+    v13 = np.cross(vec1, vec3, axis=-1)
+    v23 = np.cross(vec2, vec3, axis=-1)
+    v12 = v12/np.sqrt(np.sum(v12**2, axis=-1))[:, np.newaxis]
+    v13 = v13/np.sqrt(np.sum(v13**2, axis=-1))[:, np.newaxis]
+    v23 = v23/np.sqrt(np.sum(v23**2, axis=-1))[:, np.newaxis]
+    alpha = np.arccos(np.sum(v12*v13, axis=-1))
+    beta = np.arccos(-np.sum(v12*v23, axis=-1))
+    gamma = np.arccos(np.sum(v23*v13, axis=-1))
+    return alpha + beta + gamma - pi
+
+def random_orthogonal_vec(vec):
+    """
+    for a given 3D vector in form of np.array(3)
+    provides randomly oriented orthogonal vectro (not statistically random though)
+
+    ------
+    Params:
+        vec
+
+    returns:
+        vec
+    """
+    idx = np.argsort(vec)
+    rvec = np.zeros(3, np.double)
+    rvec[idx[1:]] = vec[idx[:0:-1]]*[-1, 1]
+    return rvec/sqrt(np.sum(rvec**2.))
+
+def get_most_distant_idx(vec, vecs):
+    """
+    return the index of most sepparated vector in set of vectors vecs relative to vector vec
+
+    -----
+    Params:
+        vec - vector relative to which we search an index of most distant vector in a vector set vecs numpy array of shape 3
+        vecs - a set of vectors, numpy array with shape Nx3
+
+    returns:
+        int - index of most distant to vector vec vector in a set vecs
+    """
+    return np.argmin(np.sum(vec*vecs, axis=1))
+
+def get_most_orthogonal_idx(vec1, vec2, vecs):
+    """
+    return index of a vector with smallest normalized projection on a plane, which includes vectors vec1 and vec2
+    also returns the orientation of this vector - True for left and False for right
+    """
+    vort = np.cross(vec1, vec2)
+    proj = np.sum(vort*vecs, axis=1)
+    idx = np.argmax(proj)
+    return idx, proj > 0
+
+def get_outof_trinagle(vec1, vec2, vec3, vecs):
+    """
+    check, whether the vecs are outside of triangle with verteces vec1, vec2 and vec3
+    """
+    vort1 = np.cross(vec1, vec2)
+    vort2 = np.cross(vec2, vec3)
+    vort3 = np.cross(vec3, vec1)
+    s1 = np.sum(vort1*vecs, axis=1)
+    s2 = np.sum(vort2*vecs, axis=1)
+    s3 = np.sum(vort3*vecs, axis=1)
+    return  np.any([s1*s2 < 0, s1*s3 < 0, s2*s3 < 0], axis=0)
+
+
+class ConvexHullonSphere(object):
     """
     class to define convex hull on the sphere surface
     """
@@ -22,7 +89,6 @@ class Corners(object):
             vertices - unit vectors in the vertices of the convex hull, containing all vectors
             idx - indexes of the vectors, located in the corners, from  input array of vectors
         """
-        #plt.scatter(vecs[:, 1], vecs[:, 2])
         cvec = vecs.sum(axis=0)
         cvec = cvec/sqrt(np.sum(cvec**2.))
         idx1 = get_most_distant_idx(cvec, vecs)
@@ -79,7 +145,7 @@ class Corners(object):
         neworts = neworts/np.sqrt(np.sum(neworts**2, axis=1))[:, np.newaxis]
         newcorners = np.cross(neworts, np.roll(neworts, 1, axis=0))
         newcorners = newcorners/np.sqrt(np.sum(newcorners**2, axis=1))[:, np.newaxis]
-        return Corners(newcorners)
+        return ConvexHullonSphere(newcorners)
 
     @property
     def area(self):
@@ -87,44 +153,43 @@ class Corners(object):
                                      self.vertices[1:-1],
                                      self.vertices[2:]).sum()*(180./pi)**2.
 
-def random_orthogonal_vec(vec):
-    """
-    for a given 3D vector in form of np.array(3)
-    provides randomly oriented orthogonal vectro (not statistically random though)
+    def get_center_of_mass(self, it=3):
+        return get_convex_center(self, it)
+
+    def get_containing_rectangle(self, alpha=0., rotc=None):
+        vm = rotc if not rotc is None else self.get_center_of_mass()
+        qrot = Rotation.from_rotvec(vm*alpha)
+        vax = qrot.apply([0, 0, 1])
+        vax = normalize(vax - vm*np.sum(vax*vm))
+        vrot = normalize(np.cross(vax, vm))
+        vr = normalize(self.vertices - vrot*np.sum(self.vertices*vrot, axis=1)[:, np.newaxis])
+        vp = normalize(self.vertices - vax*np.sum(self.vertices*vax, axis=1)[:, np.newaxis])
+        """
+        plt.scatter(vr[:, 1], vr[:, 2], marker="<", c="g")
+        plt.scatter(vp[:, 1], vp[:, 2], marker="<", c="g")
+        """
+        v1 = vr[np.argmax(np.sum(np.cross(vm,vr)*vrot, axis=1))]
+        v2 = vr[np.argmax(np.sum(np.cross(vr,vm)*vrot, axis=1))]
+        v3 = vp[np.argmax(np.sum(np.cross(vm,vp)*vax, axis=1))]
+        v4 = vp[np.argmax(np.sum(np.cross(vp,vm)*vax, axis=1))]
+        """
+        plt.scatter(v1[1], v1[2], marker="*", c="m")
+        plt.scatter(v2[1], v2[2], marker="*", c="b")
+        plt.scatter(v3[1], v3[2], marker="*", c="r")
+        plt.scatter(v4[1], v4[2], marker="*", c="k")
+        """
+        v1 = Rotation.from_rotvec(-vrot*pi/2.).apply(v1)
+        v2 = Rotation.from_rotvec(vrot*pi/2.).apply(v2)
+        v3 = Rotation.from_rotvec(vax*pi/2.).apply(v3)
+        v4 = Rotation.from_rotvec(-vax*pi/2.).apply(v4)
+        return switch_between_corners_to_plane_axis([v1, v3, v2, v4])
 
 
-    ------
-    Params:
-        vec
+    def __add__(self, other):
+        if not isinstance(other, self.__class__):
+            raise ValueError("one of the arguments is not  an ConvexHullonSphere instance")
+        return self.__class__(np.concatenate([self.vertices, other.vertices]))
 
-    returns:
-        vec
-    """
-    idx = np.argsort(vec)
-    rvec = np.zeros(3, np.double)
-    rvec[idx[1:]] = vec[idx[:0:-1]]*[-1, 1]
-    return rvec/sqrt(np.sum(rvec**2.))
-
-def get_most_distant_idx(vec, vecs):
-    return np.argmin(np.sum(vec*vecs, axis=1))
-
-def get_most_orthogonal_idx(vec1, vec2, vecs):
-    vort = np.cross(vec1, vec2)
-    proj = np.sum(vort*vecs, axis=1)
-    idx = np.argmax(proj)
-    return idx, proj > 0
-
-def get_outof_trinagle(vec1, vec2, vec3, vecs):
-    """
-    check, whether the vecs are outside of triangle with verteces vec1, vec2 and vec3
-    """
-    vort1 = np.cross(vec1, vec2)
-    vort2 = np.cross(vec2, vec3)
-    vort3 = np.cross(vec3, vec1)
-    s1 = np.sum(vort1*vecs, axis=1)
-    s2 = np.sum(vort2*vecs, axis=1)
-    s3 = np.sum(vort3*vecs, axis=1)
-    return  np.any([s1*s2 < 0, s1*s3 < 0, s2*s3 < 0], axis=0)
 
 def get_vecs_convex(vecs):
     """
@@ -146,8 +211,6 @@ def get_vecs_convex(vecs):
     cvec = cvec/sqrt(np.sum(cvec**2.))
     vrot = np.cross(np.array([0., 0., 1.]), cvec)
     vrot = vrot/np.sqrt(np.sum(vrot**2.))
-    #vrot2 = np.cross(vrot, cvec)
-    #vrot2 = vrot2/sqrt(np.sum(vrot2**2))
 
     alpha = pi/2. - np.arccos(cvec[2])
     quat = Rotation([vrot[0]*sin(alpha/2.), vrot[1]*sin(alpha/2.), vrot[2]*sin(alpha/2.), cos(alpha/2.)])
@@ -164,6 +227,9 @@ def get_ort_component(vec1, vec2):
     return vort/np.sqrt(np.sum(vort**2, axis=-1))
 
 def sphere_triangle_angle(alpha, beta, gamma):
+    """
+    return an area of the smallest (area < 2pi) triangle on sphere, which has corners angles alpha, beta, gamma
+    """
     return  alpha - beta - gamma - pi
 
 def get_angle_betwee_three_vectors(vec1, vec2, vec3):
@@ -175,46 +241,71 @@ def get_angle_betwee_three_vectors(vec1, vec2, vec3):
     alpha = np.arccos(np.sum(v12*v13, axis=-1))
     return alpha
 
-def get_vec_triangle_area(vec1, vec2, vec3):
-    v12 = np.cross(vec1, vec2, axis=-1)
-    v13 = np.cross(vec1, vec3, axis=-1)
-    v23 = np.cross(vec2, vec3, axis=-1)
-    v12 = v12/np.sqrt(np.sum(v12**2, axis=-1))[:, np.newaxis]
-    v13 = v13/np.sqrt(np.sum(v13**2, axis=-1))[:, np.newaxis]
-    v23 = v23/np.sqrt(np.sum(v23**2, axis=-1))[:, np.newaxis]
-    alpha = np.arccos(np.sum(v12*v13, axis=-1))
-    beta = np.arccos(-np.sum(v12*v23, axis=-1))
-    gamma = np.arccos(np.sum(v23*v13, axis=-1))
-    return alpha + beta + gamma - pi
 
-def get_convex_center(convex):
+def get_convex_center(convex, it=3):
+    """
+    finds a center of mass of a convex on a sphere
+
+    algorithm
+    sum individual triangles centers of mass according to their surface arae
+    on the first step triangles are picked from one of the convex hull vertices.
+    after first iteration triangles are picked from current center of mass assessment.
+
+
+    -------
+    Params:
+        convexhullonsphere class instance
+    returns:
+        unit vector at the convex hull center of mass location
+    """
     areas = get_vec_triangle_area(convex.vertices[0], convex.vertices[1:-1], convex.vertices[2:])
     vloc = convex.vertices[0] + convex.vertices[1:-1] + convex.vertices[2:]
     vloc = vloc/np.sqrt(np.sum(vloc**2, axis=-1))[:, np.newaxis]
     vm = np.sum(vloc*areas[:, np.newaxis], axis=0)
     vm = vm/sqrt(np.sum(vm**2))
+    for i in range(it):
+        areas = get_vec_triangle_area(vm, convex.vertices[:-1], convex.vertices[1:])
+        vloc = vm + convex.vertices[1:] + convex.vertices[:-1]
+        vm = np.sum(vloc*areas[:, np.newaxis], axis=0)
+        vm = vm/sqrt(np.sum(vm**2))
     return vm
 
+
+def make_tan_wcs(rac, decc, sizex=1, sizey=1, pixsize=10./3600., alpha=0.):
+    locwcs = WCS(naxis=2)
+    locwcs.wcs.crpix = [sizex, sizey]
+    locwcs.wcs.crval = [rac*180./pi, decc*180./pi]
+    locwcs.wcs.cdelt = [pixsize, pixsize]
+    cdmat = np.array([[cos(alpha), -sin(alpha)], [sin(alpha), cos(alpha)]])
+    locwcs.wcs.pc = cdmat
+    locwcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    locwcs.wcs.radesys = "FK5"
+    return locwcs
+
+def convexhull_to_wcs(chull, alpha=None, cax=None, pixsize=10./3600., maxsize=False, landscape=False):
+    cax = cax if not cax is None else chull.get_center_of_mass()
+    ra, dec = vec_to_pol(cax)
+    if alpha is None:
+        alpha = minimize(lambda a: ConvexHullonSphere(chull.get_containing_rectangle(a, cax)).area, [0.,], method="Nelder-Mead").x[0]
+    locwcs = make_tan_wcs(ra, dec, pixsize=pixsize)
+    xy = locwcs.all_world2pix(np.rad2deg(vec_to_pol(chull.vertices)).T, 1).astype(np.int)
+    print(xy.shape)
+    if maxsize:
+        locwcs.wcs.crpix = (np.max(xy, axis=0) - np.min(xy, axis=0) + 1)//2 + [1, 1]
+    else:
+        locwcs.wcs.crpix = -np.min(xy, axis=0) + [1, 1]
+
+    if landscape and locwcs.wcs.crpix[1] > locwcs.wcs.crpix[0]:
+        locwcs = make_tan_wcs(ra, dec, locwcs.wcs.crpix[1], locwcs.wcs.crpix[0], pixsize, alpha + pi/2.)
+    return locwcs
+
 def minarea_ver2(vecs, pixsize=20./3600.):
-    """
-    ra, dec = vec_to_pol(vecs)
-    plt.scatter(ra, dec)
-    """
-    corners = Corners(vecs)
-    """
-    ra, dec = vec_to_pol(corners.vertices)
-    plt.scatter(ra, dec, marker="x")
-    plt.plot(ra, dec, "k", lw=2)
-    """
+    corners = ConvexHullonSphere(vecs)
     vm = get_convex_center(corners)
     rac, decc = vec_to_pol(vm)
-    """
-    plt.scatter(ra, dec, marker="^", s = 30)
-    """
     vfidx = np.argmin(np.sum(vm*corners.vertices, axis=-1))
     alpha = get_angle_betwee_three_vectors(vm, corners.vertices[vfidx], [0, 0, 1])
     size = int(np.arccos(np.sum(vm*corners.vertices[vfidx]))*180./pi/pixsize) + 2
-    print(size)
 
     locwcs = WCS(naxis=2)
     locwcs.wcs.crpix = [size, size]
@@ -227,7 +318,6 @@ def minarea_ver2(vecs, pixsize=20./3600.):
     ra, dec = vec_to_pol(corners.vertices)
     x, y = locwcs.all_world2pix(np.array([ra, dec]).T*180./pi, 1).T
     sizex, sizey = int(x.max() - x.min()), int(y.max() - y.min())
-    print("initial alpha guess", alpha, "and corresponding size", sizex, sizey)
     rac, decc = locwcs.all_pix2world([[(x.max() + x.min())/2., (y.max() + y.min())/2.],], 1)[0]
     locwcs.wcs.crval = [rac, decc]
     locwcs.wcs.crpix = [int(sizex//2) + 1 - int(sizex//2)%2, int(sizey//2) + 1 - int(sizey//2)%2]
@@ -243,7 +333,6 @@ def minarea_ver2(vecs, pixsize=20./3600.):
     x, y = locwcs.all_world2pix(np.array([ra, dec]).T*180./pi, 1).T
     sizex = max(int(x.max() - locwcs.wcs.crpix[0]), int(locwcs.wcs.crpix[0] - x.min())) #int((x.max() - x.min())//2)
     sizey = max(int(y.max() - locwcs.wcs.crpix[1]), int(locwcs.wcs.crpix[1] - y.min())) #int((y.max() - y.min())//2)
-    print("final alpha guess", alpha, "and corresponding size", sizex, sizey)
     locwcs.wcs.crpix = [sizex + 1 - sizex%2, sizey + 1 - sizey%2]
     return locwcs
 
@@ -267,7 +356,7 @@ def min_area_wcs_for_vecs(vecs, pixsize=20./3600.):
     return:
         wcs (in a form of astropy.wcs.WCS class instance)
     """
-    #convex = Corners(vecs)
+    #convex = ConvexHullonSphere(vecs)
     #vecs = convex.vertices
     cvec, r1, r2, eqquat, cv_vecs, r, d = get_vecs_convex(vecs)
 
@@ -374,7 +463,7 @@ def make_wcs_for_attdata(attdata, gti=tGTI, pixsize=20./3600.):
     return make_wcs_for_quats(qvtot, pixsize)
 
 def make_wcs_for_vec_edges(vecs, alpha=None, pixsize=10./3600.):
-    cvec = Corners(vecs)
+    cvec = ConvexHullonSphere(vecs)
     locwcs = WCS(naxis=2)
     locwcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
     locwcs.wcs.cdelt = [pixsize, pixsize]
@@ -528,7 +617,7 @@ def expand_convex_hull(vertices, dtheta):
     depending on the direction of boundary bypass, axis can be oriented outside or inside of the convex hull
 
     """
-    convexhull = Corners(vertices)
+    convexhull = ConvexHullonSphere(vertices)
     corners = np.cross(corners_or_axis, np.roll(corners_or_axis, -1, axis=0))
 
     get_convex_center(corners)

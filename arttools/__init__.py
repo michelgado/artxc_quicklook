@@ -7,6 +7,7 @@ from . import aux
 from . import datafilters
 from . import filters
 from . import psf
+from . import sensitivity
 
 __version__ = "0.2.1"
 

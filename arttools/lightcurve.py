@@ -38,6 +38,22 @@ def weigt_time_intervals(gtis, scales={}, defaultscale=1):
     return te, mgaps, se, scalefunc, cumscalefunc
 
 
+def sum_lcs(tes, lcs, gaps=None, sigmas=None):
+    if gaps is None:
+        gaps = [np.ones(l.size, np.bool) for l in lcs]
+    if sigmas is None:
+        sigmas = [np.ones(l.size) for l in lcs]
+    tetot = np.unique(np.concatenate(tes))
+    tec = (tetot[1:] + tetot[:-1])/2.
+    idxs = [np.searchsorted(te, tec) - 1 for te in tes]
+    lest = np.zeros(tec.size, np.double)
+    west = np.zeros(tec.size, np.double)
+    for i, idx in enumerate(idxs):
+        lest = lest + lcs[i][idx]/sigmas[idx]**2.*gaps[i][idxs]
+        west = west + 1./sigmas[idx]**2.
+    return tes, lest/west
+
+
 class Bkgrate(object):
 
     def __init__(self, te, crate):

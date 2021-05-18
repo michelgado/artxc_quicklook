@@ -10,7 +10,7 @@ from threading import Thread, Lock, current_thread
 import tqdm
 from .orientation import vec_to_pol, pol_to_vec, OPAX, make_quat_for_wcs, get_wcs_roll_for_qval
 from ._det_spatial import offset_to_vec, vec_to_offset
-from .planwcs import Corners, PRIME_NUMBERS
+from .planwcs import ConvexHullonSphere, PRIME_NUMBERS
 from .psf import unpack_inverse_psf, unpack_inverse_psf_ayut, get_ipsf_interpolation_func, ayutee
 from itertools import cycle, repeat
 from math import sin, cos, sqrt, pi, log
@@ -70,7 +70,7 @@ class SkyImage(object):
         """
         expect to receive four vectors at the corners of interpolation map
         """
-        self.corners = Corners(vals)
+        self.corners = ConvexHullonSphere(vals)
 
     def _set_core(self, x, y, core):
         self.vmap = RegularGridInterpolator((x, y), core, bounds_error=False, fill_value=0.)
@@ -489,7 +489,7 @@ class SkyImage(object):
             i = k%smallside
             j = k//smallside
             shapes.append([x[[i, i + 1]], y[[j, j + 1]]])
-            c = Corners(pol_to_vec(*np.deg2rad(self.locwcs.all_pix2world(np.array([y[[j, j, j + 1, j + 1]], x[[i, i + 1, i + 1, i]]]).T + 1., 1)).T))
+            c = ConvexHullonSphere(pol_to_vec(*np.deg2rad(self.locwcs.all_pix2world(np.array([y[[j, j, j + 1, j + 1]], x[[i, i + 1, i + 1, i]]]).T + 1., 1)).T))
             c = c.expand(expandsize)
             grid.append(c)
             rslice.append(rmap[x[i]:x[i + 1], y[j]: y[j + 1]])

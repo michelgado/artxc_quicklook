@@ -1,17 +1,24 @@
 from .background import get_background_surface_brigtnress
-from .caldb import get_shadowmask_by_urd, get_vigneting_by_urd, OPAXOFFSET
+from .caldb import get_shadowmask_by_urd, get_vigneting_by_urd, OPAX, OPAXOFFSET, get_boresight_by_device
 from scipy.interpolate import interp1d, RegularGridInterpolator
+from ._det_spatial import offset_to_vec, vec_to_offset, DL, F
+from .lightcurve import sum_lcs, Bkgrate
+from .orientation import vec_to_pol, pol_to_vec
 from scipy.integrate import quad
 from .energy  import get_arf_energy_function
 from .caldb import  get_optical_axis_offset_by_device, get_arf
+from .planwcs import ConvexHullonSphere, convexhull_to_wcs
 from .psf import xy_to_opaxoffset, unpack_inverse_psf_ayut
 from scipy.spatial.transform import Rotation
 from .mosaic import SkyImage
-from astopy.wcs import WCS
+from astropy.wcs import WCS
+from multiprocessing import cpu_count, Pool, Process, Queue, RawArray
+import numpy as np
+from functools import reduce
+from math import pi, sqrt, sin, cos
 
+MPNUM = cpu_count()
 
-
-@lru_cache(maxsize=7)
 def make_firstorder_detstat(urdn, imgfilter, phot_index=2., egrid=None, cspec=None, app=None):
     arf = get_arf_energy_function(get_arf())
     if not urdn is None:
@@ -24,7 +31,7 @@ def make_firstorder_detstat(urdn, imgfilter, phot_index=2., egrid=None, cspec=No
         shmask[:, [0, -1]] = False
 
 
-    emin, emax = imgfilter["ENERGY"].arr
+    emin, emax = imgfilter["ENERGY"].arr[0]
     ee = np.array([4., 6., 8., 10., 12., 16., 20., 24., 30.])
     if not cspec is None:
         egloc = np.unique(np.concatenate([egrid, ee]))
@@ -49,7 +56,7 @@ def make_firstorder_detstat(urdn, imgfilter, phot_index=2., egrid=None, cspec=No
     x1, y1 = x[shmask], y[shmask]
     x2, y2 = xy_to_opaxoffset(x1, y1, urdn)
 
-    bkgprofile = get_background_surface_brigtnress(urdn, imgfilter)
+    bkgprofile = get_background_surface_brigtnress(urdn, imgfilter, fill_value=0., normalize=True)
 
     if app is None:
         psfmask = None
@@ -64,15 +71,29 @@ def make_firstorder_detstat(urdn, imgfilter, phot_index=2., egrid=None, cspec=No
         lipsf = np.sum(unpack_inverse_psf_ayut(xo, yo)[eidx[0]:eidx[1] - 1]*w[:, np.newaxis, np.newaxis], axis=0)
         if not app is None:
             lipsf[psfmask] = 0.
-        sl += lipsf**2./bkgprofile[xl, yl]
+        sl += lipsf**2./bkgprofile[xl, yl]/2.
+
+    dx = (np.arange(img.shape[0]) - img.shape[0]//2)/9.*DL
+    return RegularGridInterpolator((dx, dx), img/img.max(), bounds_error=False, fill_value=0.)
 
 
-def make_overall_detstat_estimation(immgfilter, rebinres, **kwargs):
-    wcs = WCS(NAXIS=2)
-    wcs
-    sky
+def make_overall_detstat_estimation(imgfilters, scales = {}, rebinres=2./3600., **kwargs):
+    maps = {urdn:make_firstorder_detstat(urdn, filt, **kwargs) for urdn, filt in imgfilters.items()}
 
-def make_sensitivity_map(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, imgfilters, urdbkg, kind="direct", **kwargs):
+    chull = reduce(lambda a, b: a + b, [ConvexHullonSphere(get_boresight_by_device(urdn).apply(
+                    offset_to_vec(m.grid[0][[0, -1, -1, 0]], m.grid[1][[0, 0, -1, -1]]))) for urdn, m in maps.items()])
+    locwcs = convexhull_to_wcs(chull, alpha=pi, cax=OPAX, pixsize=rebinres, maxsize=False)
+    sky = SkyImage(locwcs, vmap=maps[28])
+    for urdn in imgfilters:
+        sky.vmap.values = maps[urdn].values*scales.get(urdn, 1.)
+        sky.interpolate_vmap_for_qval(get_boresight_by_device(urdn), 1, sky.img)
+    rd1 = np.rad2deg(vec_to_pol(OPAX))
+    i, j = (locwcs.all_world2pix(rd1.reshape((-1, 2)), 1) - 0.5).astype(np.int).T
+    grid = [vec_to_offset(sky.vecs[j, :, :])[0][0], vec_to_offset(sky.vecs[:, i, :])[1][::-1, 0]]
+    return RegularGridInterpolator(grid, sky.img.T[:, ::-1])
+
+
+def make_sensitivity_map(wcs, attdata, urdgtis, imgfilters, urdbkg, shape=None, mpnum=MPNUM, kind="direct", **kwargs):
     """
     produce exposure map on the provided wcs area, with provided GTI and attitude data
 
@@ -99,8 +120,16 @@ def make_sensitivity_map(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, imgfilt
         overall_gti = reduce(lambda a, b: a & b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
         print(overall_gti.exposure)
         if overall_gti.exposure > 0:
-            exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti)
-            vmap = make_overall_vignetting(**kwargs)
+            te, lc = sum_lcs([urdbkg[urdn].te for urdn in URDNS], [1./urdbkg[urdn].crate for urdn in URDNS])
+            tbkg = Bkgrate(te, lc)
+            scales = {}
+            for urdn in urdbkg:
+                t1, g1 = overall_gti.make_tedges(te)
+                tc = (t1[1:] + t1[:-1])[g1]/2.
+                scales[urdn] = np.mean(1./urdbkg[urdn](tc)/tbkg(te))
+
+            exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti, timecorrection=tbkg)
+            vmap = make_overall_detstat_estimation(imgfilters, scales=scales, **kwargs)
             print("exptime sum", exptime.sum())
             print("produce overall urds expmap")
             sky._set_core(vmap.grid[0], vmap.grid[1], vmap.values)
@@ -108,8 +137,6 @@ def make_sensitivity_map(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, imgfilt
                 sky.interpolate_mp(qval[:], exptime[:], mpnum)
             elif kind == "convolve":
                 sky.convolve(qval, exptime, mpnum)
-            #emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum)
-            #emap = make_mosaic_expmap_mp_executor(shape, wcs, vmap, qval, exptime, mpnum)
             print("\ndone!")
 
     for urd in urdgtis:
@@ -118,16 +145,13 @@ def make_sensitivity_map(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, imgfilt
             print("urd %d has no individual gti, continue" % urd)
             continue
         print("urd %d progress:" % urd)
-        exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urd), gti, \
-                                                             dtcorr.get(urd, lambda x: 1))
-        vmap = make_vignetting_for_urdn(urd, **kwargs)
+        exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urd), gti, timecorrection=Bkgrate(urdbkg[urdn].te, 1./urdbkg[urdn].crate))
+        vmap = make_firstorder_detstat(urd, **kwargs)
         sky._set_core(vmap.grid[0], vmap.grid[1], vmap.values)
         if kind == "direct":
             sky.interpolate_mp(qval[:], exptime[:], mpnum)
         elif kind == "convolve":
             sky.convolve(qval, exptime, mpnum)
-        #emap = make_mosaic_expmap_mp_executor(shape, wcs, vmap, qvals, exptime, mpnum) + emap
-        #emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum) + emap
         print(" done!")
     return sky.img
 

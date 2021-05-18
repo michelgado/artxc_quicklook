@@ -774,7 +774,7 @@ def align_with_z_quat(vec):
 
 
 
-def get_attdata(fname):
+def get_attdata(fname, **kwargs):
     ffile = fits.open(fname)
     if "gyro" in fname:
         attdata = read_gyro_fits(ffile["ORIENTATION"])
