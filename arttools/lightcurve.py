@@ -3,6 +3,7 @@ from .time import deadtime_correction, make_ingti_times, tarange, get_gti, gti_i
 from .caldb import get_energycal, urdbkgsc
 from collections import defaultdict
 from scipy.interpolate import interp1d
+from scipy.integrate import quad
 import numpy as np
 from functools import reduce
 
@@ -49,9 +50,12 @@ def sum_lcs(tes, lcs, gaps=None, sigmas=None):
     lest = np.zeros(tec.size, np.double)
     west = np.zeros(tec.size, np.double)
     for i, idx in enumerate(idxs):
-        lest = lest + lcs[i][idx]/sigmas[idx]**2.*gaps[i][idxs]
-        west = west + 1./sigmas[idx]**2.
-    return tes, lest/west
+        print(lcs[i].shape)
+        print(idx)
+        print(lcs[i][idx])
+        lest = lest + lcs[i][idx]/sigmas[i][idx]**2.*gaps[i][idx]
+        west = west + 1./sigmas[i][idx]**2.
+    return tetot, lest/west
 
 
 class Bkgrate(object):
@@ -73,15 +77,18 @@ class Bkgrate(object):
         times = times[idx]
         rates = rates[idx]
 
-    def integrate_in_timebins(self, te):
-        tloc = np.unique(np.concatenate([te,  self.te]))
-        tc = (tloc[1:] + tloc[:-1])/2.
-        lct = self(tc)*np.diff(tloc)
-        idx = np.searchsorted(te, tc) - 1
-        m = (idx >= 0) & (idx < te.size - 1)
-        idx = idx[m]
-        lc = np.zeros(te.size - 1)
-        np.add.at(lc, idx, lct[m])
+    def integrate_in_timebins(self, te, dtcorr=None):
+        if dtcorr is None:
+            tloc = np.unique(np.concatenate([te,  self.te]))
+            tc = (tloc[1:] + tloc[:-1])/2.
+            lct = self(tc)*np.diff(tloc)
+            idx = np.searchsorted(te, tc) - 1
+            m = (idx >= 0) & (idx < te.size - 1)
+            idx = idx[m]
+            lc = np.zeros(te.size - 1)
+            np.add.at(lc, idx, lct[m])
+        else:
+            lc = np.array([quad(lambda t: self(t)*dtcorr(t), s, e)[0] for s, e in zip(te[:-1], te[1:])])
         return lc
 
 def make_overall_lc(times, urdgtis, dt=100, scales=urdbkgsc):
@@ -89,7 +96,7 @@ def make_overall_lc(times, urdgtis, dt=100, scales=urdbkgsc):
     for stored background events occurence times (times) produces overall for 7 detectors background lightcurve with time resolution dt
     """
     gtitot = reduce(lambda a, b: a | b, urdgtis.values())
-    te, mgaps = gtitot.arange(dt)
+    te, mgaps = gtitot.arange(dt, joinsize=0.8)
     teg, mgapsg, se, scalef, cscalef = weigt_time_intervals(urdgtis)
     cidx = times.searchsorted(te)
     csf = cscalef(te)
