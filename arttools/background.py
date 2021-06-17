@@ -4,6 +4,7 @@ from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, A
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from ._det_spatial import DL, dxya, offset_to_vec, vec_to_offset, vec_to_offset_pairs, raw_xy_to_vec, vec_to_offset_pairs
 from .lightcurve import make_overall_lc, Bkgrate
+from .mosaic import SkyImage
 from .telescope import URDNS
 from functools import reduce
 from multiprocessing import cpu_count
@@ -15,18 +16,14 @@ from math import pi, sin, cos, sqrt
 
 MPNUM = cpu_count()
 
-def make_background_det_map_for_urdn(urdn, useshadowmask=True, ignoreedgestrips=True):
+def make_background_det_map_for_urdn(urdn, imgfilter):
     """
-    for provided urdn provides RegularGridInterpolator of backgroud profile for corresponding urdn
+    for specified urdn and eventfilter provides RegularGridInterpolator of backgroud profile
     """
-    bkgprofile = get_backprofile_by_urdn(urdn)
-    shmask = get_shadowmask_by_urd(urdn)
-    if ignoreedgestrips:
-        shmask[[0, -1], :] = False
-        shmask[:, [0, -1]] = False
+    bkgprofile = get_background_surface_brigtnress(urdn, imgfilter, normalize=True, fill_value=0.) #get_backprofile_by_urdn(urdn)
     bkgmap = RegularGridInterpolator(((np.arange(-24, 24) + 0.5)*DL,
                                       (np.arange(-24, 24) + 0.5)*DL),
-                                        bkgprofile*shmask,
+                                        bkgprofile,
                                         method="nearest", bounds_error=False, fill_value=0)
     return bkgmap
 
@@ -63,7 +60,7 @@ def make_overall_background_map(subgrid=10, useshadowmask=True):
     bkgmap = RegularGridInterpolator((x[:, 0], y[0]), newvmap, bounds_error=False, fill_value=0)
     return bkgmap
 
-def make_bkgmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, time_corr={}, subscale=10):
+def make_bkgmap_for_wcs(wcs, attdata, urdgtis, urdbkg, imgfilters, shape=None, mpnum=MPNUM, time_corr={}, kind="convolve"):
     """
     produce background map on the provided wcs area, with provided GTI and attitude data
 
@@ -83,7 +80,11 @@ def make_bkgmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, time_corr={}, subsca
         time_corr - a dict containing functions {urdn: urdnbkgrate(time) ...}
         subscale - defined a number of subpixels (under detecto pixels) to interpolate bkgmap
     """
-    bkg = 0
+    if shape is None:
+        ysize, xsize = int(wcs.wcs.crpix[0]*2 + 1), int(wcs.wcs.crpix[1]*2 + 1)
+        shape = [(0, xsize), (0, ysize)]
+
+    sky = SkyImage(wcs, shape=shape)
     overall_gti = emptyGTI
     """
     if time_corr:
@@ -97,25 +98,29 @@ def make_bkgmap_for_wcs(wcs, attdata, urdgtis, mpnum=MPNUM, time_corr={}, subsca
         bkg = AttWCSHistinteg.make_mp(bkgmap, exptime, qval, wcs, mpnum, subscale=10)
     """
 
-    for urd in urdgtis:
-        gti = urdgtis[urd] & ~overall_gti
+    for urdn in urdgtis:
+        gti = urdgtis[urdn] & ~overall_gti
         if gti.size == 0:
-            print("urd %d has no individual gti, continue" % urd)
+            print("urd %d has no individual gti, continue" % urdn)
             continue
-        print("urd %d progress:" % urd)
-        exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urd), gti, \
-                                                     time_corr.get(urd, lambda x: 1.))
+        print("urd %d progress:" % urdn)
+        exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urdn), gti, urdbkg[urdn])
         print("processed exposure", gti.exposure, exptime.sum())
-        bkgmap = make_background_det_map_for_urdn(urd)
+        bkgmap = make_background_det_map_for_urdn(urdn, imgfilters[urdn])
+        sky._set_core(bkgmap.grid[0], bkgmap.grid[1], bkgmap.values)
         #bkg = AttWCSHistmean.make_mp(bkgmap, exptime, qval, wcs, mpnum, subscale=subscale) + bkg
-        bkg = AttInvHist.make_mp(wcs, bkgmap, exptime, qval,  mpnum) + bkg
+        #bkg = AttInvHist.make_mp(wcs, bkgmap, exptime, qval,  mpnum) + bkg
+        if kind == "direct":
+            sky.interpolate_mp(qval[:], exptime[:], mpnum)
+        elif kind == "convolve":
+            sky.convolve(qval, exptime, mpnum)
         print("done!")
 
     if wcs.wcs.has_cd():
         scale = np.linalg.det(wcs.wcs.cd)/dxya**2.
     else:
         scale = wcs.wcs.cdelt[0]*wcs.wcs.cdelt[1]/dxya**2.
-    return bkg*scale
+    return np.copy(sky.img)*scale
 
 def make_quick_bkgmap_for_wcs(wcs, attdata, urdgtis, time_corr={}):
     pixsize = wcs.wcs.cdelt[0] #sqrt(np.linalg.det(wcs.wcs.pc))
@@ -172,23 +177,27 @@ def get_background_events_weight(filters, udata):
     idxg = gidx[udata["GRADE"]]
     return spec[idxe, idxg]/np.sum(spec)
 
-def get_photon_vs_particle_prob(filters, udata):
-    gridp, specp = get_crabspec_for_filters(filters)
-    specp = (specp/np.diff(gridp["ENERGY"])[:, np.newaxis])/specp.sum()
+def get_photon_vs_particle_prob(urdfilters, udata, urdweights={}):
+    pweights = {}
+    for urdn in udata:
+        filters = urdfilters[urdn]
 
-    gridb, specb = get_background_spectrum(filters)
-    specb = (specb/np.diff(gridb["ENERGY"])[:, np.newaxis])/specb.sum()
+        gridp, specp = get_crabspec_for_filters(filters)
+        specp = (specp/np.diff(gridp["ENERGY"])[:, np.newaxis])/specp.sum()
 
-    eidx = np.searchsorted(gridb["ENERGY"], udata["ENERGY"]) - 1
-    gidx = np.zeros(30, np.int)
-    gidx[gridb["GRADE"]] = np.arange(gridb["GRADE"].size)
-    bweights = specb[eidx, gidx[udata["GRADE"]]]
+        gridb, specb = get_background_spectrum(filters)
+        specb = (specb/np.diff(gridb["ENERGY"])[:, np.newaxis])/specb.sum()
 
-    eidx = np.searchsorted(gridp["ENERGY"], udata["ENERGY"]) - 1
-    gidx = np.zeros(30, np.int)
-    gidx[gridp["GRADE"]] = np.arange(gridb["GRADE"].size)
-    pweights = specp[eidx, gidx[udata["GRADE"]]]
-    return pweights/bweights
+        eidx = np.searchsorted(gridb["ENERGY"], udata[urdn]["ENERGY"]) - 1
+        gidx = np.zeros(30, np.int)
+        gidx[gridb["GRADE"]] = np.arange(gridb["GRADE"].size)
+        bweights = specb[eidx, gidx[udata[urdn]["GRADE"]]]
+
+        eidx = np.searchsorted(gridp["ENERGY"], udata[urdn]["ENERGY"]) - 1
+        gidx = np.zeros(30, np.int)
+        gidx[gridp["GRADE"]] = np.arange(gridb["GRADE"].size)
+        pweights[urdn] = specp[eidx, gidx[udata[urdn]["GRADE"]]]/bweights*urdweights.get(urdn, 1)
+    return pweights
 
 
 def get_background_lightcurve(tevts, urdgti, bkgfilters, timebin, imgfilters=None):
@@ -211,7 +220,7 @@ def get_background_lightcurve(tevts, urdgti, bkgfilters, timebin, imgfilters=Non
         urdbkg = {urdn: lc._scale(get_background_bands_ratio(imgfilters[urdn], bkgfilters)) for urdn, lc in urdbkg.items()}
     return urdbkg
 
-def get_bkg_lightcurve_for_app(urdbkg, urdgti, filters, att, ax, appsize, te):
+def get_bkg_lightcurve_for_app(urdbkg, urdgti, filters, att, ax, appsize, te, dtcorr={}):
     bkgprofiles = {urdn: get_background_surface_brigtnress(urdn, filters[urdn], fill_value=0.) for urdn in urdgti}
     bkgprofiles = {urdn: profile/profile.sum() for urdn, profile in bkgprofiles.items()}
     gti = reduce(lambda a, b: a | b, urdgti.values())
@@ -230,7 +239,7 @@ def get_bkg_lightcurve_for_app(urdbkg, urdgti, filters, att, ax, appsize, te):
         shmask = get_shadowmask_by_urd(urdn)
         x, y = xd[shmask], yd[shmask]
         pr = bkgprofiles[urdn][shmask]
-        rl = urdbkg[urdn].integrate_in_timebins(teu)[gaps]
+        rl = urdbkg[urdn].integrate_in_timebins(teu, dtcorr.get(urdn, None))[gaps]
         vec = raw_xy_to_vec(x, y)
         lloc = np.array([pr[np.sum(vec*q.apply(ax, inverse=True), axis=1) > cosa].sum() for q in qlist])*rl
         idx = np.searchsorted(te, tc) - 1
