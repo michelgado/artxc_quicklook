@@ -46,7 +46,7 @@ def offset_to_raw_xy(x, y):
     return x.astype(np.int) - (x < 0), y.astype(np.int) - (y < 0)
 
 #@cache_single_result_np
-def raw_xy_to_vec(rawx, rawy):
+def raw_xy_to_vec(rawx, rawy, subscale=1, randomize=False):
     """
     assuming that the detector is located in the YZ vizier plane and X is normal to it
     we produce vectors, correspongin to the direction at which each particular pixel observe sky in the
@@ -58,6 +58,12 @@ def raw_xy_to_vec(rawx, rawy):
 
     returns: vector defining direction on which pixel have to be projected
     """
+    if subscale != 1:
+        rawx, rawy = multiply_coord(rawx, rawy)
+    if randomize:
+        rawx = rawx + np.random.uniform(-1/2./subscale, 1./2./subscale,  rawx.shape)
+        rawy = rawy + np.random.uniform(-1/2./subscale, 1./2./subscale,  rawy.shape)
+
     return offset_to_vec(*raw_xy_to_offset(rawx, rawy))
 
 #@cache_single_result_np
@@ -124,15 +130,13 @@ def multiply_photons(urddata, subscale=1):
     return multiply_coord(urddata["RAW_X"], urddata["RAW_Y"], subscale)
 
 
-def urd_to_vec(urddata, subscale=1):
+def urd_to_vec(urddata, subscale=1, randomize=False):
     """
     shorcut for offset_to_vec(urd_to_offset())
     produces unit vectors corresponding to offset from optical axis which are required for photon to be scatterd in the pixel with rawx rawy coordinates
     """
-    if subscale == 1:
-        return raw_xy_to_vec(urddata["RAW_X"], urddata["RAW_Y"])
-    else:
-        return raw_xy_to_vec(*urddata["RAW_X"], urddata["RAW_Y"], subscale)
+    return raw_xy_to_vec(urddata["RAW_X"], urddata["RAW_Y"], subscale, randomize)
+
 
 def weight_coordinate(PI, rawcoord, mask):
     """
