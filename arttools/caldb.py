@@ -316,6 +316,13 @@ def get_ayut_inverse_psf_datacube_packed():
     ipsf = np.copy(get_ayut_inversed_psf_data_packed()[1].data)
     return ipsf
 
-
 def get_arf():
     return fits.open(os.path.join(ARTCALDBPATH, "artxc_arf_v000.fits"))
+
+import yaml
+def get_telescope_crabrates(dev=None):
+    crates = yaml.load(open(os.path.join(ARTCALDBPATH, "crab_urd_rates_3surveys.txt")))
+    if dev is None:
+        return crates
+    else:
+        return crates[TELTOURD.get(dev, dev)]
