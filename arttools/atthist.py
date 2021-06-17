@@ -74,10 +74,7 @@ def make_small_steps_quats(attdata, gti=tGTI, timecorrection=lambda x: 1., tedge
     returns: qval, exptime, gti - quatertions, exposure time for this quaternions, and resulted overall gti
     """
     locgti = gti & attdata.gti
-    print(gti.exposure, attdata.gti.exposure)
-    print(locgti.exposure)
     tnew, maskgaps = locgti.make_tedges(attdata.times if tedges is None else tedges)
-    print(tnew)
     if tnew.size == 0:
         return Rotation(np.empty((0, 4), np.double)), np.array([])
 

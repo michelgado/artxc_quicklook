@@ -470,10 +470,6 @@ def make_wcs_for_vec_edges(vecs, alpha=None, pixsize=10./3600.):
     locwcs.wcs.radesys = "FK5"
 
 
-
-
-
-
 def split_survey_mode(attdata, gti=tGTI):
     aloc = attdata.apply_gti(gti)
     rpvec = get_elongation_plane_norm(aloc)

@@ -439,7 +439,7 @@ class SkyImage(object):
                 break
             #qm = convolve(mask, np.ones([convsize, convsize], np.double), mode="same") > 0
             #qmask = qm[pix[:, 1], pix[:, 0]]
-            print("qmask size", qmask.sum(), qmask.size)
+            #print("qmask size", qmask.sum(), qmask.size)
         self.img = ctot
         return self.img
 
@@ -457,7 +457,7 @@ class SkyImage(object):
         sky = cls(locwcs, vmap, shape)
         ctot = np.zeros(sky.img.shape, np.double)
         rmap = np.ones(ctot.shape, np.double)
-        for i in range(20):
+        for i in tqdm.tqdm(range(50)):
             sky.img[:, :] = 0.
             sky.permute_banch(rfun, rmap, mask, qvals, x01, y01, bkgs, scales, energy)
             ctot[mask] = sky.img[mask]
@@ -469,13 +469,12 @@ class SkyImage(object):
     def permute_mp_2(self, rmap, emap, mask, qvals, x01, y01, bkgs, scales, energy=None, rfun=get_source_photon_probability, mpnum=MPNUM):
         self.img[:, :] = 0.
         imgarea = self.img.shape[0]*self.locwcs.wcs.cdelt[0]*self.img.shape[1]*self.locwcs.wcs.cdelt[1]
-        snum = min(4*mpnum, int(imgarea*9)) #curreent inverse psf core has 10 arcmin side, so area 1/9 sq.arcdeg will double the amount of events sent to processes (smaller area will increase that number)
+        snum = min(10*mpnum, int(imgarea*9)) #curreent inverse psf core has 10 arcmin side, so area 1/9 sq.arcdeg will double the amount of events sent to processes (smaller area will increase that number)
         while snum in PRIME_NUMBERS:
             snum += 1
         smallside = get_split_side(snum)
         bigside = snum//smallside
         if self.img.shape[0] < self.img.shape[1]: smallside, bigside = bigside, smallside
-
 
         x = np.linspace(0., self.img.shape[0], smallside + 1).astype(np.int)
         y = np.linspace(0., self.img.shape[1], bigside + 1).astype(np.int)
@@ -492,9 +491,9 @@ class SkyImage(object):
             c = ConvexHullonSphere(pol_to_vec(*np.deg2rad(self.locwcs.all_pix2world(np.array([y[[j, j, j + 1, j + 1]], x[[i, i + 1, i + 1, i]]]).T + 1., 1)).T))
             c = c.expand(expandsize)
             grid.append(c)
-            rslice.append(rmap[x[i]:x[i + 1], y[j]: y[j + 1]])
-            eslice.append(emap[x[i]:x[i + 1], y[j]: y[j + 1]])
-            mslice.append(mask[x[i]:x[i + 1], y[j]: y[j + 1]])
+            rslice.append(np.copy(rmap[x[i]:x[i + 1], y[j]: y[j + 1]]))
+            eslice.append(np.copy(emap[x[i]:x[i + 1], y[j]: y[j + 1]]))
+            mslice.append(np.copy(mask[x[i]:x[i + 1], y[j]: y[j + 1]]))
 
         qvecs = qvals.apply([1, 0, 0])
         masks = ThreadPool(mpnum).map(lambda g: g.check_inside_polygon(qvecs), grid)

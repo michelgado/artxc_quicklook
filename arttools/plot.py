@@ -10,6 +10,8 @@ from .telescope import URDNS
 from .orientation import get_photons_sky_coord, read_gyro_fits, read_bokz_fits, AttDATA, define_required_correction, get_attdata, get_photons_vectors, vec_to_pol
 from .lightcurve import make_overall_lc, weigt_time_intervals
 from .vignetting import load_raw_wignetting_function
+from .filters import IndependentFilters, RationalSet, get_shadowmask_filter, InversedRationalSet
+from .interval import Intervals
 from astropy.io import fits
 from math import pi, cos, sin
 from multiprocessing import Pool, cpu_count, Queue, Process, Pipe
@@ -31,6 +33,14 @@ import arttools
 
 eband = namedtuple("eband", ["emin", "emax"])
 
+imgfilters = {urdn: IndependentFilters({"ENERGY": Intervals([4., 12.]),
+                                        "GRADE": RationalSet(range(10)),
+                                        "RAWXY": get_shadowmask_filter(urdn)}) for urdn in URDNS}
+
+bkgfilters = IndependentFilters({"ENERGY": Intervals([40., 100.]),
+                                 "GRADE": RationalSet(range(10)),
+                                 "RAW_X": arttools.filters.InversedRationalSet([0, 47]),
+                                 "RAW_Y": arttools.filters.InversedRationalSet([0, 47])})
 
 class NoDATA(Exception):
     pass
@@ -162,7 +172,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
     urdgti = {URDN:emptyGTI for URDN in URDNS}
     urdhk = {}
     urdbkg = {}
-    urdbkge = {}
+    urdbkge = []
     bkggti = {}
 
     for urdfname in urdflist[:]:
@@ -174,7 +184,6 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
         print("processing:", urdfname)
         locgti = (get_gti(urdfile, "STDGTI") if "STDGTI" in urdfile else get_gti(urdfile)) & gti & ~urdgti.get(urdn, emptyGTI) # & -urdbti.get(urdn, emptyGTI)
         locgti.merge_joint()
-        locbgti = (get_gti(urdfile, "STDGTI") if "STDGTI" in urdfile else get_gti(urdfile)) & (gti + [-200, 200]) & ~bkggti.get(urdn, emptyGTI)
         print("exposure in GTI:", locgti.exposure)
         locgti = locgti & ~urdbti.get(urdn, emptyGTI)
         print("exposure after excluding BTI", locgti.exposure)
@@ -182,7 +191,6 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
             continue
         print("Tstart, Tstop:", locgti.arr[[0, -1], [0, 1]])
         urdgti[urdn] = urdgti.get(urdn, emptyGTI) | locgti
-        bkggti[urdn] = bkggti.get(urdn, emptyGTI) | locbgti
 
         urddata = np.copy(urdfile["EVENTS"].data) #hint: do not apply bool mask to a fitsrec - it's a stright way to the memory leak :)
         urddata = urddata[(locgti + [-200, 200]).mask_external(urddata["TIME"])]
@@ -204,9 +212,8 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
                 print("total photon on img", timg.sum(), "selected events", pickimg.sum())
                 imgdata[bandname] += timg
 
-        pickbkg = np.all([energy > 40., energy < 100., grade > -1, grade < 10, flag < 3], axis=0)
-        bkgevts = urddata["TIME"][pickbkg]
-        urdbkge[urdn] = urdbkge.get(urdn, []) + [bkgevts,]
+        bkgevts = urddata["TIME"][bkgfilters.apply(urddata)]
+        urdbkge.append(bkgevts)
 
     for bandname, img in imgdata.items():
         img = fits.PrimaryHDU(header=locwcs.to_header(), data=img)
@@ -214,32 +221,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
 
     urdhk = {urdn:np.unique(np.concatenate(hklist)) for urdn, hklist in urdhk.items()}
     urddtc = {urdn: deadtime_correction(hk) for urdn, hk in urdhk.items()}
-
-    tevts = np.sort(np.concatenate([np.concatenate(e) for e in urdbkge.values()]))
-    #pickle.dump([urdgti, urdhk, urdbkg, urdbkge, bkggti], open("/srg/a1/work/andrey/arttest.pickle", "wb"))
-    """
-    tgti = reduce(lambda a, b: a & b, urdgti.values())
-    te, mgaps = tgti.arange(100)
-    #te = np.concatenate([np.linspace(s, e, int((e-s)//100.) + 2) for s, e in tgti.arr])
-    #mgaps = np.ones(te.size - 1, np.bool)
-    if tgti.arr.size > 2:
-        mgaps[np.cumsum([(int((e-s)//100.) + 2) for s, e in tgti.arr[:-1]]) - 1] = False
-        mgaps[te[1:] - te[:-1] < 10] = False
-
-    tevts = np.sort(np.concatenate([np.concatenate(e) for e in urdbkge.values()]))
-    rate = tevts.searchsorted(te)
-    rate = (rate[1:] - rate[:-1])[mgaps]/(te[1:] - te[:-1])[mgaps]
-    tc = (te[1:] + te[:-1])[mgaps]/2.
-    tm = np.sum(tgti.mask_external(tevts))/tgti.exposure
-
-
-    if tc.size == 0:
-        urdbkg = {urdn: lambda x: np.ones(x.size)*tm*urdbkgsc[urdn]/7.62 for urdn in urdbkgsc}
-    else:
-        urdbkg = {urdn: interp1d(tc, rate*urdbkgsc[urdn]/7.61, bounds_error=False, fill_value=tm*urdbkgsc[urdn]/7.62) for urdn in urdbkgsc}
-    """
-    tebkg, mgapsbkg, cratebkg, crerrbkg, bkgrate = make_overall_lc(tevts, bkggti, 25.)
-    urdbkg = {urdn: constscale(urdbkgsc[urdn], bkgrate) for urdn in urdbkgsc}
+    urdbkg = arttools.background.get_background_lightcurve(np.sort(np.concatenate(urdbkge)), urdgti, bkgfilters, 1000., imgfilters)
 
     if usedtcorr:
         emap = make_expmap_for_wcs(locwcs, attdata, urdgti, dtcorr=urddtc, **kwargs)
@@ -247,7 +229,7 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
         emap = make_expmap_for_wcs(locwcs, attdata, urdgti, **kwargs)
     emap = fits.PrimaryHDU(data=emap, header=locwcs.to_header())
     emap.writeto(outexpmapname, overwrite=True)
-    bmap = make_bkgmap_for_wcs(locwcs, attdata, urdgti, time_corr=urdbkg)
+    bmap = make_bkgmap_for_wcs(locwcs, attdata, urdgti, urdbkg, imgfilters)
     bmap = fits.PrimaryHDU(data=bmap, header=locwcs.to_header())
     bmap.writeto(outbkgname, overwrite=True)
 

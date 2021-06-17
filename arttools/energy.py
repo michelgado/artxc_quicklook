@@ -130,16 +130,7 @@ def add_energies_and_grades(udata, hkdata, caldb):
     e, x, y, g = get_events_energy(udata, hkdata, caldb)
     return np.lib.recfunctions.append_fields(udata, ["ENERGY", "GRADE"], [e, g], usemask=False)
 
-def get_events_crab_weights(grid, spec, udata):
-    #grid, spec = get_background_spectrum(filters)
-    gidx = np.zeros(grid["GRADE"].max() + 1, np.int)
-    gidx[grid["GRADE"]] = np.arange(grid["GRADE"].size)
-    idxe = np.searchsorted(grid["ENERGY"], udata["ENERGY"]) - 1
-    idxg = gidx[udata["GRADE"]]
-    return spec[idxe, idxg]/np.sum(spec)
-
 
 def get_arf_energy_function(arf):
     ec = (arf[1].data["ENERG_LO"] + arf[1].data["ENERG_HI"])/2.
     return interp1d(ec, arf[1].data["SPECRESP"], bounds_error=False, fill_value=0.)
-

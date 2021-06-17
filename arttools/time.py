@@ -34,39 +34,6 @@ class GTI(Intervals):
         arr = np.array([ts[:-1], ts[1:]]).T
         return cls(arr)
 
-    def make_tedges(self, ts, joinsize=0):
-        """
-        assuming that ts is a series of ascending evenly spaced points,
-        produce new series of points, lying in the GTIs (with additional points at the edges of
-        intervals if requeired), and mask, showing position of the gaps between points clusted from
-        different intervals
-        """
-        dtmed = np.median(np.diff(ts, 1))
-        gtloc = self & self.__class__(ts[[0, -1]])
-        if joinsize > 0:
-            gtloc.remove_short_intervals(joinsize*dtmed)
-        if gtloc.exposure == 0:
-            return np.array([]), np.array([])
-        #print(ts, gtloc.arr - ts[0])
-        #print(gtloc.arr[:, 1] - gtloc.arr[:, 0])
-        ts = ts[gtloc.mask_external(ts)]
-        newts = np.unique(np.concatenate([ts, gtloc.arr.ravel()]))
-        idxgaps = newts.searchsorted((gtloc.arr[:-1, 1] + gtloc.arr[1:, 0])/2.)
-        maskgaps = np.ones(newts.size - 1 if newts.size else 0, np.bool)
-        maskgaps[idxgaps - 1] = False
-        #print(ts[:3] - ts[0], ts[-3:] - ts[0])
-        #print(newts[:3] - ts[0], ts[-3:] - ts[0])
-        #print(newts.size)
-        #print(idxgaps[:3], idxgaps[-3:])
-        #print(gtloc.arr - ts[0])
-        #===============================================
-        #join time intervals at the edges of the gti, if they are two short
-        dt = np.diff(newts, 1)
-        dtmed = np.median(dt)
-        maskshort = np.ones(newts.size, np.bool)
-        maskshort[idxgaps + 1] = dt[idxgaps] > dtmed*joinsize
-        maskshort[idxgaps - 2] = dt[idxgaps - 2] > dtmed*joinsize
-        return newts[maskshort], maskgaps[maskshort[:-1]]
 
     def filter_data(self, data):
         try:
@@ -134,8 +101,8 @@ def get_gti(ffile, gtiextname="GTI", excludebki=True, merge_interval_dt=None):
         gaps = gti.arr.ravel()[1:-1].reshape((-1, 2)) # get bounds of the gaps between gti
         crate = -np.subtract.reduce(np.searchsorted(ffile["EVENTS"].data["TIME"], gti.arr), axis=1)/(gti.arr[:,1] - gti.arr[:,0])
         garr = np.copy(gti.arr)
-        garr[1:, 0] -= 5./crate[1:]
-        garr[:-1, 1] += 5./crate[:-1]
+        garr[1:, 0] -= 7./crate[1:]
+        garr[:-1, 1] += 7./crate[:-1]
         gti = GTI(garr)
 
     gti = gti & make_hv_gti(ffile["HK"].data)

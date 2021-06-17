@@ -8,6 +8,7 @@ from . import datafilters
 from . import filters
 from . import psf
 from . import sensitivity
+from . import spectr
 
 __version__ = "0.2.1"
 

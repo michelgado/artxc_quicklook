@@ -88,7 +88,6 @@ def unpack_inverse_psf_ayut(i, j, e=None):
     else:
         return data
 
-
 def get_ipsf_interpolation_func():
     ipsf = get_inversed_psf_data_packed()
     xo = ipsf["offset"].data["x_offset"]
