@@ -61,6 +61,15 @@ class InversedIndexMask(OrderedDict):
             raise ValueError("imcompatible fields")
         return InversedIndexMask(self.items(), np.logical_or(mask))
 
+    def meshgrid(self, arrays):
+        keys = list(self.keys())[::-1]
+        ud = np.meshgrid(*[self[name](arrays[name]) for name in keys])
+        shape = ud[0].shape
+        data = np.column_stack([a.ravel() for a in ud[::-1]]).ravel().view(
+                                    [(name, np.int) for name in keys[::-1]]).reshape(shape)
+
+        return self.apply(data)
+
 class IndependentFilters(dict):
     """
     multidimensional named interval
@@ -85,10 +94,18 @@ class IndependentFilters(dict):
 
         return mask #np.all([f.apply(valsset if type(f) == InversedIndexMask else valsset[k]) for k, f in self.items() if k in valsset.dtype.names], axis=0)
 
+    def meshgrid(self, keys, arrays):
+        ud = np.meshgrid(*[a for a in arrays[::-1]])[::-1]
+        shape = ud[0].shape
+        data = np.column_stack([a.ravel() for a in ud[::-1]]).ravel().view(
+                                    [(name, np.int) for name in keys[::-1]])
+        return self.apply(data).reshape(shape)
+
 
 def get_shadowmask_filter(urdn):
     shmask = get_shadowmask_by_urd(urdn)
     if urdn == 22:
         shmask[[45, 46], :] = False
     return InversedIndexMask(zip(["RAW_X", "RAW_Y"], [strightindex, strightindex]), shmask)
+
 
