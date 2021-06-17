@@ -8,10 +8,11 @@ from .atthist import hist_orientation_for_attdata
 from .orientation import vec_to_pol, pol_to_vec
 from .filters import get_shadowmask_filter
 from .energy  import get_arf_energy_function
-from .caldb import  get_optical_axis_offset_by_device, get_arf
+from .caldb import  get_optical_axis_offset_by_device, get_arf, get_crabspec
 from .planwcs import ConvexHullonSphere, convexhull_to_wcs
 from .psf import xy_to_opaxoffset, unpack_inverse_psf_ayut
 from .mosaic import SkyImage
+from .spectr import get_filtered_crab_spectrum, Spec
 
 from scipy.interpolate import interp1d, RegularGridInterpolator
 from scipy.integrate import quad
@@ -169,15 +170,28 @@ def make_direct_estimation(urdn, rate, brate, imgfilter, phot_index=2., powi=1, 
         shmask[:, [0, -1]] = False
 
     emin, emax = imgfilter["ENERGY"].arr[0]
-    ee = np.array([4., 6., 8., 10., 12., 16., 20., 24., 30.])
+    ee = np.array([4., 6., 8., 10., 12., 16., 20., 24., 30.]) #TODO put iPSF in caldb!!!!
+    gridb, bkgspec = get_background_spectrum(imgfilter)
+    bkgspec = bkgspec.sum(axis=1)/bkgspec.sum()
+    s1 = Spec(gridb["ENERGY"][:-1], gridb["ENERGY"][1:], bkgspec)
+    grids, crbspec = get_filtered_crab_spectrum(imgfilter, collapsegrades=True)
+    s2 = Spec(grids["ENERGY"][:-1], grids["ENERGY"][1:], crbspec/crbspec.sum())
+
+    wb = s1.integrate_in_bins(np.array([ee[:-1], ee[1:]]).T)
+    wb = wb/wb.sum()
+
     if not cspec is None:
+        s3 = Spec(egrid[:-1], egrid[1:], cspec)
+        w = s3.integrate_in_bins(np.array([ee[:-1], ee[1:]]).T)
+        w = w/w.sum()
+        """
         egloc = np.unique(np.concatenate([egrid, ee]))
         ec = (egloc[1:] + egloc[:-1])/2.
         cspec = np.concatenate([cspec/cspec.sum()/np.diff(egrid), [0, ]])
         w = cspec[np.searchsorted(egrid, ec) - 1]*np.diff(egloc)
         eidx = np.searchsorted(ee, ec) - 1
+        """
     else:
-        ee = np.array([4., 6., 8., 10., 12., 16., 20., 24., 30.])
         eidx = np.searchsorted(ee, [emin, emax]) - [1, -1]
         eidx[0] = max(eidx[0], 0)
         eidx[1] = min(eidx[1], ee.size)
@@ -185,14 +199,18 @@ def make_direct_estimation(urdn, rate, brate, imgfilter, phot_index=2., powi=1, 
         eel[0] = max(emin, eel[0])
         eel[-1] = min(emax, eel[-1])
 
-        w = [quad(lambda e: arf(e)*e**-phot_index, emin, emax)[0] for emin, emax in zip(eel[:-1], eel[1:])]
+        #w = [quad(lambda e: arf(e)*e**-phot_index, emin, emax)[0] for emin, emax in zip(eel[:-1], eel[1:])]
+        w = [quad(lambda e: arf(e)*e**-phot_index, min(el, emax), min(eh, emax))[0] for el, eh in zip(ee[:-1], ee[1:])]
         w = np.array(w)
         w = w/w.sum()
+
+    ms = w > 0.
 
     x, y = np.mgrid[0:48:1, 0:48:1]
     x1, y1 = x[shmask], y[shmask]
     x2, y2 = xy_to_opaxoffset(x1, y1, urdn)
 
+    bkgprofile = get_background_surface_brigtnress(urdn, imgfilter, fill_value=0., normalize=True)
 
     if app is None:
         psfmask = None
@@ -204,10 +222,20 @@ def make_direct_estimation(urdn, rate, brate, imgfilter, phot_index=2., powi=1, 
     for xl, yl, xo, yo in zip(x1, y1, x2, y2):
         dx, dy = xl - x0, yl - y0
         sl = img[(xl - 1)*9: (xl - 1)*9 + 121, (yl - 1)*9: (yl - 1)*9 + 121]
+        """
         lipsf = np.sum(unpack_inverse_psf_ayut(xo, yo)[eidx[0]:eidx[1] - 1]*w[:, np.newaxis, np.newaxis], axis=0)
         if not app is None:
             lipsf[psfmask] = 0.
         sl += (-lipsf*rate/(lipsf*rate + bkgprofile[xl, yl]*brate) + np.log((lipsf*rate + bkgprofile[xl, yl]*brate)/bkgprofile[xl, yl]/brate))**powi*(lipsf*rate + bkgprofile[xl, yl]*brate)
+        """
+        usf = unpack_inverse_psf_ayut(xo, yo)
+        if not app is None:
+            usf = usf*psfmask[np.newaxis, :, :]
+        u1 = usf[ms, :, :]*rate*w[ms, np.newaxis, np.newaxis]
+        b1 = bkgprofile[xl, yl]*brate*wb[ms]
+        b2 = u1 + b1[:, np.newaxis, np.newaxis]
+        sl += np.sum((-u1/b2 + np.log(b2/b1[:, np.newaxis, np.newaxis]))**powi*b2, axis=0)
+
     dx = (np.arange(img.shape[0]) - img.shape[0]//2)/9.*DL
     return RegularGridInterpolator((dx, dx), img, bounds_error=False, fill_value=0.)
 
@@ -288,6 +316,7 @@ def compute_completness_forconstbkg_and_srcrate(wcs, thlim, rate, attdata, urdgt
             skym1.interpolate_mp(qval[:], exptime[:], mpnum)
         elif kind == "convolve":
             skym1.convolve(qval, exptime, mpnum)
+            print("urdn", urdn, skym1.img.sum())
         vmap = make_direct_estimation(urdn, rate, bmean, imgfilters[urdn], powi=2, **kwargs)
         skym2._set_core(vmap.grid[0], vmap.grid[1], vmap.values)
         if kind == "direct":
