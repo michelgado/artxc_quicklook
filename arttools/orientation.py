@@ -120,7 +120,7 @@ class SlerpWithNaiveIndexing(Slerp):
         # but, one can imagine, that sparse points are completed with more
         idxmix = np.searchsorted(self.times, other.times)
         mask = np.logical_and(idxmix > 0, idxmix < self.times.size)
-        print("quat crossing", mask.sum())
+        #print("quat crossing", mask.sum())
         if np.any(mask):
             if not np.allclose(self(other.times[mask]).as_quat(),
                                other(other.times[mask]).as_quat()):
@@ -155,10 +155,15 @@ class AttDATA(SlerpWithNaiveIndexing):
         except Exception:
             self.gti = GTI(self.times[[0, -1]])
         if hide_bad_interpolations:
+            # _chekc_interpolation_quality will find outliers
             bti = self._check_interpolation_quality()
             mask = bti.mask_external(self.times)
+            # lets store outliers in a separate array
             self.bt, self.bq = self.times[mask], self(self.times[mask])
             super().__init__(self.times[~mask], self(self.times[~mask]))
+            # check interpolation one more time to see wether new neighbouring
+            # points provied good interpolation if no, exclude them from GTI
+            self.gti = self.gti & ~self._check_interpolation_quality()
         else:
             self.gti = self.gti & ~self._check_interpolation_quality()
 
@@ -331,7 +336,7 @@ def get_raw_bokz(bokzhdu):
 def get_events_quats(urddata, URDN, attdata):
     return attdata(urddata["TIME"])*get_boresight_by_device(URDN)
 
-def get_photons_vectors(urddata, URDN, attdata, subscale=1):
+def get_photons_vectors(urddata, URDN, attdata, subscale=1, randomize=False):
     """
     return cartesian vectros, defining direction to the sky, for the specific pixel, defined with urddata rawx, rawy coordinates
 
@@ -347,7 +352,7 @@ def get_photons_vectors(urddata, URDN, attdata, subscale=1):
     if not np.all(attdata.gti.mask_external(urddata["TIME"])):
         raise ValueError("some events are our of att gti")
     qall = attdata(np.repeat(urddata["TIME"], subscale*subscale))*get_boresight_by_device(URDN)
-    photonvecs = urd_to_vec(urddata, subscale)
+    photonvecs = urd_to_vec(urddata, subscale, randomize)
     phvec = qall.apply(photonvecs)
     return phvec
 
@@ -568,14 +573,76 @@ def get_elongation_plane_norm(attdata, gti=None): #tGTI):
     return rvecm
 
 
+
+class SlerpForward(object):
+    def __init__(self, times, rotvecs, omega):
+        self.times = times
+        self.rotvecs = rotvecs
+        self.omega = np.ones(self.times.size, np.double)*omega
+
+    def __call__(self, ts):
+        idx = np.searchsorted(self.times, ts) - 1
+        print(idx, self.rotvecs.shape, self.omega.shape)
+        return Rotation.from_rotvec(self.rotvecs[idx]*(self.omega[idx]*(ts - self.times[idx]))[:, np.newaxis])
+
+
+class Survey(object):
+    def __init__(self, opax, pole, opaxrot, gti, qcorr=None, zcorr=None, fcorr=None):
+        self.opax = opax
+        self.pole = pole
+        self.opaxrot = opaxrot
+        self.qcorr = qcorr if not qcorr is None else Rotation([0, 0, 0, 1])
+        self.zcorr = zcorr if not zcorr is None else Rotation([0, 0, 0, 1])
+        self.fcorr = fcorr if not fcorr is None else Rotation([0, 0, 0, 1])
+        self.gti = gti
+
+    def __call__(self, times):
+        return (self.fcorr*self.pole(times)*self.zcorr*self.opaxrot(times)*self.qcorr).apply(self.opax[np.searchsorted(self.gti.arr[:, 0], times) - 1])
+
+    @classmethod
+    def read_surv_fits(cls, fname, fcorr=None, qcorr=None, zcorr=None, omegacorr=1., romegacorr=1.):
+        ffile = fits.open(fname)
+        surveys = np.copy(ffile[1].data)[ffile[1].data["TYPE"] == "SURVEY"]
+        start = (Time([datetime.fromisoformat(t) for t in surveys["START"].astype(str)]) - \
+                Time(51543.875, format="mjd")).sec
+        #start = 6.42068102e+08 + (start - 6.42068102e+08)/omegacorr
+        stop = (Time([datetime.fromisoformat(t) for t in surveys["STOP"].astype(str)]) - \
+                Time(51543.875, format="mjd")).sec #- 3.*3600.
+        print(start, stop)
+        polus = pol_to_vec(surveys["RA_P"]*pi/180, surveys["DEC_P"]*pi/180).reshape((-1, 3))
+        opax = polus
+        omega = (surveys["Z_SPEED"]*pi/180./(24*3600.)*omegacorr).ravel()
+        print(omega)
+        print(polus.shape)
+        phi = np.ones(start.size*2, np.double)*2.*pi
+        phi[1::2] = 2.*pi + omega*(stop - start)
+        print(Rotation.from_rotvec(np.repeat(polus, 2, axis=0)*phi[:, np.newaxis]))
+        print(start - start[0], stop - start[0])
+        print(np.array([start, stop]).T.ravel() - start[0])
+        ts = np.sort(np.array([start + 1e-6, stop]).T.ravel() )
+        print(ts[1:] - ts[:-1])
+        #pole = Slerp(ts, Rotation.from_rotvec(np.repeat(polus, 2, axis=0)*phi[:, np.newaxis]))
+        pole = SlerpForward(start, polus, omega)
+
+        opaxrot = pol_to_vec(surveys["RA_Z0"]*pi/180, surveys["DEC_Z0"]*pi/180).reshape((-1, 3))
+        phi[1::2] = 2.*pi + (stop - start)*2.*pi/(4.*3600.)
+        #opaxrot = Slerp(ts, Rotation.from_rotvec(np.repeat(opaxrot, 2, axis=0)*phi[:, np.newaxis]))
+        opaxrot = SlerpForward(start, opaxrot, 2.*pi/4./3600.*romegacorr)
+        gti = GTI(np.array([start, stop]).T)
+        return cls(opax, pole, opaxrot, gti, qcorr, zcorr, fcorr)
+
+
+
+
+
 class SurveyAtt(object):
     """
     """
-    def __init__(self, polus, omega, tstart, tstop, sc_start_rotvec, sc_romega, sc_start_vec, roll):
+    def __init__(self, polus, omega, gtitstart, tstop, sc_start_rotvec, sc_romega, sc_start_vec, roll):
         """
         initialize survey att container:
-         for a set (or single) tstart values, store survey pole, survey angular frequency, start rotating
-         vector, optical axis rotating speed
+        for a set (or single) tstart values, store survey pole, survey angular frequency, start rotating
+        vector, optical axis rotating speed
         """
         self.tstart = np.asarray(tstart)
         """ start times for survey pices"""
