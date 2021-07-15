@@ -134,11 +134,12 @@ def make_exposures(direction, te, attdata, urdgtis, urdweights={}, mpnum=MPNUM, 
     for urdn in urdgtis:
         teu, gaps = urdgtis[urdn].make_tedges(tel)
         dtu = np.diff(teu)[gaps]
+        print("urdn", urdn, dtu.sum())
         tc = (teu[1:] + teu[:-1])[gaps]/2.
         qlist = attdata(tc)*get_boresight_by_device(urdn)
         vmap = make_vignetting_for_urdn(urdn, **kwargs)
-        vmap.values = vmap.values*urdweights.get(urdn, 1.)
-        vval = vmap(vec_to_offset_pairs(qlist.apply(direction, inverse=True)))
+        dtc = dtcorr.get(urdn, lambda x: 1.)(tc)
+        vval = vmap(vec_to_offset_pairs(qlist.apply(direction, inverse=True)))*urdweights.get(urdn, 1.)*dtc
         idx = np.searchsorted(te, tc) - 1
         mloc = (idx >= 0) & (idx < te.size - 1)
         np.add.at(dtn, idx[mloc], vval[mloc]*dtu[mloc])
