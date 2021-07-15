@@ -57,6 +57,15 @@ def sum_lcs(tes, lcs, gaps=None, sigmas=None):
         west = west + 1./sigmas[i][idx]**2.
     return tetot, lest/west
 
+def join_lcs(urdbkg):
+    tetot = np.unique(np.concatenate([d.te for d in urdbkg.values()]))
+    crsum = np.zeros(tetot.size - 1, np.double)
+    for d in urdbkg.values():
+        cv = interp1d(d.te, np.concatenate([[0,], (d.crate*np.diff(d.te)).cumsum()]), bounds_error=False, fill_value=(0, np.sum(d.crate*np.diff(d.te))))
+        crsum += np.diff(cv(tetot))/np.diff(tetot)
+    return Bkgrate(tetot, crsum)
+
+
 
 class Bkgrate(object):
 
