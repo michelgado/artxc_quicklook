@@ -88,8 +88,9 @@ def unpack_inverse_psf_ayut(i, j, e=None):
     else:
         return data
 
-def get_ipsf_interpolation_func():
+def get_ipsf_interpolation_func(app=6.*60):
     ipsf = get_inversed_psf_data_packed()
     xo = ipsf["offset"].data["x_offset"]
     yo = ipsf["offset"].data["y_offset"]
+    #xo = xo[(xo > - app) & (xo < app)]
     return RegularGridInterpolator((xo, yo), np.empty((xo.size, yo.size), np.double))

@@ -76,7 +76,7 @@ def make_small_steps_quats(attdata, gti=tGTI, timecorrection=lambda x: 1., tedge
     locgti = gti & attdata.gti
     tnew, maskgaps = locgti.make_tedges(attdata.times if tedges is None else tedges)
     if tnew.size == 0:
-        return Rotation(np.empty((0, 4), np.double)), np.array([])
+        return np.array([]), Rotation(np.empty((0, 4), np.double)), np.array([]), GTI([])
 
     ts = ((tnew[1:] + tnew[:-1])/2.)[maskgaps]
     dt = (tnew[1:] - tnew[:-1])[maskgaps]

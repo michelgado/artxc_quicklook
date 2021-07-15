@@ -88,7 +88,10 @@ emptyGTI = GTI(np.empty((0, 2)))
 
 def get_gti(ffile, gtiextname="GTI", excludebki=True, merge_interval_dt=None):
     if not gtiextname is None:
-        gti = GTI(np.array([ffile[gtiextname].data["START"], ffile[gtiextname].data["STOP"]]).T)
+        try:
+            gti = GTI(np.array([ffile[gtiextname].data["START"], ffile[gtiextname].data["STOP"]]).T)
+        except Exception:
+            gti = GTI(np.array([ffile[gtiextname].data["TSTART"], ffile[gtiextname].data["TSTOP"]]).T)
     else:
         gti = tGTI
         for hdu in ffile:

@@ -360,7 +360,7 @@ def add_ra_dec(urddata, urdn, attdata):
     ra, dec = np.rad2deg(get_photons_sky_coord(urddata, urdn, attdata))
     return np.lib.recfunctions.append_fields(udata, ["RA", "DEC"], [ra, dec], usemask=False)
 
-def get_photons_sky_coord(urddata, URDN, attdata, subscale=1):
+def get_photons_sky_coord(urddata, URDN, attdata, subscale=1, randomize=False):
     """
     converts eventlist event pixel information in to the ra and dec spherical coordinates of fk5 system
 
@@ -374,7 +374,7 @@ def get_photons_sky_coord(urddata, URDN, attdata, subscale=1):
     returns:
         ra and dec coordinates in fk5 system in radians
     """
-    phvec = get_photons_vectors(urddata, URDN, attdata, subscale)
+    phvec = get_photons_vectors(urddata, URDN, attdata, subscale, randomize)
     return vec_to_pol(phvec)
 
 def nonzero_quaternions(quat):

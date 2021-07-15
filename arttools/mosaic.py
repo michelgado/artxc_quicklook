@@ -60,9 +60,9 @@ class SkyImage(object):
         self.img = np.zeros(np.diff(self.shape, axis=1).ravel(), np.double)
         self.lock = Lock()
 
-        self.y, self.x = np.mgrid[self.shape[0][0] + 1:self.shape[0][1] + 1:1, self.shape[1][0] + 1: self.shape[1][1] + 1:1]
-        self.ra, self.dec = self.locwcs.all_pix2world(np.array([self.x.ravel(), self.y.ravel()]).T, 1).T
-        self.vecs = pol_to_vec(*np.deg2rad([self.ra, self.dec])).reshape(list(self.img.shape) + [3, ])
+        y, x = np.mgrid[self.shape[0][0] + 1:self.shape[0][1] + 1:1, self.shape[1][0] + 1: self.shape[1][1] + 1:1]
+        ra, dec = self.locwcs.all_pix2world(np.array([x.ravel(), y.ravel()]).T, 1).T
+        self.vecs = pol_to_vec(*np.deg2rad([ra, dec])).reshape(list(self.img.shape) + [3, ])
         if not vmap is None:
             self._set_core(vmap.grid[0], vmap.grid[1], vmap.values)
 
@@ -124,7 +124,6 @@ class SkyImage(object):
         else:
             vmapvals = RawArray(self.vmap.values.dtype.char, self.vmap.values.size)
             np.copyto(np.frombuffer(vmapvals).reshape(self.vmap.values.shape), self.vmap.values)
-            lock = Lock()
             qin = Queue(100)
             qout = Queue()
             res = [self.img, ]
@@ -256,26 +255,6 @@ class SkyImage(object):
             core = self.vmap(vec_to_offset(lvecs))
             np.add.at(self.img.ravel(), lidx, rfun(core, np.repeat(bkgs[sl], csize), np.repeat(scales[sl], csize)*rmap.ravel()[lidx]))
 
-    def permute_banch_old(self, rmap, qvals, x01, y01, bkgs, scales, mask, rfun):
-        ijpairs, iidx, counts = np.unique(np.array([x01, y01]), axis=1, return_counts=True, return_inverse=True)
-        isidx = np.argsort(iidx)
-        ii = np.concatenate([[0,], np.cumsum(counts[:-1])])
-        slices = [slice(s, e) for s, e in zip(ii, ii + counts)]
-        bkgs = bkgs[isidx]
-        scales = scales[isidx]
-        qvals = qvals[isidx]
-
-        self.rmap = rmap
-        self.mask = mask
-        self.detm = np.zeros(mask.shape, np.bool)
-
-        for k, sl in enumerate(slices):
-            i, j = ijpairs[:, k]
-            self.vmap.values = unpack_inverse_psf(i, j)
-            for q, b, s in zip(qvals[sl], bkgs[sl], scales[sl]):
-                self.permute_with_rmap(q, b, s, rfun)
-
-
     def permute_thread(self, rmap, qvals, x01, y01, bkgs, scales, mask, mpnum=MPNUM):
         self.rmap = rmap
         self.mask = mask
@@ -293,6 +272,11 @@ class SkyImage(object):
 
         pool.map(self.permute_thread_pool_worker, zip(slices, ijpairs[0], ijpairs[1]))
         return np.sum(self.imgbuffer, axis=0)
+
+    def sender(self, qin, qout):
+        while True:
+            self.qin.get()
+            qout.put(np.copy(self.img[mask]))
 
     @staticmethod
     def permute_mp_worker(rmapv, maskv, maskd, shape, locwcs, vmapgrid, qin, qout, rfun):
@@ -380,7 +364,7 @@ class SkyImage(object):
 
         return self.img
 
-    def permute_ratemap_until_convergence(self, emap, qvals, x01, y01, bkgs, scales, energy=None):
+    def permute_ratemap_until_convergence(self, emap, qvals, x01, y01, bkgs, scales, energy=None, rmap=None, mdet=None):
         self.img[:, :] = 0.
         qmask = np.ones(len(qvals), np.bool)
         pix = (self.locwcs.all_world2pix(np.rad2deg(vec_to_pol(qvals.apply([1, 0, 0]))).T, 1) - 0.5).astype(np.int)
@@ -390,9 +374,11 @@ class SkyImage(object):
         minit = emap > 0.1 #np.median(emap[emap > 0.])*0.001
         mask = np.copy(minit)
         cinit = gaussian_filter(cmap, (30./3600.)/self.locwcs.wcs.cdelt[0])*2.*pi*((30./3600.)/self.locwcs.wcs.cdelt[0])**2.
-        rmap = np.ones(self.img.shape, np.double)
-        rmap[mask] = cinit[mask]/emap[mask]
-        convsize = max(int(sqrt(self.corners.area*2)/self.locwcs.wcs.cdelt[0] + 1), 1)
+        if rmap is None:
+            rmap = np.ones(self.img.shape, np.double)
+            rmap[mask] = cinit[mask]/emap[mask]
+        convsize = max(int(sqrt(self.corners.area)/self.locwcs.wcs.cdelt[0] + 2), 1)
+        convsize = convsize + 1 - convsize%2
         print("locwcs convolutions size", convsize)
         """
         import pyds9
@@ -412,9 +398,9 @@ class SkyImage(object):
         ds9.set_pyfits(fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(data=ctot, header=self.locwcs.to_header())]))
         ds9.set("frame new")
         """
-        for k in range(41):
+        for k in range(51):
             print("iteration %d, compute %f" % (k, mask.sum()/mask.size))
-            self.permute_mp(rmap, mask, qvals[qmask], x01[qmask], y01[qmask], bkgs[qmask], scales[qmask], energy=None if energy is None else energy[qmask])
+            self.permute_mp(rmap, mask, qvals[qmask], x01[qmask], y01[qmask], bkgs[qmask], scales[qmask], mdet, energy=None if energy is None else energy[qmask])
             print(self.img.sum(), self.img[mask].sum())
             ctot[mask] = self.img[mask]
             """
@@ -439,10 +425,9 @@ class SkyImage(object):
                 break
             #qm = convolve(mask, np.ones([convsize, convsize], np.double), mode="same") > 0
             #qmask = qm[pix[:, 1], pix[:, 0]]
-            #print("qmask size", qmask.sum(), qmask.size)
+            print("qmask size", qmask.sum(), qmask.size)
         self.img = ctot
         return self.img
-
 
     def permute_worker_2(self, ):
         allevts = qvals.apply(v)
@@ -483,7 +468,7 @@ class SkyImage(object):
         rslice = []
         eslice = []
         mslice = []
-        expandsize = sqrt(self.corners.area)*pi/180./1.9
+        expandsize = sqrt(self.corners.area)*pi/180./1.8
         for k in range(snum):
             i = k%smallside
             j = k//smallside
