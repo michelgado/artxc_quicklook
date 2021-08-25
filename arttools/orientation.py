@@ -46,7 +46,7 @@ def define_required_correction(attdata):
     return a2 + make_gyro_relativistic_correction(a1)
 
 def make_gyro_relativistic_correction(attdata):
-    if attdata.times.size == 0:
+    if attdata.gti.exposure == 0:
         return attdata
     print("inverse relativistic correction required")
     vec = attdata(attdata.times).apply(OPAX)
@@ -100,9 +100,29 @@ class SlerpWithNaiveIndexing(Slerp):
     def __getitem__(self, idx):
         return Slerp(self.times[idx], self.rotations[idx])
 
+    def __init__(self, times, q):
+        if np.asarray(times).size == 0:
+            self.__call__ = self.blank_call
+            self.times = np.empty(0, np.double)
+        else:
+            super().__init__(times, q)
+
     def __call__(self, tarr):
-        return Rotation(np.empty((0, 4), np.double)) if np.asarray(tarr).size == 0 \
-                else super().__call__(tarr)
+        if np.asarray(tarr).size == 0:
+            return Rotation(np.empty((0, 4), np.double))
+        else:
+            return super().__call__(tarr)
+
+    """
+    def __init__(self, times, q):
+        if np.asarray(times).size == 0:
+            super().__init__([-np.inf, -np.inf], Rotation([[0, 0, 0, 1], [0, 0, 0, 1]]))
+        else:
+            super().__init__(times, q)
+    """
+
+    def blank_call(self, times):
+        raise ValueError("no interpolation provided")
 
     def __add__(self, other):
         """
@@ -157,27 +177,34 @@ class AttDATA(SlerpWithNaiveIndexing):
         if hide_bad_interpolations:
             # _chekc_interpolation_quality will find outliers
             bti = self._check_interpolation_quality()
-            mask = bti.mask_external(self.times)
+            mask = (self.gti & ~bti).mask_external(self.times, True)
             # lets store outliers in a separate array
-            self.bt, self.bq = self.times[mask], self(self.times[mask])
-            super().__init__(self.times[~mask], self(self.times[~mask]))
+            self.bt, self.bq = self.times[~mask], self(self.times[~mask])
+            #times, gaps = (self.gti & ~bti).make_tedges(self.times)
+            times = self.times[mask]
+            super().__init__(times, self(times))
             # check interpolation one more time to see wether new neighbouring
             # points provied good interpolation if no, exclude them from GTI
-            self.gti = self.gti & ~self._check_interpolation_quality()
+            self.gti = self.gti & ~bti #self._check_interpolation_quality()
         else:
             self.gti = self.gti & ~self._check_interpolation_quality()
 
     def _check_interpolation_quality(self):
-        if self.gti.exposure == 0.:
+        if self.gti.exposure == 0. or self.times.size == 2:
             return emptyGTI
-        tc, dt, dalphadt = self.get_optical_axis_movement_speed()
         dt = np.diff(self.times, 1)
+        dt2 = self.times[2:] - self.times[:-2]
+        rot = self(self.times)
 
-        q = self.rotations[1:]*self.rotations[:-1].inv()
-        q = Rotation.from_rotvec(q.as_rotvec()*((self.timedelta[1:] + self.timedelta[:-1])/self.timedelta[:-1])[:, np.newaxis])*self.rotations[:-1]
-        dvec = np.sum(self(self.times[2:]).apply(OPAX)*q.apply(OPAX), axis=1)
-        badinterp = dvec < cos(pi/180.*10./3600)
-        return GTI(self.times[medges(badinterp) + [0, 1]])
+        q = rot[1:]*rot[:-1].inv()
+        qfov = Rotation.from_rotvec(q[:-1].as_rotvec()*(dt2/dt[:-1])[:, np.newaxis])*rot[:-2]
+        qbak = Rotation.from_rotvec(-q[1:].as_rotvec()*(dt2/dt[1:])[:, np.newaxis])*rot[2:]
+        mfov = np.zeros(self.times.size, np.bool)
+        mbak = np.zeros(self.times.size, np.bool)
+        mfov[2:] = np.sum(rot[2:].apply(OPAX)*qfov.apply(OPAX), axis=-1) < cos(pi/180.*10./3600.)
+        mbak[:-2] = np.sum(rot[:-2].apply(OPAX)*qbak.apply(OPAX), axis=-1) < cos(pi/180.*10./3600.)
+        edges = medges(mfov[:-1] & mbak[1:]) + [1, 0]
+        return GTI(self.times[edges])
 
     def __add__(self, other):
         base = super().__add__(other)
@@ -196,6 +223,15 @@ class AttDATA(SlerpWithNaiveIndexing):
         ts, mgaps = gti.make_tedges(self.times)
         quats = self(ts)
         return self.__class__(ts, quats, gti=gti)
+        """
+        print(gti.exposure)
+        if gti.exposure == 0.:
+            ret = self.__class__([-np.inf, -np.inf], Rotation([[0, 0, 0, 1], [0, 0, 0, 1]]))
+            ret.gti = gti
+            return  ret
+        else:
+            return self.__class__(ts, quats, gti=gti)
+        """
 
     def get_axis_movement_speed_gti(self, query = lambda x: x < pi/180.*100/3600, ax=OPAX):
         """
@@ -335,6 +371,18 @@ def get_raw_bokz(bokzhdu):
 
 def get_events_quats(urddata, URDN, attdata):
     return attdata(urddata["TIME"])*get_boresight_by_device(URDN)
+
+
+
+def make_align_quat(ax1, ax2, zeroax=np.array([1, 0, 0]), north=np.array([0, 0, 1])):
+    cross = np.cross(north, zeroax)
+    v = normalize(np.cross(ax1, zeroax)).reshape((-1, 3))
+    q1 = Rotation.from_rotvec(v*np.arccos(np.sum(normalize(ax1)*zeroax, axis=-1)))
+    v2 = q1.apply(normalize(ax2)).reshape((-1, 3))
+    v3 = normalize(np.cross(zeroax, v2))
+    q2 = Rotation.from_rotvec(zeroax*np.arctan2(np.sum(cross*v3, axis=-1), np.sum(north*v3, axis=-1)))
+    return q2*q1
+
 
 def get_photons_vectors(urddata, URDN, attdata, subscale=1, randomize=False):
     """
@@ -489,6 +537,15 @@ def get_wcs_roll_for_qval(wcs, qval):
     return np.arctan2(vimgyax[:, 1], vimgyax[:, 2])
 
 def make_quat_for_wcs(wcs, x, y, roll):
+    """
+    produces rotation quaternion, which orients a cartesian systen XYZ in a
+    wat X points at specified WCS system pixel and Z rotated on angle roll anticlockwise
+    relative to the north pole
+    params:
+        WCS: wcs system defined by the astropy.wcs.WCS class
+        x, y - coordinates where X cartesian vector should point after rotation
+        roll - anticlockwise rotation angle between wcs north direction and Z cartesian vector
+    """
     vec = pol_to_vec(*np.deg2rad(wcs.all_pix2world(np.array([x, y]).reshape((-1, 2)), 1)[0]))
     alpha = np.arccos(np.sum(vec*OPAX))
     rvec = np.cross(OPAX, vec)
