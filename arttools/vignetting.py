@@ -3,12 +3,13 @@ from scipy.interpolate import interp1d, RegularGridInterpolator
 from scipy.integrate import quad
 from scipy.integrate import cumtrapz
 from .energy  import get_arf_energy_function
-from ._det_spatial import offset_to_raw_xy, DL, F, \
+from ._det_spatial import offset_to_raw_xy, DL, F, raw_xy_to_offset, \
     offset_to_vec, vec_to_offset_pairs, vec_to_offset, offset_to_qcorr
 from .telescope import URDNS
 from .interval import Intervals
 from .caldb import get_boresight_by_device, get_inverse_psf, get_optical_axis_offset_by_device, get_arf
 from .psf import xy_to_opaxoffset, unpack_inverse_psf, unpack_inverse_psf_ayut
+from .spectr import get_filtered_crab_spectrum, Spec
 import numpy as np
 from math import log10, pi, sin, cos
 from functools import lru_cache
@@ -179,8 +180,7 @@ def make_vignetting_from_inverse_psf_ayut_cspec(urdn, egrid, cspec, app=None):
     return RegularGridInterpolator((dx, dx), img/img.max(), bounds_error=False, fill_value=0.)
 
 
-def make_vignetting_for_urdn(urdn, energy=None, phot_index=None,
-                             emin=0, emax=np.inf, grid=None, cspec=None, app=None):
+def make_vignetting_for_urdn(urdn, imgfilter, cspec=None, app=None):
     """
     for provided urd number  energy or photon index provided 2d interpolation function (RegularGridInterpolator) defining the profile of the effective area depending on offset
 
@@ -196,21 +196,61 @@ def make_vignetting_for_urdn(urdn, energy=None, phot_index=None,
     return: scipy.interpolate.RegularGridInterpolator containing scalled effective area depending on offset in mm from the center of detector
 
     """
+    shmask = get_shadowmask_by_urd(urdn)
+    x0, y0 = get_optical_axis_offset_by_device(urdn)
 
-    if not energy is None:
-        return make_vignetting_from_inverse_psf_ayut_cspec(urdn, np.array([energy-1e-5, energy+1e-5]), [1,])
+    x, y = np.mgrid[0:48:1, 0:48:1]
+    x1, y1 = x[shmask], y[shmask]
+    x2, y2 = xy_to_opaxoffset(x1, y1, urdn)
+
+
+    ee = np.array([4., 6., 8., 10., 12., 16., 20., 24., 30.])
+    w = np.zeros(ee.size - 1, np.double)
 
     if not cspec is None:
-        print(grid, cspec)
-        return make_vignetting_from_inverse_psf_ayut_cspec(urdn, grid, cspec, app)
 
-    if not phot_index is None:
-        return make_vignetting_from_inverse_psf_ayut(urdn, emin, emax, phot_index, app)
+        egloc, egaps = imgfilter["ENERGY"].make_tedges(ee)
+        ec = (egloc[1:] + egloc[:-1])[egaps]/2.
+        arf = get_arf_energy_function(get_arf())
+        cspec = np.array([quad(lambda e: arf(e)*cspec(e), elow, ehi)[0] for elow, ehi in zip(egloc[:-1][egaps], egloc[1:][egaps])]) #np.concatenate([cspec/cspec.sum()/np.diff(egrid), [0, ]])
+        cspec = cspec/cspec.sum()
+        np.add.at(w, np.searchsorted(ee, ec) - 1, cspec)
+    else:
+        rgrid, cspec = get_filtered_crab_spectrum(imgfilter, collapsegrades=True)
+        crabspec = Spec(rgrid["ENERGY"][:-1], rgrid["ENERGY"][1:], cspec)
+        egloc, egaps = imgfilter["ENERGY"].make_tedges(np.unique(np.concatenate([ee, rgrid["ENERGY"]])))
+        ec = (egloc[1:] + egloc[:-1])[egaps]/2.
+        cspec = crabspec.integrate_in_bins(np.array([egloc[:-1], egloc[1:]]).T[egaps])
+        cspec = cspec.sum()
+        np.add.at(w, np.searchsorted(ee, ec) - 1, cspec)
 
-    return make_vignetting_from_inverse_psf(urdn)
+
+    if app is None:
+        psfmask = None
+    else:
+        x, y = np.mgrid[-60:61:1, -60:61:1]
+        psfmask = x**2. + y**2. > app**2./25.
+
+    img = np.zeros((46*9 + 121 - 9, 46*9 + 121 - 9), np.double)
+    for xl, yl, xo, yo in zip(x1, y1, x2, y2):
+        dx, dy = xl - x0, yl - y0
+        sl = img[(xl - 1)*9: (xl - 1)*9 + 121, (yl - 1)*9: (yl - 1)*9 + 121]
+        lipsf = np.sum(unpack_inverse_psf_ayut(xo, yo)*w[:, np.newaxis, np.newaxis], axis=0)
+        if not app is None:
+            lipsf[psfmask] = 0.
+        sl += lipsf
+
+    dx = (np.arange(img.shape[0]) - img.shape[0]//2)/9.*DL
+    x0, y0 = raw_xy_to_offset(x0, y0)
+    imax, jmax = np.searchsorted(dx, x0) - 1, np.searchsorted(dx, y0) - 1
+    print(dx, x0, dx.size)
+    print(img.shape)
+    print(imax, jmax)
+    print(img.max(), img[imax, jmax])
+    return RegularGridInterpolator((dx, dx), img/img[imax, jmax], bounds_error=False, fill_value=0.)
 
 
-def make_overall_vignetting(subgrid=10, urdweights={}, **kwargs):
+def make_overall_vignetting(imgfilters, subgrid=10, urdweights={}, **kwargs):
     """
     produces combined effective area of seven detector as projected on sky
 
@@ -252,7 +292,7 @@ def make_overall_vignetting(subgrid=10, urdweights={}, **kwargs):
     vecs = offset_to_vec(np.ravel(x), np.ravel(y))
 
     for urdn in URDNS:
-        vmap = make_vignetting_for_urdn(urdn, **kwargs)
+        vmap = make_vignetting_for_urdn(urdn, imgfilters[urdn], **kwargs)
         quat = get_boresight_by_device(urdn)
         newvmap += vmap(vec_to_offset_pairs(quat.apply(vecs, inverse=True))).reshape(shape)*urdweights.get(urdn, 1.)
 

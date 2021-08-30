@@ -60,7 +60,7 @@ def make_mosaic_expmap_mp_executor(shape, wcs, vmap, qvals, exptime, mpnum):
 
     return res[0]
 
-def make_expmap_for_wcs(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, dtcorr={}, kind="direct", urdweights={}, **kwargs):
+def make_expmap_for_wcs(wcs, attdata, urdgtis, imgfilters, shape=None, mpnum=MPNUM, dtcorr={}, kind="direct", urdweights={}, **kwargs):
     """
     produce exposure map on the provided wcs area, with provided GTI and attitude data
 
@@ -88,7 +88,7 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, dtcorr={
         print(overall_gti.exposure)
         if overall_gti.exposure > 0:
             exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti)
-            vmap = make_overall_vignetting(urdweights=urdweights, **kwargs)
+            vmap = make_overall_vignetting(imgfilters, urdweights=urdweights, **kwargs)
             print("exptime sum", exptime.sum())
             print("produce overall urds expmap")
             sky._set_core(vmap.grid[0], vmap.grid[1], vmap.values)
@@ -108,7 +108,7 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, dtcorr={
         print("urd %d progress:" % urdn)
         exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urdn), gti, \
                                                              dtcorr.get(urdn, lambda x: 1))
-        vmap = make_vignetting_for_urdn(urdn, **kwargs)
+        vmap = make_vignetting_for_urdn(urdn, imgfilters[urdn], **kwargs)
         sky._set_core(vmap.grid[0], vmap.grid[1], vmap.values*urdweights.get(urdn, 1))
         if kind == "direct":
             sky.interpolate_mp(qval[:], exptime[:], mpnum)
@@ -119,7 +119,7 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, shape=None, mpnum=MPNUM, dtcorr={
         print(" done!")
     return sky.img
 
-def make_exposures(direction, te, attdata, urdgtis, urdweights={}, mpnum=MPNUM, dtcorr={}, **kwargs):
+def make_exposures(direction, te, attdata, urdgtis, urdfilters, urdweights={}, mpnum=MPNUM, dtcorr={}, **kwargs):
     tec, mgaps, se, scalefunc, cumscalefunc = weigt_time_intervals(urdgtis)
     gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
     print("gti exposure", gti.exposure)
@@ -132,12 +132,14 @@ def make_exposures(direction, te, attdata, urdgtis, urdweights={}, mpnum=MPNUM, 
     tetot, gaps = gti.make_tedges(tel)
     dtn = np.zeros(te.size - 1, np.double)
     for urdn in urdgtis:
+        if urdgtis[urdn].arr.size == 0:
+            continue
         teu, gaps = urdgtis[urdn].make_tedges(tel)
         dtu = np.diff(teu)[gaps]
-        print("urdn", urdn, dtu.sum())
-        tc = (teu[1:] + teu[:-1])[gaps]/2.
+        tcc = (teu[1:] + teu[:-1])/2.
+        tc = tcc[gaps]
         qlist = attdata(tc)*get_boresight_by_device(urdn)
-        vmap = make_vignetting_for_urdn(urdn, **kwargs)
+        vmap = make_vignetting_for_urdn(urdn, urdfilters[urdn], **kwargs)
         dtc = dtcorr.get(urdn, lambda x: 1.)(tc)
         vval = vmap(vec_to_offset_pairs(qlist.apply(direction, inverse=True)))*urdweights.get(urdn, 1.)*dtc
         idx = np.searchsorted(te, tc) - 1
