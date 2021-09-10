@@ -58,7 +58,7 @@ def unpack_inverse_psf(i, j):
 
 ayutee = np.array([4., 6., 8., 10., 12., 16., 20., 24., 30.])
 
-def unpack_inverse_psf_ayut(i, j, e=None, data=None):
+def unpack_inverse_psf_ayut(i, j, e=None):
     """
     inverse psf is an integral of the product of psf and vignetting over ART-XC detectors pixels
     since this characteristics is a result of integral we cannot use differential approximation to extract
@@ -82,7 +82,7 @@ def unpack_inverse_psf_ayut(i, j, e=None, data=None):
     if ja > ia:
         ja, ia = ia, ja
     k = (ia + 1)*ia//2 + ja
-    data = data if not data is None else get_ayut_inverse_psf_datacube_packed()
+    data = get_ayut_inverse_psf_datacube_packed()
     data = data[k]
     if abs(j) > abs(i):
         data = np.transpose(data, axes=(0, 2, 1))
@@ -102,7 +102,6 @@ def unpack_inverse_psf_specweighted_ayut(imgfilter, cspec=None, app=None):
     w = np.zeros(ayutee.size - 1, np.double)
 
     if not cspec is None:
-
         egloc, egaps = imgfilter["ENERGY"].make_tedges(ayutee)
         ec = (egloc[1:] + egloc[:-1])[egaps]/2.
         arf = get_arf_energy_function(get_arf())
@@ -117,12 +116,27 @@ def unpack_inverse_psf_specweighted_ayut(imgfilter, cspec=None, app=None):
         cspec = crabspec.integrate_in_bins(np.array([egloc[:-1], egloc[1:]]).T[egaps])
         cspec = cspec.sum()
         np.add.at(w, np.searchsorted(ayutee, ec) - 1, cspec)
+
     data = np.sum(get_ayut_inverse_psf_datacube_packed()*w[np.newaxis, :, np.newaxis, np.newaxis], axis=1)
-    print(data[0, 60, 60] + data[1, 60, 51]*4 + data[2, 51, 51]*4)
-    print(data.max())
     data = data/(data[0, 60, 60] + data[1, 60, 51]*4 + data[2, 51, 51]*4)
+    x, y = np.mgrid[-60:61:1, -60:61:1]
+    if not app is None:
+        psfmask = x**2. + y**2. <= app**2./25.
+        data = data*psfmask[np.newaxis, :, :]
     def newfunc(i, j):
-        return unpack_inverse_psf_ayut(i, j, data=data)
+        ia = abs(i)
+        ja = abs(j)
+        if ja > ia:
+            ja, ia = ia, ja
+        k = (ia + 1)*ia//2 + ja
+        d = data[k]
+        if abs(j) > abs(i):
+            d = d.T #np.transpose(data, axes=(0, 2, 1))
+        if i < 0:
+            d = np.flip(d, axis=0)
+        if j < 0:
+            d = np.flip(d, axis=1)
+        return d
     return newfunc
 
 def get_ipsf_interpolation_func(app=6.*60):
