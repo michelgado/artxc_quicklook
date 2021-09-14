@@ -175,7 +175,7 @@ def get_shadowed_pix_mask_for_urddata(urddata, det_spat_mask):
     return get_shadowed_pix_mask(urddata["RAW_X"], urddata["RAW_Y"], det_spat_mask) #equivalent to [det_spat_mask[i, j] for i, j in zip(rawx, rawy)]
 
 
-def offset_to_qcorr(x, y):
+def rawxy_to_qcorr(x, y):
     """
     for x, y spatical cartesian coordinates produces a quaternion, which moves sphere to put center of coorddinates [1, 0, 0] in the x, y coordinate
 
@@ -192,4 +192,4 @@ def offset_to_qcorr(x, y):
     return q2*q1
 
 def get_qcorr_for_urddata(udata):
-    return offset_to_qcorr(udata["RAW_X"], udata["RAW_Y"])
+    return rawxy_to_qcorr(udata["RAW_X"], udata["RAW_Y"])

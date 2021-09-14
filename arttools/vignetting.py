@@ -4,7 +4,7 @@ from scipy.integrate import quad
 from scipy.integrate import cumtrapz
 from .energy  import get_arf_energy_function
 from ._det_spatial import offset_to_raw_xy, DL, F, raw_xy_to_offset, \
-    offset_to_vec, vec_to_offset_pairs, vec_to_offset, offset_to_qcorr
+    offset_to_vec, vec_to_offset_pairs, vec_to_offset, rawxy_to_qcorr
 from .telescope import URDNS
 from .interval import Intervals
 from .caldb import get_boresight_by_device, get_inverse_psf, get_optical_axis_offset_by_device, get_arf
@@ -77,7 +77,7 @@ def make_vignetting_from_inverse_psf(urdn):
     x, y = np.mgrid[0:48:1, 0:48:1]
     x1, y1 = x[shmask], y[shmask]
     x2, y2 = xy_to_opaxoffset(x1, y1, urdn)
-    q = offset_to_qcorr(x1, y1)
+    q = rawxy_to_qcorr(x1, y1)
     img = np.zeros((46*9 + 121 - 9, 46*9 + 121 - 9), np.double)
 
     for xl, yl, xo, yo in zip(x1, y1, x2, y2):
@@ -196,7 +196,9 @@ def make_vignetting_for_urdn(urdn, imgfilter, cspec=None, app=None):
     return: scipy.interpolate.RegularGridInterpolator containing scalled effective area depending on offset in mm from the center of detector
 
     """
-    shmask = get_shadowmask_by_urd(urdn)
+
+    x, y = np.mgrid[0:48:1, 0:48:1]
+    shmask = imgfilter.apply(np.column_stack([y.ravel(), x.ravel()]).ravel().view([("RAW_X", np.int), ("RAW_Y", np.int)])).reshape(x.shape)
     x0, y0 = get_optical_axis_offset_by_device(urdn)
 
     x, y = np.mgrid[0:48:1, 0:48:1]
@@ -240,14 +242,12 @@ def make_vignetting_for_urdn(urdn, imgfilter, cspec=None, app=None):
             lipsf[psfmask] = 0.
         sl += lipsf
 
-    dx = (np.arange(img.shape[0]) - img.shape[0]//2)/9.*DL
+    dx = (np.arange(img.shape[0]) - (img.shape[0] - 1.)/2.)/9.*DL
+    print(dx)
     x0, y0 = raw_xy_to_offset(x0, y0)
     imax, jmax = np.searchsorted(dx, x0) - 1, np.searchsorted(dx, y0) - 1
-    print(dx, x0, dx.size)
-    print(img.shape)
-    print(imax, jmax)
-    print(img.max(), img[imax, jmax])
-    return RegularGridInterpolator((dx, dx), img/img[imax, jmax], bounds_error=False, fill_value=0.)
+    #return RegularGridInterpolator((dx, dx), img/img[imax, jmax], bounds_error=False, fill_value=0.)
+    return RegularGridInterpolator((dx, dx), img, bounds_error=False, fill_value=0.)
 
 
 def make_overall_vignetting(imgfilters, subgrid=10, urdweights={}, **kwargs):

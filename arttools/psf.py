@@ -141,7 +141,7 @@ def unpack_inverse_psf_specweighted_ayut(imgfilter, cspec=None, app=None):
 
 def get_ipsf_interpolation_func(app=6.*60):
     ipsf = get_inversed_psf_data_packed()
-    xo = ipsf["offset"].data["x_offset"]
-    yo = ipsf["offset"].data["y_offset"]
+    xo = ipsf["offset"].data["x_offset"] #*1.0127289656 #*1.0211676541662125
+    yo = ipsf["offset"].data["y_offset"] #*1.0127289656 #1.0211676541662125
     #xo = xo[(xo > - app) & (xo < app)]
     return RegularGridInterpolator((xo, yo), np.empty((xo.size, yo.size), np.double))
