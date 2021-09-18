@@ -4,7 +4,7 @@ from scipy.signal import convolve
 from scipy.ndimage import gaussian_filter
 from skimage.feature import peak_local_max
 #from scipy.spatial.transform import Rotation
-from multiprocessing import Pool, Process, Queue, RawArray, cpu_count
+from multiprocessing import Pool, Process, Queue, RawArray, cpu_count, Barrier
 from multiprocessing.pool import ThreadPool
 from threading import Thread, Lock, current_thread
 import tqdm
@@ -19,11 +19,12 @@ import matplotlib.pyplot as plt
 from copy import copy, deepcopy
 from ctypes import c_bool
 import sys
+import asyncio
 
 import time
 
 
-MPNUM = cpu_count()
+MPNUM = cpu_count()//4
 
 def put_stright_on(vals, bkg, rmap):
     return vals
@@ -58,6 +59,9 @@ class SkyImage(object):
         self.locwcs = locwcs
         self.shape = shape if not shape is None else [(0, int(locwcs.wcs.crpix[1]*2 + 1)), (0, int(locwcs.wcs.crpix[0]*2 + 1))]
         self.img = np.zeros(np.diff(self.shape, axis=1).ravel(), np.double)
+        self.rmap = np.zeros(self.img.shape, np.double)
+        self.mask = np.ones(self.img.shape, np.bool)
+        self.idx = np.arange(self.img.size).reshape(self.img.shape)
         self.lock = Lock()
 
         y, x = np.mgrid[self.shape[0][0] + 1:self.shape[0][1] + 1:1, self.shape[1][0] + 1: self.shape[1][1] + 1:1]
@@ -71,10 +75,14 @@ class SkyImage(object):
         expect to receive four vectors at the corners of interpolation map
         """
         self.corners = ConvexHullonSphere(vals)
+        self.corners = self.corners.expand(2./3660.*pi/180.)
 
     def _set_core(self, x, y, core):
         self.vmap = RegularGridInterpolator((x, y), core, bounds_error=False, fill_value=0.)
         self._set_corners(offset_to_vec(x[[0, 0, -1, -1]], y[[0, -1, -1, 0]]))
+
+    def _clean_image(self):
+        self.img[:, :] = 0.
 
     def _update_interpolation_core_values(self, core):
         self.vmap.values = core
@@ -87,6 +95,16 @@ class SkyImage(object):
         jl, jr = max(int(x.min()), 0), min(self.img.shape[1], int(x.max()+1))
         il, ir = max(int(y.min()), 0), min(self.img.shape[0], int(y.max()+1))
         return il, ir, jl, jr
+
+    def _get_quats_rectangles(self, qvals):
+        radec = np.array([vec_to_pol(qvals.apply(v)) for v in self.corners.corners])
+        xy = (self.locwcs.all_world2pix(radec.reshape((-1, 2)), 1) - 0.5).astype(int).reshape(radec.shape)
+        il = np.maximum(np.min(xy[..., 0], axis=0), 0)
+        jl = np.maximum(np.min(xy[..., 1], axis=0), 0)
+        iu = np.minimum(np.max(xy[..., 0], axis=0) + 1, self.shape[0])
+        ju = np.minimum(np.max(xy[..., 1], axis=0) + 1, self.shape[1])
+        return il, iu, jl, ju
+
 
     def interpolate_vmap_for_qval(self, qval, norm, img):
         il, ir, jl, jr = self._get_quat_rectangle(qval)
@@ -161,6 +179,35 @@ class SkyImage(object):
                  zip(qvals, norms))
         self.img += sum(imgs)
 
+
+
+    def interpolate_bunch(self, qvals, norm, vmapvals=None, img=None):
+        if not vmapvals is None:
+            self.vmap.values = vmapvals
+        if img is None: img = self.img
+        """
+        for q, n in zip(qvals, norm):
+            self.interpolate_vmap_for_qval(q, n, img)
+        """
+        il, ir, jl, jr = self._get_quat_rectangle(qvals)
+        #s = (ir - il - 1)*(jr - jl - 1)
+        """
+        sx = ir - il
+        js = np.cumsum(np.repeat(jr - jl, ir - il))
+        a = np.arange(s.sum())
+
+        a[js[0]:] -= np.repeat(s[np.cumsum(js[:-1])], js[1:])
+        b = np.arange(np.sum(sx))
+        b[sx[0]:] -= np.repeat(b[sx[:-1]], sx[1:])
+        idx = a + np.repeat(il*img.shape[0] + jl, s) + np.repeat(b*img.shpae[0], np.repeat(jr - jl, sx))
+        #mx = np.max(ir - il)
+        #my = np.max(jr - jl)
+        """
+        idx = np.concatenate([self.idx[xl:xr, xl, xr].ravel() for xl, xr, yl, yz in zip([il ,ir, jl, jr])])
+        x, y = vec_to_offset(Rotation(np.repeat(q.as_quat(), (ir - il)*(jr - jl))).apply(self.vecs.reshape((-1, 3))[idx], inverse=True))
+        m = np.all([x > self.vmap.grid[0][0], x < self.vmap.grid[0][-1], y > self.vmap.grid[1][0], y < self.vmap.grid[0][-1]], axis=0)
+        np.add.at(img.ravel(), idx[m], self.vmap(np.array([x, y]).T[m])*np.repeat(norm, s)[m])
+
     @staticmethod
     def spread_events(img, locwcs, vecs, weights=None):
         xy = locwcs.all_world2pix(np.rad2deg(vec_to_pol(vecs)).T, 1) - 0.5
@@ -182,18 +229,21 @@ class SkyImage(object):
         self.spread_events(tmpimg, self.locwcs, qvals.apply(OPAX), norms)
         return convolve(tmpimg, core, mode="same")
 
-    def convolve(self, qvals, norm, shape, dalpha=pi/180./2., img=None, mpnum=MPNUM):
+    def convolve(self, qvals, norm, dalpha=pi/180./2., img=None, mpnum=MPNUM):
         img = self.img if img is None else img
         angles = get_wcs_roll_for_qval(self.locwcs, qvals)
         u, ii = np.unique((angles/dalpha).astype(np.int), return_inverse=True)
         pool = ThreadPool(mpnum)
         idxs = pool.map(lambda i: np.where(ii == i)[0], range(u.size))
+        #for a, idx in zip(u*dalpha + dalpha/2., idxs):
+        #    self.img[:, :] += self.convolve_worker((a, qvals[idx], norm[idx]))
         for tmpimg in pool.imap(self.convolve_worker, zip(u*dalpha + dalpha/2., [qvals[idx] for idx in idxs], [norm[idx] for idx in idxs])):
             self.img[:, :] += tmpimg
 
-    def permute_with_rmap(self, qval, bkg, scale, rfun, vmap=None, img=None):
+    def permute_with_rmap(self, qval, bkg, scale, rfun=None, vmap=None, img=None):
         vmap = self.vmap if vmap is None else vmap
         img = self.img if img is None else img
+        rfun = self.rfun if rfun is None else rfun
         il, ir, jl, jr = self._get_quat_rectangle(qval)
         if ir - il > 0 and jr - jl > 0:
             mt = self.mask[il:ir, jl:jr]
@@ -213,6 +263,15 @@ class SkyImage(object):
                 rl = self.rmap[il:ir, jl:jr][mt]*scale
             aval = rfun(core, bkg, rl)
             img[il:ir, jl:jr][mt] += aval
+
+    def update_rates_for_qvals(self, bkgs, scales, qvals, core):
+        self.vmap.core = core
+        lidx = list(map(self.get_arr_idx_slice, zip(qvals, cycle([idx,]), cycle([mask,]))))
+        csize = np.array([l.size for l in lidx])
+        lvecs = np.concatenate(list(map(lambda args: args[0].apply(args[1], inverse=True), zip(qvals[sl], [rvecs[l] for l in lidx]))))
+        lidx = np.concatenate(lidx)
+        core = self.vmap(vec_to_offset(lvecs))
+        np.add.at(self.img.ravel(), lidx, rfun(core, np.repeat(bkgs[sl], csize), np.repeat(scales[sl], csize)*rmap.ravel()[lidx]))
 
     def permute_thread_pool_worker(self, args):
         sl, i, j = args
@@ -489,3 +548,105 @@ class SkyImage(object):
                                                                 (np.copy(bkgs[m]) for m in masks), (np.copy(scales[m]) for m in masks), repeat(self.locwcs),
                                                                 repeat(None) if energy is None else (np.copy(energy[m]) for m in masks))), total=snum):
             np.copyto(self.img[shape[0][0]:shape[0][1], shape[1][0]: shape[1][1]], r)
+
+
+def run_in_endlessloop(func, q):
+    while True:
+        func(q.get())
+
+
+
+localsky = None
+syncbarrier = None
+
+
+class SkyImageMP:
+
+    def __init__(self, locwcs, vmap=None, shape=None, mpnum=MPNUM):
+        self.barrier = Barrier(mpnum)
+        self.pool = Pool(mpnum, initializer=self.initializer, initargs=(locwcs, vmap, shape, self.barrier))
+        self.shape = shape if not shape is None else [(0, int(locwcs.wcs.crpix[1]*2 + 1)), (0, int(locwcs.wcs.crpix[0]*2 + 1))]
+        self.img = np.zeros(np.diff(self.shape, axis=1).ravel(), np.double)
+
+
+    @staticmethod
+    def initializer(locwcs, vmap, shape, barrier):
+        global localsky
+        global syncbarrier
+        syncbarrier = barrier
+        localsky = SkyImage(locwcs, vmap, shape)
+
+    @staticmethod
+    def _interpolate_worker(args): #qval, norm):
+        qval, norm = args
+        localsky.interpolate_vmap_for_qval(qval, norm, localsky.img)
+
+    def interpolate(self, qvals, norm, finalize=True):
+        for _ in tqdm.tqdm(self.pool.imap_unordered(self._interpolate_worker, zip(qvals, norm)), total=len(qvals)):
+            pass
+        #self.pool.map(self._interpolate_worker, zip(qvals, norm))
+        if finalize:
+            self._accumulate_img()
+            self._clean_img()
+
+    @staticmethod
+    def _accumulate_worker(args):
+        syncbarrier.wait()
+        return localsky.img
+
+    def _accumulate_img(self):
+        limg = np.sum(self.pool.map(self._accumulate_worker, [None for _ in range(self.pool._processes)]), axis=0)
+        self.img += limg
+
+    @staticmethod
+    def _cleanimg_worker(args):
+        syncbarrier.wait()
+        localsky.img[:, :] = 0.
+
+    def _clean_img(self):
+        self.pool.map(self._cleanimg_worker, [None for _ in range(self.pool._processes)])
+
+    @staticmethod
+    def _set_vmap_worker(args):
+        vmap = args
+        localsky._set_core(vmap.grid[0], vmap.grid[1], vmap.values)
+        syncbarrier.wait()
+
+    def _set_core(self, vmap):
+        self.pool.map(self._set_vmap_worker, [vmap for _ in range(self.pool._processes)])
+
+
+    @staticmethod
+    def _set_vmapval_worker(args):
+        vmapvals = args
+        localsky.vmap.values = vmapvals #_set_core(vmap.grid[0], vmap.grid[1], vmap.values)
+        syncbarrier.wait()
+
+    def _set_core_values(self, vmapvals):
+        self.pool.map(self._set_vmapval_worker, [vmapvals for _ in range(self.pool._processes)])
+
+
+    @staticmethod
+    def _interpolate_bunch_worker(args):
+        qvals, norms, vmapvals = args
+        localsky.vmap.values = vmapvals
+        for q, n in zip(qvals, norms):
+            localsky.interpolate_vmap_for_qval(q, n, localsky.img)
+
+    @staticmethod
+    def _interpolate_bunch_convolve_worker(args):
+        qvals, norms, vmapvals = args
+        #print("qvals size", len(qvals), norm.size)
+        localsky.vmap.values = vmapvals
+        localsky.convolve(qvals, norms, img=localsky.img, mpnum=1)
+
+
+    def interpolate_bunch(self, tasks, kind="stright"):
+        if kind == "stright":
+            for _ in tqdm.tqdm(self.pool.imap_unordered(self._interpolate_bunch_worker, tasks), total=len(tasks)):
+                pass
+        if kind == "convolve":
+            for _ in tqdm.tqdm(self.pool.imap_unordered(self._interpolate_bunch_convolve_worker, tasks), total=len(tasks)):
+                pass
+
+        #self.pool.map(self._interpolate_banch_worker, tasks)
