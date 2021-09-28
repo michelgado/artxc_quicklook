@@ -63,7 +63,6 @@ def make_vignetting_from_inverse_psf(urdn):
     if not urdn is None:
         shmask = get_shadowmask_by_urd(urdn)
         x0, y0 = get_optical_axis_offset_by_device(urdn)
-        print(x0, y0)
     else:
         x0, y0 = 23.5, 23.5
         shmask = np.ones((48, 48), np.bool)
@@ -91,7 +90,8 @@ def make_vignetting_from_inverse_psf(urdn):
         sl += ipsf[1].data[int(np.round(xl + 0.5 - x0)) + 26, int(np.round(yl + 0.5 - y0)) + 26, : sl.shape[0], :sl.shape[1]]
         """
         sl += np.copy(unpack_inverse_psf(xo, yo))
-    dx = (np.arange(img.shape[0]) - img.shape[0]//2)/9.*DL
+    #dx = (np.arange(img.shape[0]) - img.shape[0]//2)/9.*DL
+    dx = (np.arange(img.shape[0]) - (img.shape[0] - 1.)/2.)/9.*DL
     return RegularGridInterpolator((dx, dx), img/img.max(), bounds_error=False, fill_value=0.)
 
 @lru_cache(maxsize=7)
@@ -136,7 +136,8 @@ def make_vignetting_from_inverse_psf_ayut(urdn, emin=4., emax=12., phot_index=2.
         if not app is None:
             lipsf[psfmask] = 0.
         sl += lipsf
-    dx = (np.arange(img.shape[0]) - img.shape[0]//2)/9.*DL
+    #dx = (np.arange(img.shape[0]) - img.shape[0]//2)/9.*DL
+    dx = (np.arange(img.shape[0]) - (img.shape[0] - 1.)/2.)/9.*DL
     return RegularGridInterpolator((dx, dx), img/img.max(), bounds_error=False, fill_value=0.)
 
 def make_vignetting_from_inverse_psf_ayut_cspec(urdn, egrid, cspec, app=None):
@@ -176,7 +177,8 @@ def make_vignetting_from_inverse_psf_ayut_cspec(urdn, egrid, cspec, app=None):
             lipsf[psfmask] = 0.
         sl += lipsf
 
-    dx = (np.arange(img.shape[0]) - img.shape[0]//2)/9.*DL
+    #dx = (np.arange(img.shape[0]) - img.shape[0]//2)/9.*DL
+    dx = (np.arange(img.shape[0]) - (img.shape[0] - 1.)/2.)/9.*DL
     return RegularGridInterpolator((dx, dx), img/img.max(), bounds_error=False, fill_value=0.)
 
 
@@ -198,7 +200,8 @@ def make_vignetting_for_urdn(urdn, imgfilter, cspec=None, app=None):
     """
 
     x, y = np.mgrid[0:48:1, 0:48:1]
-    shmask = imgfilter.apply(np.column_stack([y.ravel(), x.ravel()]).ravel().view([("RAW_X", np.int), ("RAW_Y", np.int)])).reshape(x.shape)
+    #shmask = imgfilter.apply(np.column_stack([y.ravel(), x.ravel()]).ravel().view([("RAW_X", np.int), ("RAW_Y", np.int)])).reshape(x.shape)
+    shmask = imgfilter.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
     x0, y0 = get_optical_axis_offset_by_device(urdn)
 
     x, y = np.mgrid[0:48:1, 0:48:1]
@@ -243,11 +246,8 @@ def make_vignetting_for_urdn(urdn, imgfilter, cspec=None, app=None):
         sl += lipsf
 
     dx = (np.arange(img.shape[0]) - (img.shape[0] - 1.)/2.)/9.*DL
-    print(dx)
-    x0, y0 = raw_xy_to_offset(x0, y0)
-    imax, jmax = np.searchsorted(dx, x0) - 1, np.searchsorted(dx, y0) - 1
-    #return RegularGridInterpolator((dx, dx), img/img[imax, jmax], bounds_error=False, fill_value=0.)
-    return RegularGridInterpolator((dx, dx), img, bounds_error=False, fill_value=0.)
+    imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
+    return RegularGridInterpolator((dx, dx), img/imgmax, bounds_error=False, fill_value=0.) #TODO for spefici masks, pixel at optical axis position can be switched off, broking normalization
 
 
 def make_overall_vignetting(imgfilters, subgrid=10, urdweights={}, **kwargs):
@@ -300,7 +300,6 @@ def make_overall_vignetting(imgfilters, subgrid=10, urdweights={}, **kwargs):
     mx = mask.any(axis=1)
     my = mask.any(axis=0)
     mask = mx[:, np.newaxis] & my[np.newaxis, :]
-    print(x.shape, mask.shape, newvmap.shape)
     vmapnew = np.copy(newvmap[mx, :][:, my])
     vmapnew[np.isnan(vmapnew)] = 0.0
 

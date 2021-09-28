@@ -1,6 +1,8 @@
 import numpy as np
 from collections import OrderedDict
 from .caldb import get_shadowmask_by_urd
+from .telescope import URDNS
+from .interval import Intervals
 
 """
 filters is a set of classes which can be used for data filtering
@@ -95,10 +97,16 @@ class IndependentFilters(dict):
         return mask #np.all([f.apply(valsset if type(f) == InversedIndexMask else valsset[k]) for k, f in self.items() if k in valsset.dtype.names], axis=0)
 
     def meshgrid(self, keys, arrays):
-        ud = np.meshgrid(*[a for a in arrays[::-1]])[::-1]
+        ud = np.meshgrid(*[a for a in arrays])
         shape = ud[0].shape
+        print(shape)
+        data = np.recarray(ud[0].size, [(k, a.dtype) for k, a in zip(keys, arrays)])
+        """
         data = np.column_stack([a.ravel() for a in ud[::-1]]).ravel().view(
                                     [(name, np.int) for name in keys[::-1]])
+        """
+        for i in range(len(keys)):
+            data[keys[i]][:] = ud[i].ravel()
         return self.apply(data).reshape(shape)
 
 
@@ -108,4 +116,6 @@ def get_shadowmask_filter(urdn):
         shmask[[45, 46], :] = False
     return InversedIndexMask(zip(["RAW_X", "RAW_Y"], [strightindex, strightindex]), shmask)
 
-
+DEFAULTFILTERS = {urdn: IndependentFilters({"ENERGY": Intervals([4., 12.]),
+                                            "GRADE": RationalSet(range(10)),
+                                            "RAWXY": get_shadowmask_filter(urdn)}) for urdn in URDNS}
