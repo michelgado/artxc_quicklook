@@ -89,10 +89,14 @@ class ConvexHullonSphere(object):
             vertices - unit vectors in the vertices of the convex hull, containing all vectors
             idx - indexes of the vectors, located in the corners, from  input array of vectors
         """
+        vecs = np.unique(vecs, axis=0)
         cvec = vecs.sum(axis=0)
         cvec = cvec/sqrt(np.sum(cvec**2.))
         idx1 = get_most_distant_idx(cvec, vecs)
         idx2 = get_most_distant_idx(vecs[idx1], vecs)
+        idx3, external = get_most_orthogonal_idx(vecs[idx1], vecs[idx2], vecs)
+        if idx3 in [idx1, idx2]:
+            idx1, idx2 = idx2, idx1
         idx3, external = get_most_orthogonal_idx(vecs[idx1], vecs[idx2], vecs)
         self.idx = [idx1, idx2, idx3]
         vec1, vec2, vec3 = vecs[idx1], vecs[idx3], vecs[idx2]
@@ -109,8 +113,7 @@ class ConvexHullonSphere(object):
 
         self.vertices = np.array(self.corners)
         self.idx = np.array(self.idx)
-        self.orts = np.cross(self.vertices, np.roll(self.vertices, -1, axis=0))
-        self.orts = self.orts/np.sqrt(np.sum(self.orts**2, axis=1))[:, np.newaxis]
+        self.orts = normalize(np.cross(self.vertices, np.roll(self.vertices, -1, axis=0)))
 
     def check_newpoint(self, vec1, vec3, color, lvl):
         if self.vecs.size == 0:
@@ -138,14 +141,13 @@ class ConvexHullonSphere(object):
         expand convex moving straight lines, limiting each side of the  convex, on the angle dtheta
         negative angle should be used with caution, since the sum of the angles on vertixes inside convex shrinks with convex surface area and some corners
         can appear on the oposite side of the sphere
+        arguments:
+            expand angle in radians
         """
-        vproj = self.vertices + np.roll(self.vertices, -1, axis=0)
-        vproj = vproj/np.sqrt(np.sum(vproj**2, axis=1))[:, np.newaxis]
+        vproj = normalize(self.vertices + np.roll(self.vertices, -1, axis=0))
         neworts = self.orts*cos(dtheta) - vproj*sin(dtheta)
-        neworts = neworts/np.sqrt(np.sum(neworts**2, axis=1))[:, np.newaxis]
-        newcorners = np.cross(neworts, np.roll(neworts, 1, axis=0))
-        newcorners = newcorners/np.sqrt(np.sum(newcorners**2, axis=1))[:, np.newaxis]
-        return ConvexHullonSphere(newcorners)
+        newcorners = normalize(np.cross(neworts, np.roll(neworts, 1, axis=0)))
+        return ConvexHullonSphere(newcorners[np.sum(newcorners*self.get_center_of_mass(), axis=1) > 0])
 
     @property
     def area(self):
