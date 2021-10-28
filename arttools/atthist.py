@@ -113,6 +113,36 @@ def make_small_steps_quats(attdata, gti=tGTI, timecorrection=lambda x: 1., tedge
         dtn = dt
     return ts, qval, dtn*timecorrection(ts), locgti
 
+
+def make_wcs_steps_quats(wcs, attdata, gti=tGTI, ax=OPAX, timecorrection=lambda x: 1., tedges=None):
+    if (gti & attdata.gti).exposure != attdata.gti.exposure:
+        attloc = attdata.apply_gti(gti)
+    else:
+        attloc = attdata
+    radec = np.rad2deg(vec_to_pol(attloc(attloc.times).apply(ax)))
+    xy = wcs.all_world2pix(radec.T, 1).T
+    import matplotlib.pyplot as plt
+    plt.scatter(xy[0], xy[1])
+    gaps = gti.mask_external((attloc.times[1:] + attloc.times[:-1])/2.)
+    #assuming the moving along coordinate is almost linear
+    dx, dy = np.diff(xy[0]), np.diff(xy[1])
+    xyint = (xy + 0.5).astype(int)
+    nshiftx = np.abs(np.diff(xyint[0]))
+    nshifty = np.abs(np.diff(xyint[1]))
+    nshiftx[~gaps] = 0
+    nshifty[~gaps] = 0
+    dt = np.diff(attloc.times)
+    xte = ((np.arange(nshiftx.sum()) + np.repeat(nshiftx - nshiftx.cumsum(), nshiftx) + 0.5)*np.repeat(np.sign(dx), nshiftx) + np.repeat(xyint[0, :-1] - xy[0, :-1], nshiftx))/np.repeat(dx/dt, nshiftx) + np.repeat(attloc.times[:-1], nshiftx)
+    yte = ((np.arange(nshifty.sum()) + np.repeat(nshifty - nshifty.cumsum(), nshifty) + 0.5)*np.repeat(np.sign(dy), nshifty) + np.repeat(xyint[1, :-1] - xy[1, :-1], nshifty))/np.repeat(dy/dt, nshifty) + np.repeat(attloc.times[:-1], nshifty)
+    te = np.unique(np.concatenate([attloc.times, xte, yte] if tedges is None else [attloc.times, xte, yte, tedges]))
+    """
+    radec = np.rad2deg(vec_to_pol(attloc(te).apply(ax)))
+    xy = wcs.all_world2pix(radec.T, 1).T
+    plt.scatter(xy[0], xy[1], marker="x")
+    plt.show()
+    """
+    return make_small_steps_quats(attloc, gti, tedges=te, timecorrection=timecorrection)
+
 def hist_orientation_for_attdata(attdata, gti=tGTI, timecorrection=lambda x:1.):
     """
     given the AttDATA, gti and timecorrection (function which weights each time interval, in case of exposure map it is livetime fraction, or background lightcurve for the background map)
