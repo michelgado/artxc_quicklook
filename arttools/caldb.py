@@ -3,6 +3,7 @@ import pandas
 from astropy.io import fits
 from astropy.table import Table
 from astropy.time import Time, TimeDelta
+from astropy.wcs import WCS
 from functools import lru_cache
 import datetime
 from astropy import time as atime
@@ -89,6 +90,12 @@ def mksomething(urddata, hkdata, attdata, gti):
         spectra with same rmf but different arf - simply sum then and weight arfs with exposures
         spectra with different rmf - always use separately ????
 """
+
+def get_illumination_mask():
+    """TODO: put link in the index file"""
+    mfile = fits.open(os.path.join(ARTCALDBPATH, "illum_masks6.fits.gz"))
+    wcstempalte = WCS(mfile[0].header)
+    return wcstempalte, np.copy(mfile[1].data), np.copy(mfile[2].data)
 
 
 def get_caldata(urdn, ctype, gti=GTI([(atime.Time(datetime.datetime.now()) - atime.Time(MJDREF, format="mjd")).sec,]*2,)):
