@@ -7,7 +7,6 @@ from scipy.interpolate import RegularGridInterpolator
 from scipy.integrate import quad
 
 def xy_to_opaxoffset(x, y, urdn):
-    print("urdn:", urdn)
     x0, y0 = (23, 23) if urdn is None else get_optical_axis_offset_by_device(urdn)
     return np.round(x + 0.5 - x0).astype(np.int), np.round(y + 0.5 - y0).astype(np.int)
 
@@ -118,7 +117,8 @@ def unpack_inverse_psf_specweighted_ayut(imgfilter, cspec=None, app=None):
         np.add.at(w, np.searchsorted(ayutee, ec) - 1, cspec)
 
     data = np.sum(get_ayut_inverse_psf_datacube_packed()*w[np.newaxis, :, np.newaxis, np.newaxis], axis=1)
-    data = data/(data[0, 60, 60] + data[1, 60, 51]*4 + data[2, 51, 51]*4)
+    imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
+    data = data/imgmax #(data[0, 60, 60] + data[1, 60, 51]*4 + data[2, 51, 51]*4)
     x, y = np.mgrid[-60:61:1, -60:61:1]
     if not app is None:
         psfmask = x**2. + y**2. <= app**2./25.
@@ -141,7 +141,15 @@ def unpack_inverse_psf_specweighted_ayut(imgfilter, cspec=None, app=None):
 
 def get_ipsf_interpolation_func(app=6.*60):
     ipsf = get_inversed_psf_data_packed()
-    xo = ipsf["offset"].data["x_offset"] #*1.0127289656 #*1.0211676541662125
-    yo = ipsf["offset"].data["y_offset"] #*1.0127289656 #1.0211676541662125
+    xo = ipsf["offset"].data["x_offset"] #*0.9874317205607761 #*1.0127289656 #*1.0211676541662125
+    yo = ipsf["offset"].data["y_offset"] #*0.9874317205607761 #*1.0127289656 #1.0211676541662125
     #xo = xo[(xo > - app) & (xo < app)]
-    return RegularGridInterpolator((xo, yo), np.empty((xo.size, yo.size), np.double))
+    return RegularGridInterpolator((xo, yo), np.empty((xo.size, yo.size), np.double), bounds_error=False, fill_value=0.)
+
+
+def select_psf_grups(i, j, energy):
+        eidx = np.searchsorted(ayutee, energy) - 1
+        ijpairs, iidx, counts = np.unique(np.array([i, j, eidx]), axis=1, return_counts=True, return_inverse=True)
+        isidx = np.argsort(iidx)
+        ii = np.concatenate([[0,], np.cumsum(counts[:-1])])
+        return ijpairs, isidx, ii, counts
