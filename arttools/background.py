@@ -1,5 +1,6 @@
 from .caldb import get_boresight_by_device, get_backprofile_by_urdn, get_shadowmask_by_urd, \
-                    make_background_brightnes_profile, get_background_for_urdn, get_overall_background, get_crabspec_for_filters
+                    make_background_brightnes_profile, get_background_for_urdn, get_overall_background, \
+                    get_crabspec_for_filters, get_optical_axis_offset_by_device
 from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttWCSHistmean, AttWCSHistinteg, convolve_profile, AttInvHist, make_small_steps_quats
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from ._det_spatial import DL, dxya, offset_to_vec, vec_to_offset, vec_to_offset_pairs, raw_xy_to_vec, vec_to_offset_pairs
@@ -200,7 +201,7 @@ def get_photon_vs_particle_prob(urdfilters, udata, urdweights={}):
     return pweights
 
 
-def get_background_lightcurve(tevts, urdgti, bkgfilters, timebin, imgfilters=None):
+def get_background_lightcurve(tevts, urdgti, bkgfilters, timebin, imgfilters=None, dtcorr={}):
     """
     get surface brightness profiless
     """
@@ -214,13 +215,15 @@ def get_background_lightcurve(tevts, urdgti, bkgfilters, timebin, imgfilters=Non
     """
     estimated mean background rate for background in the desired parameters space (energy, grade, coordinates)
     """
-    tebkg, mgapsbkg, cratebkg, crerrbkg, bkgrate = make_overall_lc(tevts, urdgti, timebin, bkgscales)
+    tebkg, mgapsbkg, cratebkg, crerrbkg, bkgrate = make_overall_lc(tevts, urdgti, timebin, bkgscales, dtcorr)
     urdbkg = {urdn: bkgrate._scale(v) for urdn, v in bkgscales.items()}
     if not imgfilters is None:
         urdbkg = {urdn: lc._scale(get_background_bands_ratio(imgfilters[urdn], bkgfilters)) for urdn, lc in urdbkg.items()}
+    for urdn in dtcorr:
+        urdbkg[urdn].set_dtcorr(dtcorr[urdn])
     return urdbkg
 
-def get_bkg_lightcurve_for_app(urdbkg, urdgti, filters, att, ax, appsize, te, dtcorr={}):
+def get_bkg_lightcurve_for_app(urdbkg, urdgti, filters, att, ax, appsize, te, dtcorr={}, illum_filters=None):
     bkgprofiles = {urdn: get_background_surface_brigtnress(urdn, filters[urdn], fill_value=0.) for urdn in urdgti}
     bkgprofiles = {urdn: profile/profile.sum() for urdn, profile in bkgprofiles.items()}
     gti = reduce(lambda a, b: a | b, urdgti.values())
@@ -233,6 +236,9 @@ def get_bkg_lightcurve_for_app(urdbkg, urdgti, filters, att, ax, appsize, te, dt
     lcs = np.zeros(te.size - 1, np.double)
     xd, yd = np.mgrid[0:48:1, 0:48:1]
     for urdn in urdgti:
+        if urdgti[urdn].arr.size == 0:
+            continue
+
         teu, gaps = urdgti[urdn].make_tedges(tel)
         tc = (teu[1:] + teu[:-1])[gaps]/2.
         qlist = att(tc)*get_boresight_by_device(urdn)
@@ -241,7 +247,24 @@ def get_bkg_lightcurve_for_app(urdbkg, urdgti, filters, att, ax, appsize, te, dt
         pr = bkgprofiles[urdn][shmask]
         rl = urdbkg[urdn].integrate_in_timebins(teu, dtcorr.get(urdn, None))[gaps]
         vec = raw_xy_to_vec(x, y)
-        lloc = np.array([pr[np.sum(vec*q.apply(ax, inverse=True), axis=1) > cosa].sum() for q in qlist])*rl
+
+        if not illum_filters is None:
+            opax = raw_xy_to_vec(*np.array(get_optical_axis_offset_by_device(urdn)).reshape((2, 1)))[0]
+            for source in illum_filters.sources:
+                source.setup_for_quats(qlist, opax)
+            m1 = ~np.any([source.mask_vecs_with_setup(vec, qlist) for source in illum_filters.sources], axis=0)
+            m2 = np.array([(np.sum(vec*q.apply(ax, inverse=True), axis=1) > cosa) for q in qlist]).T
+            print("illumination and aperture mask", m1.shape, m2.shape, m1.sum(), m2.sum(), np.logical_and(m1, m2).sum())
+            """
+            lloc = np.sum((~np.any([source.mask_vecs_with_setup(vec, qlist) for source in illum_filters.sources], axis=0) &
+                    np.array([(np.sum(vec*q.apply(ax, inverse=True), axis=1) > cosa) for q in qlist]).T)*pr[:, np.newaxis], axis=0)*rl
+            """
+            print("illumination", np.sum(np.sum(m1*pr[:, np.newaxis], axis=0)*rl))
+            print("aperture", np.sum(np.sum(m2*pr[:, np.newaxis], axis=0)*rl))
+            lloc = np.sum(np.logical_and(m1, m2)*pr[:, np.newaxis], axis=0)*rl
+            print("overall sum", lloc.sum())
+        else:
+            lloc = np.array([pr[np.sum(vec*q.apply(ax, inverse=True), axis=1) > cosa].sum() for q in qlist])*rl
         idx = np.searchsorted(te, tc) - 1
         mloc = (idx >= 0) & (idx < te.size - 1)
         np.add.at(lcs, idx[mloc], lloc[mloc])
@@ -251,3 +274,31 @@ def get_background_bands_ratio(filters1, filters2):
     grid1, spec1 = get_background_spectrum(filters1)
     grid2, spec2 = get_background_spectrum(filters2)
     return np.sum(spec1)/np.sum(spec2)
+
+
+def make_mock_data(urdn, bkglc, imgfilter, gti):
+    te, gaps = gti.make_tedges(bkglc.te)
+    tc = (te[1:] + te[:-1])[gaps]/2.
+    totcts = bkglc(tc)*np.diff(te)[gaps]
+    grid, datacube = get_background_for_urdn(urdn)
+    keys = ["RAW_Y", "RAW_X", "ENERGY", "GRADE"]
+    phase = np.meshgrid(*[grid[k] if k != "ENERGY" else (grid[k][1:] + grid[k][:-1])/2. for k in keys])
+    m = imgfilter.meshgrid(keys, [grid[k] if k != "ENERGY" else (grid[k][1:] + grid[k][:-1])/2. for k in keys])
+    positions = {k:a[m[:, :, :, :]] for k, a in zip(keys, phase)}
+    print({k: p.size for k, p in positions.items()})
+    data = datacube[m[:, :, :, :]]
+    dvol = data.cumsum()
+    print(dvol.size)
+    totevents = np.random.poisson(totcts.sum())
+    position = np.random.uniform(0., dvol[-1], totevents)
+    time = np.random.uniform(0., totcts.sum(), totevents)
+    dt = np.random.uniform(0., 1., totevents)
+    events = np.empty(totevents, [("TIME", float), ("RAW_X", int), ("RAW_Y", int), ("ENERGY", float), ("GRADE", int)])
+    idx = np.searchsorted(dvol, position)
+    events["ENERGY"] = positions["ENERGY"][idx]
+    events["RAW_X"] = positions["RAW_X"][idx]
+    events["RAW_Y"] = positions["RAW_Y"][idx]
+    events["GRADE"] = positions["GRADE"][idx]
+    tidx = np.searchsorted(totcts.cumsum(), time)
+    events["TIME"] = te[:-1][gaps][tidx] + dt*np.diff(te)[gaps][tidx]
+    return events

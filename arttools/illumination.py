@@ -7,16 +7,18 @@ from .interval import Intervals
 from .time import emptyGTI, GTI
 from .telescope import URDNS
 from .psf import get_ipsf_interpolation_func, unpack_inverse_psf_specweighted_ayut, rawxy_to_opaxoffset
-from .mosaic import SkyImage, SkyImageMP
+from .mosaic import SkyImageMP
+from .mosaic2 import SkyImage
 from .atthist import make_small_steps_quats
 from copy import copy
 from math import pi, sin, cos
 from functools import reduce
 from astropy.wcs import WCS
 from multiprocessing.pool import ThreadPool
-from multiprocessing import cpu_count
+from multiprocessing import cpu_count, Pool
 #import matplotlib.pyplot as plt
 from threading import Thread
+import time
 
 
 MPNUM = cpu_count()//4
@@ -56,10 +58,10 @@ def get_events_in_illumination_mask(urdn, srcax, urdevts, attdata):
     mask[~mask][sidx] = ~imask[il, xy[:, 0], xy[:, 1]]
     return mask
 
+
 class IlluminationSource(object):
     def __init__(self, ra, dec, wcs, offsets, imask, app=300.):
         self.sourcevector = pol_to_vec(*np.deg2rad([ra, dec]))
-        #wcs, offsets, imask = get_illumination_mask()
         self.wcs = wcs
         self.offsets = offsets
         self.imask = imask
@@ -70,61 +72,63 @@ class IlluminationSource(object):
         self.qalign = None
         self.sidx = None
 
-    def get_vectors_in_illumination_mask(self, quats, pvecs, opax):
+    @staticmethod
+    def illumination_slice(w, imask, pvecs, crval, app, srcvec, opaxvecs):
+        qalign = make_align_quat(np.tile(srcvec, (opaxvecs.shape[0], 1)), opaxvecs)
+
+        w.wcs.crval[1] = crval/3600.
+        w = WCS(w.to_header())
+        xyl = (w.all_world2pix(np.rad2deg(vec_to_pol(qalign.apply(pvecs))).T, 1) - 0.5).astype(int)
+        y0, x0 = (w.all_world2pix(np.array([[180., 0.],]), 1) - 0.5).astype(int)[0]
+        return np.logical_and(imask[xyl[:, 1], xyl[:, 0]], ((xyl[:, 1] - x0)**2 + (xyl[:, 0] - y0)**2. > (app/w.wcs.cdelt[0]/3600.)**2.))
+
+
+    def get_vectors_in_illumination_mask(self, quats, pvecs, opax, mpnum=1):
         opaxvecs = quats.apply(opax)
-        qalign = make_align_quat(np.tile(self.sourcevector, (opaxvecs.shape[0], 1)), opaxvecs)
+        #qalign = make_align_quat(np.tile(self.sourcevector, (opaxvecs.shape[0], 1)), opaxvecs)
 
-        angles = np.arccos(np.sum(self.sourcevector*opaxvecs, axis=-1))*180./pi*3600.
-        offedges = np.array([self.offsets["OPAXOFFL"], self.offsets["OPAXOFFH"]]).T
-        """
-        offset_intervals = Intervals(offedges)
-        offset_intervals.merge_joint()
+        #angles = np.arccos(np.sum(self.sourcevector*opaxvecs, axis=-1))*180./pi*3600.
+        angles = -np.sum(self.sourcevector*opaxvecs, axis=-1)
+        offedges = -np.array([np.cos(self.offsets["OPAXOFFL"]*pi/180./3600.), np.cos(self.offsets["OPAXOFFH"]*pi/180./3600.)]).T
 
-        mask = offset_intervals.mask_external(angles)
-        """
-        mask = np.zeros(angles.size, np.bool)
 
         sidx = np.argsort(angles)
-        cedges = np.searchsorted(angles[sidx], offedges)
-        qloc = qalign[sidx]
+        cedges = np.maximum(np.searchsorted(angles[sidx], offedges) - 1, 0)
+        mask = np.zeros(sidx.size, np.bool)
 
-        for i, crval in enumerate(self.offsets["CRVAL"]):
-            s, e = cedges[i]
-            if e == s:
-                continue
-            pvecsis = qloc[s:e].apply(pvecs[sidx[s:e]])
-            self.wcs.wcs.crval[1] = crval/3600.
-            w1 = WCS(self.wcs.to_header())
-            xyl = (w1.all_world2pix(np.rad2deg(vec_to_pol(pvecsis)).T, 1) - 0.5).astype(int)
-            #imask = np.copy(self.imask[i])
-            y0, x0 = (w1.all_world2pix(np.array([[180., 0.],]), 1) - 0.5).astype(int)[0]
-            mask[sidx[s:e]] = self.imask[np.full(xyl.shape[0], i), xyl[:, 1], xyl[:, 0]] & ((xyl[:, 1] - x0)**2 + (xyl[:, 0] - y0)**2. > (self.app/w1.wcs.cdelt[0]/3600.)**2.)
-            #imask[(self.x - x0)**2 + (self.y - y0)**2. < (self.app/w1.wcs.cdelt[0]/3600.)**2.] = False
-            """
-            print(y0, x0, w1.all_world2pix(np.array([[180., 0.],]), 1))
-            plt.imshow(imask)
-            plt.show()
-            """
-            #mask[sidx[s:e]] = imask[xyl[:, 1], xyl[:, 0]]
+        if mpnum > 1:
+            pool = Pool(mpnum)
+            for (s, e), res in zip(cedges, pool.starmap(self.illumination_slice, [(self.wcs, imask, pvecs[sidx[s:e]], crval, self.app, self.sourcevector, opaxvecs[sidx[s:e]]) for imask, (s, e), crval in zip(self.imask, cedges, self.offsets["CRVAL"]) if e != s])):
+                mask[sidx[s:e]] = res
+        else:
+            qalign = make_align_quat(np.tile(self.sourcevector, (opaxvecs.shape[0], 1)), opaxvecs)
+            for i, crval in enumerate(self.offsets["CRVAL"]):
+                s, e = cedges[i]
+                if e == s:
+                    continue
+                pvecsis = qalign[sidx[s:e]].apply(pvecs[sidx[s:e]])
+                self.wcs.wcs.crval[1] = crval/3600.
+                w1 = WCS(self.wcs.to_header())
+                xyl = (w1.all_world2pix(np.rad2deg(vec_to_pol(pvecsis)).T, 1) - 0.5).astype(int)
+                y0, x0 = (w1.all_world2pix(np.array([[180., 0.],]), 1) - 0.5).astype(int)[0]
+                mask[sidx[s:e]] = self.imask[np.full(xyl.shape[0], i), xyl[:, 1], xyl[:, 0]] & ((xyl[:, 1] - x0)**2 + (xyl[:, 0] - y0)**2. > (self.app/w1.wcs.cdelt[0]/3600.)**2.)
         return mask
 
     def setup_for_quats(self, quats, opax):
         opaxvecs = quats.apply(opax)
         self.qalign = make_align_quat(np.tile(self.sourcevector, (opaxvecs.shape[0], 1)), opaxvecs)
-
-        angles = np.arccos(np.sum(self.sourcevector*opaxvecs, axis=-1))*180./pi*3600.
-        offedges = np.array([self.offsets["OPAXOFFL"], self.offsets["OPAXOFFH"]]).T
-
+        #angles = np.arccos(np.sum(self.sourcevector*opaxvecs, axis=-1))*180./pi*3600.
+        angles = -np.sum(self.sourcevector*opaxvecs, axis=-1)
+        offedges = -np.array([np.cos(self.offsets["OPAXOFFL"]*pi/181./3600.), np.cos(self.offsets["OPAXOFFH"]*pi/180./3600.)]).T
+        #offedges = np.array([self.offsets["OPAXOFFL"], self.offsets["OPAXOFFH"]]).T
         self.sidx = np.argsort(angles)
-        self.cedges = np.searchsorted(angles[self.sidx], offedges)
+        self.cedges = np.maximum(np.searchsorted(angles[self.sidx], offedges) - 1, 0)
 
     def mask_vecs_with_setup(self, pvecs, qinitrot=None, mpnum=MPNUM, opax=None):
         pool = ThreadPool(mpnum)
         qvecrot = self.qalign if qinitrot is None else self.qalign*qinitrot
         mask = np.zeros((pvecs.shape[0], len(qvecrot)), np.bool)
         qloc = qvecrot[self.sidx]
-        print(len(qloc))
-        iidx = np.arange(mask.shape[1])
         for i, crval in enumerate(self.offsets["CRVAL"]):
             s, e = self.cedges[i]
             if s == e:
@@ -139,14 +143,14 @@ class IlluminationSource(object):
             mask[:, self.sidx[s:e]] = imask[xyl[:, 1], xyl[:, 0]].reshape((-1, e - s))
         return mask
 
-    def get_events_in_illumination_mask(self, urddata, urdn, attdata):
-        attloc = attdata*get_boresight_by_device(urdn)
+    def get_events_in_illumination_mask(self, urddata, urdn, attdata, mpnum=1):
         opax = raw_xy_to_vec(*np.array(get_optical_axis_offset_by_device(urdn)).reshape((2, 1)))[0]
-        gti = attloc.circ_gti(self.sourcevector, self.offsets["OPAXOFFH"][-1], opax)
+        gti = attdata.circ_gti(self.sourcevector, self.offsets["OPAXOFFH"][-1], get_boresight_by_device(urdn).apply(opax))
         mask = gti.mask_external(urddata["TIME"])
         if np.any(mask):
             pvecs = get_photons_vectors(urddata[mask], urdn, attdata)
-            mask[mask] = self.get_vectors_in_illumination_mask(attloc(urddata["TIME"][mask]), pvecs, opax)
+            attloc = attdata.apply_gti(gti)*get_boresight_by_device(urdn)
+            mask[mask] = self.get_vectors_in_illumination_mask(attloc(urddata["TIME"][mask]), pvecs, opax, mpnum)
         return mask
 
 class IlluminationSources(object):
@@ -168,8 +172,8 @@ class IlluminationSources(object):
                 bti = bti | attloc.circ_gti(isource.sourcevector, self.offsets["OPAXOFFH"][-1], opax)
         return bti
 
-    def get_events_in_illumination_mask(self, urddata, urdn, attdata):
-        mask = np.any([source.get_events_in_illumination_mask(urddata, urdn, attdata) for source in self.sources], axis=0)
+    def get_events_in_illumination_mask(self, urddata, urdn, attdata, mpnum=1):
+        mask = np.any([source.get_events_in_illumination_mask(urddata, urdn, attdata, mpnum) for source in self.sources], axis=0)
         return mask
 
     def get_vectors_in_illumination_mask(self, quats, pvecs, opax, qalignlist=False):
@@ -183,8 +187,8 @@ class IlluminationSources(object):
         note: deadtime correction is likely mandatory in the vicinity of illumination sources
         """
         vmap = get_ipsf_interpolation_func()
-        sky = SkyImageMP(wcs, vmap, mpnum=mpnum)
-
+        sky = SkyImage(wcs, vmap, mpnum=mpnum)
+        sky.clean_img()
 
         for urdn, gti in urdgti.items():
             taskargs = []
@@ -203,15 +207,16 @@ class IlluminationSources(object):
             shmask = get_shadowmask_by_urd(urdn)
             xloc, yloc = self.x[shmask], self.y[shmask]
             qcorr = rawxy_to_qcorr(xloc, yloc)
-            vecs = raw_xy_to_vec(self.x[shmask], self.y[shmask])
+            vecs = raw_xy_to_vec(xloc, yloc)
             i, j = rawxy_to_opaxoffset(xloc, yloc, urdn)
 
             mask = np.any([source.mask_vecs_with_setup(vecs, qval, mpnum=mpnum) for source in self.sources], axis=0)
             print("urdn %d process (featuring %d workers):" % (urdn, mpnum))
-            sky.interpolate_bunch([(qval[m]*q, dtq[m], ipsffunc(il, jl)) for m, q, il, jl in zip(mask, qcorr, i, j) if np.any(m)], kind=kind)
-
-        sky._accumulate_img()
-        sky._clean_img()
+            #sky.interpolate_bunch([(qval[m]*q, dtq[m], ipsffunc(il, jl)) for m, q, il, jl in zip(mask, qcorr, i, j) if np.any(m)], kind=kind)
+            sky.rmap_convolve_multicore([(qval[m]*q, dtq[m], ipsffunc(il, jl)) for m, q, il, jl in zip(mask, qcorr, i, j) if np.any(m)])
+        #sky._accumulate_img()
+        #sky._clean_img()
+        sky.accumulate_img()
         return sky.img
 
 def get_illumination_gtis(att, brightsourcevec, urdgti=None):
