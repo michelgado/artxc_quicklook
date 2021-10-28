@@ -9,8 +9,10 @@ from . import filters
 from . import psf
 from . import sensitivity
 from . import spectr
+from . import illumination
+from . import point_source
 
-__version__ = "0.2.1"
+__version__ = "0.3.1"
 
 
 """

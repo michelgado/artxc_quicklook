@@ -224,9 +224,9 @@ def make_mosaic_for_urdset_by_gti(urdflist, attflist, gti,
     urdbkg = arttools.background.get_background_lightcurve(np.sort(np.concatenate(urdbkge)), urdgti, bkgfilters, 1000., imgfilters)
 
     if usedtcorr:
-        emap = make_expmap_for_wcs(locwcs, attdata, urdgti, dtcorr=urddtc, **kwargs)
+        emap = make_expmap_for_wcs(locwcs, attdata, urdgti, imgfilters, dtcorr=urddtc, **kwargs)
     else:
-        emap = make_expmap_for_wcs(locwcs, attdata, urdgti, **kwargs)
+        emap = make_expmap_for_wcs(locwcs, attdata, urdgti, imgfilters, **kwargs)
     emap = fits.PrimaryHDU(data=emap, header=locwcs.to_header())
     emap.writeto(outexpmapname, overwrite=True)
     bmap = make_bkgmap_for_wcs(locwcs, attdata, urdgti, urdbkg, imgfilters)

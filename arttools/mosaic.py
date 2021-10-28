@@ -3,7 +3,7 @@ from scipy.interpolate import RegularGridInterpolator
 from scipy.signal import convolve
 from scipy.ndimage import gaussian_filter
 from skimage.feature import peak_local_max
-#from scipy.spatial.transform import Rotation
+from scipy.spatial.transform import Rotation
 from multiprocessing import Pool, Process, Queue, RawArray, cpu_count, Barrier
 from multiprocessing.pool import ThreadPool
 from threading import Thread, Lock, current_thread
@@ -20,9 +20,7 @@ from copy import copy, deepcopy
 from ctypes import c_bool
 import sys
 import asyncio
-
 import time
-
 
 MPNUM = cpu_count()//4
 
@@ -50,8 +48,18 @@ class MockPool(object):
     def imap(func, args):
         return list(map(func, args))
 
+localsky = None
 
 class SkyImage(object):
+    """
+    pool initializer
+    """
+    @staticmethod
+    def initializer(locwcs, vmap, shape, barrier):
+        global localsky
+        localsky = SkyImage(locwcs, vmap, shape, mpnum=1)
+
+
     """
     stores an image of the sky and allows to put specific core on the sky coordinates
     """
@@ -63,6 +71,9 @@ class SkyImage(object):
         self.mask = np.ones(self.img.shape, np.bool)
         self.idx = np.arange(self.img.size).reshape(self.img.shape)
         self.lock = Lock()
+        #self.barier = barrier if not barrier is None else Barrier(mpnum)
+        #self.pool = MockPool if mpnum < 2 else Pool(mpnum, initializer=self.initializer, initargs=(locwcs, vmap, self.shape, self.barrier))
+
 
         y, x = np.mgrid[self.shape[0][0] + 1:self.shape[0][1] + 1:1, self.shape[1][0] + 1: self.shape[1][1] + 1:1]
         ra, dec = self.locwcs.all_pix2world(np.array([x.ravel(), y.ravel()]).T, 1).T
@@ -97,12 +108,14 @@ class SkyImage(object):
         return il, ir, jl, jr
 
     def _get_quats_rectangles(self, qvals):
-        radec = np.array([vec_to_pol(qvals.apply(v)) for v in self.corners.corners])
-        xy = (self.locwcs.all_world2pix(radec.reshape((-1, 2)), 1) - 0.5).astype(int).reshape(radec.shape)
-        il = np.maximum(np.min(xy[..., 0], axis=0), 0)
-        jl = np.maximum(np.min(xy[..., 1], axis=0), 0)
-        iu = np.minimum(np.max(xy[..., 0], axis=0) + 1, self.shape[0])
-        ju = np.minimum(np.max(xy[..., 1], axis=0) + 1, self.shape[1])
+        radec = np.rad2deg(np.concatenate([vec_to_pol(qvals.apply(v)) for v in self.corners.corners], axis=1))
+        y, x = (self.locwcs.all_world2pix(radec.T, 1) - 0.5).astype(int).T
+        y = y.reshape((-1, len(qvals)))
+        x = x.reshape((-1, len(qvals)))
+        il = np.maximum(np.min(x, axis=0), 0)
+        jl = np.maximum(np.min(y, axis=0), 0)
+        iu = np.minimum(np.max(x, axis=0) + 1, self.img.shape[0])
+        ju = np.minimum(np.max(y, axis=0) + 1, self.img.shape[1])
         return il, iu, jl, ju
 
 
@@ -180,33 +193,13 @@ class SkyImage(object):
         self.img += sum(imgs)
 
 
-
     def interpolate_bunch(self, qvals, norm, vmapvals=None, img=None):
         if not vmapvals is None:
             self.vmap.values = vmapvals
-        if img is None: img = self.img
-        """
+        if img is None:
+            img = self.img
         for q, n in zip(qvals, norm):
             self.interpolate_vmap_for_qval(q, n, img)
-        """
-        il, ir, jl, jr = self._get_quat_rectangle(qvals)
-        #s = (ir - il - 1)*(jr - jl - 1)
-        """
-        sx = ir - il
-        js = np.cumsum(np.repeat(jr - jl, ir - il))
-        a = np.arange(s.sum())
-
-        a[js[0]:] -= np.repeat(s[np.cumsum(js[:-1])], js[1:])
-        b = np.arange(np.sum(sx))
-        b[sx[0]:] -= np.repeat(b[sx[:-1]], sx[1:])
-        idx = a + np.repeat(il*img.shape[0] + jl, s) + np.repeat(b*img.shpae[0], np.repeat(jr - jl, sx))
-        #mx = np.max(ir - il)
-        #my = np.max(jr - jl)
-        """
-        idx = np.concatenate([self.idx[xl:xr, xl, xr].ravel() for xl, xr, yl, yz in zip([il ,ir, jl, jr])])
-        x, y = vec_to_offset(Rotation(np.repeat(q.as_quat(), (ir - il)*(jr - jl))).apply(self.vecs.reshape((-1, 3))[idx], inverse=True))
-        m = np.all([x > self.vmap.grid[0][0], x < self.vmap.grid[0][-1], y > self.vmap.grid[1][0], y < self.vmap.grid[0][-1]], axis=0)
-        np.add.at(img.ravel(), idx[m], self.vmap(np.array([x, y]).T[m])*np.repeat(norm, s)[m])
 
     @staticmethod
     def spread_events(img, locwcs, vecs, weights=None):
@@ -556,8 +549,6 @@ def run_in_endlessloop(func, q):
 
 
 
-localsky = None
-syncbarrier = None
 
 
 class SkyImageMP:

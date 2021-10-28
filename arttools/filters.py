@@ -99,7 +99,6 @@ class IndependentFilters(dict):
     def meshgrid(self, keys, arrays):
         ud = np.meshgrid(*[a for a in arrays])
         shape = ud[0].shape
-        print(shape)
         data = np.recarray(ud[0].size, [(k, a.dtype) for k, a in zip(keys, arrays)])
         """
         data = np.column_stack([a.ravel() for a in ud[::-1]]).ravel().view(
