@@ -5,7 +5,7 @@ from ._det_spatial import urd_to_vec, F, DL
 from .time import get_hdu_times, GTI, tGTI, emptyGTI
 from .caldb import T0, get_boresight_by_device, get_device_timeshift
 from .mask import edges as medges
-from functools import reduce
+from functools import reduce, lru_cache
 from scipy.optimize import minimize
 from datetime import datetime
 from astropy.time import Time
@@ -22,50 +22,6 @@ temporal solution to the SED1/2 relativistic corrections on board
 from astropy.coordinates import SkyCoord
 from astropy import time as atime
 
-gyrocorrectionbti = GTI([[624390347, 624399808], [6.24410643e+08, 6.30954575e+08]])
-gyrocorrectionbti = emptyGTI #GTI([[624390347, 624399808], [6.24410643e+08, 6.30954575e+08]])
-
-
-def normalize(vecs):
-    return vecs/np.sqrt(np.sum(vecs**2, axis=-1))[..., np.newaxis]
-
-
-def define_required_correction(attdata):
-    """
-    NAME
-        define_required_correction
-
-
-    Some of the orientation files are provided with fk5 for current epoch.
-    Those should be corrected and alternate in the standard form -> to the FK5 J2000.
-    The precise information on when to apply this corrections is stored in the CALDB files.
-
-    """
-    a1 = attdata.apply_gti((attdata.gti & gyrocorrectionbti) + [0.4, -0.4])
-    a2 = attdata.apply_gti((attdata.gti & ~gyrocorrectionbti) + [0.4, -0.4])
-    return a2 + make_gyro_relativistic_correction(a1)
-
-def make_gyro_relativistic_correction(attdata):
-    if attdata.gti.exposure == 0:
-        return attdata
-    print("inverse relativistic correction required")
-    vec = attdata(attdata.times).apply(OPAX)
-    ra, dec = vec_to_pol(vec)
-    ra, dec = np.rad2deg(ra), np.rad2deg(dec)
-    sc = SkyCoord(ra, dec, unit=("deg", "deg"), frame="fk5", obstime=atime.Time(51543.875, format="mjd") + atime.TimeDelta(attdata.times, format="sec"))
-    vec2 = np.asarray(sc.gcrs.cartesian.xyz.T)
-    vrot = np.cross(vec2, vec)
-    vrot = vrot/np.sqrt(np.sum(vrot**2, axis=1))[:, np.newaxis]
-    calpha = np.sum(vec*vec2, axis=1)
-    calphap2 = np.sqrt((calpha + 1.)/2.)
-    salphap2 = np.sqrt((1. - calpha)/2.)
-    #alpha = np.arccos(np.sum(vec*vec2, axis=1))
-    qcorr = np.empty((calphap2.size, 4), np.double)
-    qcorr[:, :3] = vrot*salphap2[:, np.newaxis]
-    qcorr[:, 3] = calphap2
-    return AttDATA(attdata.times, Rotation(qcorr).inv()*attdata(attdata.times), gti=attdata.gti)
-#-===========================================================================================
-
 qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])
 qgyro0 = Rotation([0., 0., 0., 1.])
 OPAX = np.array([1, 0, 0])
@@ -75,23 +31,9 @@ SOLARSYSTEMPLANENRMALEINFK5 = np.array([-9.83858346e-08, -3.97776911e-01,  9.174
 
 def to_2pi_range(val): return val%(2.*pi)
 
-def vec_to_pol(phvec):
-    """
-    given the cartesian vectors produces phi and theta coordinates in the same frame
-    """
-    dec = np.arctan(phvec[...,2]/np.sqrt(phvec[...,0]**2. + phvec[...,1]**2.))
-    ra = (np.arctan2(phvec[...,1], phvec[...,0])%(2.*pi))
-    return ra, dec
 
-def pol_to_vec(phi, theta):
-    """
-    given the spherical coordinates phi and theta produces cartesian vector
-    """
-    vec = np.empty((tuple() if not type(theta) is np.ndarray else theta.shape) + (3,), np.double)
-    vec[..., 0] = np.cos(theta)*np.cos(phi)
-    vec[..., 1] = np.cos(theta)*np.sin(phi)
-    vec[..., 2] = np.sin(theta)
-    return vec
+gyrocorrectionbti = GTI([[624390347, 624399808], [6.24410643e+08, 6.30954575e+08]])
+gyrocorrectionbti = emptyGTI #GTI([[624390347, 624399808], [6.24410643e+08, 6.30954575e+08]])
 
 class SlerpWithNaiveIndexing(Slerp):
     """
@@ -185,6 +127,7 @@ class AttDATA(SlerpWithNaiveIndexing):
             super().__init__(times, self(times))
             # check interpolation one more time to see wether new neighbouring
             # points provied good interpolation if no, exclude them from GTI
+            bti.remove_short_intervals(3.)
             self.gti = self.gti & ~bti #self._check_interpolation_quality()
         else:
             self.gti = self.gti & ~self._check_interpolation_quality()
@@ -192,6 +135,10 @@ class AttDATA(SlerpWithNaiveIndexing):
     def _check_interpolation_quality(self):
         if self.gti.exposure == 0. or self.times.size == 2:
             return emptyGTI
+        mgap = self.gti.mask_external((self.times[1:] + self.times[:-1])/2.)
+        mgap2 = np.zeros(mgap.size + 1, np.bool)
+        mgap2[1:] = ~mgap
+        mgap2[:-1] = mgap2[:-1] | ~mgap
         dt = np.diff(self.times, 1)
         dt2 = self.times[2:] - self.times[:-2]
         rot = self(self.times)
@@ -202,9 +149,41 @@ class AttDATA(SlerpWithNaiveIndexing):
         mfov = np.zeros(self.times.size, np.bool)
         mbak = np.zeros(self.times.size, np.bool)
         mfov[2:] = np.sum(rot[2:].apply(OPAX)*qfov.apply(OPAX), axis=-1) < cos(pi/180.*10./3600.)
+        mfov[2:] = mfov[2:] & mgap[1:]
         mbak[:-2] = np.sum(rot[:-2].apply(OPAX)*qbak.apply(OPAX), axis=-1) < cos(pi/180.*10./3600.)
-        edges = medges(mfov[:-1] & mbak[1:]) + [1, 0]
-        return GTI(self.times[edges])
+        mbak[:-2] = mbak[:-2] & mgap[:-1]
+        #mbad = mbak & mfov
+        edges = medges(mfov[1:] & mbak[:-1]) # + [1, 0]
+        edges = edges.reshape((-1, 2))
+        """
+        print(edges.shape)
+        for s, e in edges.reshape((-1, 2)):
+            radec = vec_to_pol(self.rotations[s-2:e+3].apply([1, 0, 0]))
+            plt.plot(radec[0]*180/pi, radec[1]*180/pi)
+            plt.scatter(radec[0][mbak[s-2:e+3]]*180/pi, radec[1][mbak[s-2:e+3]]*180/pi, marker="<", s=50, color="r")
+            plt.scatter(radec[0][mfov[s-2:e+3]]*180/pi, radec[1][mfov[s-2:e+3]]*180/pi, marker=">", s=50, color="g")
+            radec = vec_to_pol(self.rotations[[s, e]].apply([1, 0, 0]))
+            plt.scatter(radec[0]*180/pi, radec[1]*180/pi, marker="x", s=40, color="k")
+            plt.title(self.times[e] - self.times[s])
+            plt.show()
+        print("check interpolation", mfov.sum(), mbak.sum(), mfov.size)
+        idx = np.argwhere(mfov)
+        print(idx)
+        for i in idx[:, 0]:
+            print(mbak[i-2:i+3], mfov[i-2:i+3], mfov[i-2:i+2] & mbak[i-1:i+3])
+            radec = vec_to_pol(self.rotations[i-6:i+7].apply([1, 0, 0]))
+            plt.plot(radec[0]*180/pi, radec[1]*180/pi)
+            plt.scatter(radec[0]*180/pi, radec[1]*180/pi, marker="+", color="k")
+            plt.scatter(radec[0][mbak[i-6:i+7]]*180/pi, radec[1][mbak[i-6:i+7]]*180/pi, marker="<", s=30, color="r")
+            plt.scatter(radec[0][mfov[i-6:i+7]]*180/pi, radec[1][mfov[i-6:i+7]]*180/pi, marker=">", s=30, color="g")
+            plt.plot(radec[0][mgap2[i-6:i+7]]*180/pi, radec[1][mgap2[i-6:i+7]]*180/pi, "r", lw=2)
+            plt.show()
+        g1 = GTI(self.times[edges])
+        g2 = GTI(self.times[edges] + np.minimum(dt[edges], 1e-5)*[1, -1])
+        print(g1.exposure, g2.exposure)
+        pause
+        """
+        return GTI(self.times[edges] + np.minimum(dt[edges], 1e-5)*[1, -1])
 
     def __add__(self, other):
         base = super().__add__(other)
@@ -299,8 +278,85 @@ class AttDATA(SlerpWithNaiveIndexing):
         frac, gti = slerp_circ_aperture_exposure(self, vec, app, ax)
         return gti & self.gti
 
-    def rect_gti(self, rect):
-        pass
+    def chull_gti(self, chull, ax=OPAX):
+        gti = reduce(lambda a, b: a & b, [self.circ_gti(-v, 90.*3600. - 0.1, ax=OPAX) for v in chull.orts])
+        return gti
+
+
+cache_function = {np.ndarray: lambda x: x.tobytes(),
+                  fits.FITS_rec: lambda x: x.tobytes(),
+                  AttDATA: lambda x: (x.times.tobytes(), x.gti.arr.tobytes(), x.rotations.as_rotvec().tobytes())}
+
+def _urddata_lru_cache(function):
+    cache = {}
+    def newfunction(*args, **kwargs):
+        lhash = hash(tuple(cache_function.get(type(x), lambda x: x)(x) for x in args) + \
+                     tuple(cache_function.get(type(x), lambda x: x)(x) for x in kwargs.values()))
+        if len(cache) <= 21: #typical size of different urddata subsets used in a single data reduction
+            if not lhash in cache:
+                cache[lhash] = function(*args, **kwargs)
+            return cache.get(lhash)
+        else:
+            return function(*args, **kwargs)
+    return newfunction
+
+def normalize(vecs):
+    return vecs/np.sqrt(np.sum(vecs**2, axis=-1))[..., np.newaxis]
+
+def define_required_correction(attdata):
+    """
+    NAME
+        define_required_correction
+
+
+    Some of the orientation files are provided with fk5 for current epoch.
+    Those should be corrected and alternate in the standard form -> to the FK5 J2000.
+    The precise information on when to apply this corrections is stored in the CALDB files.
+
+    """
+    a1 = attdata.apply_gti((attdata.gti & gyrocorrectionbti) + [0.4, -0.4])
+    a2 = attdata.apply_gti((attdata.gti & ~gyrocorrectionbti) + [0.4, -0.4])
+    return a2 + make_gyro_relativistic_correction(a1)
+
+def make_gyro_relativistic_correction(attdata):
+    if attdata.gti.exposure == 0:
+        return attdata
+    print("inverse relativistic correction required")
+    vec = attdata(attdata.times).apply(OPAX)
+    ra, dec = vec_to_pol(vec)
+    ra, dec = np.rad2deg(ra), np.rad2deg(dec)
+    sc = SkyCoord(ra, dec, unit=("deg", "deg"), frame="fk5", obstime=atime.Time(51543.875, format="mjd") + atime.TimeDelta(attdata.times, format="sec"))
+    vec2 = np.asarray(sc.gcrs.cartesian.xyz.T)
+    vrot = np.cross(vec2, vec)
+    vrot = vrot/np.sqrt(np.sum(vrot**2, axis=1))[:, np.newaxis]
+    calpha = np.sum(vec*vec2, axis=1)
+    calphap2 = np.sqrt((calpha + 1.)/2.)
+    salphap2 = np.sqrt((1. - calpha)/2.)
+    #alpha = np.arccos(np.sum(vec*vec2, axis=1))
+    qcorr = np.empty((calphap2.size, 4), np.double)
+    qcorr[:, :3] = vrot*salphap2[:, np.newaxis]
+    qcorr[:, 3] = calphap2
+    return AttDATA(attdata.times, Rotation(qcorr).inv()*attdata(attdata.times), gti=attdata.gti)
+#-===========================================================================================
+
+def vec_to_pol(phvec):
+    """
+    given the cartesian vectors produces phi and theta coordinates in the same frame
+    """
+    dec = np.arctan(phvec[...,2]/np.sqrt(phvec[...,0]**2. + phvec[...,1]**2.))
+    ra = (np.arctan2(phvec[...,1], phvec[...,0])%(2.*pi))
+    return ra, dec
+
+def pol_to_vec(phi, theta):
+    """
+    given the spherical coordinates phi and theta produces cartesian vector
+    """
+    vec = np.empty((tuple() if not type(theta) is np.ndarray else theta.shape) + (3,), np.double)
+    vec[..., 0] = np.cos(theta)*np.cos(phi)
+    vec[..., 1] = np.cos(theta)*np.sin(phi)
+    vec[..., 2] = np.sin(theta)
+    return vec
+
 
 def read_gyro_fits(gyrohdu):
     """
@@ -343,7 +399,7 @@ def read_bokz_fits(bokzhdu):
     masktimes = bokzdata["TIME"] > T0
     mask = np.logical_and(mask0quats, masktimes)
     jyear = get_hdu_times(bokzhdu).jyear[mask]
-    qbokz = earth_precession_quat(jyear).inv()*Rotation.from_dcm(mat[mask])*qbokz0*\
+    qbokz = earth_precession_quat(jyear).inv()*Rotation.from_matrix(mat[mask])*qbokz0*\
             get_boresight_by_device("BOKZ")
     ts, uidx = np.unique(bokzdata["TIME"][mask], return_index=True)
     return AttDATA(ts, qbokz[uidx])
@@ -365,25 +421,39 @@ def get_raw_bokz(bokzhdu):
     mask0quats = np.linalg.det(mat) != 0.
     masktimes = bokzdata["TIME"] > T0
     mask = np.logical_and(mask0quats, masktimes)
-    qbokz = Rotation.from_dcm(mat[mask])*qbokz0
+    qbokz = Rotation.from_matrix(mat[mask])*qbokz0
     jyear = get_hdu_times(bokzhdu).jyear[mask]
     return bokzdata["TIME"][mask], earth_precession_quat(jyear).inv()*qbokz
 
+@_urddata_lru_cache
 def get_events_quats(urddata, URDN, attdata):
     return attdata(urddata["TIME"])*get_boresight_by_device(URDN)
 
 
-
-def make_align_quat(ax1, ax2, zeroax=np.array([1, 0, 0]), north=np.array([0, 0, 1])):
-    cross = np.cross(north, zeroax)
-    v = normalize(np.cross(ax1, zeroax)).reshape((-1, 3))
-    q1 = Rotation.from_rotvec(v*np.arccos(np.sum(normalize(ax1)*zeroax, axis=-1)))
+@_urddata_lru_cache
+def make_align_quat(ax1, ax2, zeroax=np.array([-1, 0, 0]), north=np.array([0, 0, 1])):
+    """
+    this function provides with the quat which alignes inpute vector ax1 with zeroax
+    and puts second provided vector in the plane within zeroax and north
+    params:
+        ax1, ax2 - two mandatory input vectors
+        zeroax - default direction to align ax1 with
+        north - second vector defining with zeroax the plane on which ax1 and ax2 should lie after rotation
+    """
+    cross = normalize(np.cross(north, zeroax))
+    if np.abs(np.sum(normalize(ax1)*zeroax)) == 1:
+        q1 = Rotation.from_rotvec(north*(3/2. - np.sum(normalize(ax1)*zeroax)/2.)*pi)
+    else:
+        v = normalize(np.cross(ax1, zeroax)).reshape((-1, 3))
+        q1 = Rotation.from_rotvec(v*np.arccos(np.sum(normalize(ax1)*zeroax, axis=-1))[..., np.newaxis])
     v2 = q1.apply(normalize(ax2)).reshape((-1, 3))
-    v3 = normalize(np.cross(zeroax, v2))
-    q2 = Rotation.from_rotvec(zeroax*np.arctan2(np.sum(cross*v3, axis=-1), np.sum(north*v3, axis=-1)))
+    v3 = normalize(v2 - v2*np.sum(zeroax*v2, axis=-1)[..., np.newaxis])
+    #q2 = Rotation.from_rotvec(zeroax*np.arctan2(np.sum(cross*v3, axis=-1), np.sum(north*v3, axis=-1))[..., np.newaxis])
+    q2 = Rotation.from_rotvec(zeroax*np.arctan2(np.sum(cross*v3, axis=-1), np.sum(north*v3, axis=-1))[..., np.newaxis])
     return q2*q1
 
 
+@_urddata_lru_cache
 def get_photons_vectors(urddata, URDN, attdata, subscale=1, randomize=False):
     """
     return cartesian vectros, defining direction to the sky, for the specific pixel, defined with urddata rawx, rawy coordinates
@@ -408,6 +478,8 @@ def add_ra_dec(urddata, urdn, attdata):
     ra, dec = np.rad2deg(get_photons_sky_coord(urddata, urdn, attdata))
     return np.lib.recfunctions.append_fields(udata, ["RA", "DEC"], [ra, dec], usemask=False)
 
+
+@_urddata_lru_cache
 def get_photons_sky_coord(urddata, URDN, attdata, subscale=1, randomize=False):
     """
     converts eventlist event pixel information in to the ra and dec spherical coordinates of fk5 system
@@ -429,7 +501,7 @@ def nonzero_quaternions(quat):
     mask = np.sum(quat**2, axis=1) > 0
     return mask
 
-def quat_to_pol_and_roll(qfin, opaxis=[1, 0, 0], north=[0, 0, 1]):
+def quat_to_pol_and_roll(qfin, opaxis=[1, 0, 0], north=[0, 1, 0]):
     """
     it is assumed that quaternion is acting on the sattelite coordinate system
     in order to orient in in icrs coordinates
@@ -512,7 +584,7 @@ def earth_precession_quat(jyear):
     theta = np.polyval(ptheta, T) / 3600.0
     return Rotation.from_euler("ZYZ", np.array([z, -theta, zeta]).T, degrees=True)
 
-def get_wcs_roll_for_qval(wcs, qval):
+def get_wcs_roll_for_qval(wcs, qval, axlist=np.array([1, 0, 0])):
     """
     for provided wcs coordinate system, for each provided quaternion,
     defines roll angle between between local wcs Y axis and detector plane coordinate system in detector plane
@@ -525,8 +597,7 @@ def get_wcs_roll_for_qval(wcs, qval):
     return:
         for each quaternion returns roll angle
     """
-    ra, dec = np.rad2deg(vec_to_pol(qval.apply([1, 0, 0])))
-    radec = np.array([np.ravel(ra), np.ravel(dec)]).T
+    radec = np.rad2deg(vec_to_pol(qval.apply(axlist))).T
     x, y = wcs.all_world2pix(radec, 1).T
     r1, d1 = (wcs.all_pix2world(np.array([x, y - max(1./wcs.wcs.cdelt[1], 50.)]).T, 1)).T
     r2, d2 = (wcs.all_pix2world(np.array([x, y + max(1./wcs.wcs.cdelt[1], 50.)]).T, 1)).T
@@ -535,6 +606,17 @@ def get_wcs_roll_for_qval(wcs, qval):
     vimgyax = vtop - vbot
     vimgyax = qval.apply(vimgyax, inverse=True)
     return np.arctan2(vimgyax[:, 1], vimgyax[:, 2])
+
+def wcs_roll(wcs, qvals, axlist=np.array([1, 0, 0]), noffset=np.array([0., 0., 0.01])):
+    ax1 = qvals.apply(axlist)
+    radec = np.rad2deg(vec_to_pol(ax1)).T
+    xy = wcs.all_world2pix(radec, 1)
+    ax2 = pol_to_vec(*np.deg2rad(wcs.all_pix2world(xy + [0, 1], 1)).T)
+    qalign = make_align_quat(ax1, ax2, zeroax=np.array([1, 0, 0]))
+    print(qalign.as_rotvec())
+    print(qvals.as_rotvec())
+    rvec = (qalign*qvals).as_rotvec()
+    return np.sqrt(np.sum(rvec**2, axis=-1))
 
 def make_quat_for_wcs(wcs, x, y, roll):
     """
@@ -553,6 +635,8 @@ def make_quat_for_wcs(wcs, x, y, roll):
     q0 = Rotation.from_rotvec(rvec*alpha)
     beta = get_wcs_roll_for_qval(wcs, q0)[0]
     return Rotation.from_rotvec(vec*(roll - beta))*q0
+
+
 
 def get_axis_movement_speed(attdata):
     """
