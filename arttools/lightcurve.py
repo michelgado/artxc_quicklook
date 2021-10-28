@@ -69,12 +69,16 @@ def join_lcs(urdbkg):
 
 class Bkgrate(object):
 
-    def __init__(self, te, crate):
+    def __init__(self, te, crate, dtcorr=lambda x: 1.):
         self.te = te
         self.crate = crate
+        self.dtcorr = dtcorr
 
     def __call__(self, times):
-        return self.crate[np.minimum(np.searchsorted(self.te, times) - 1, self.crate.size - 1)]
+        return self.crate[np.minimum(np.searchsorted(self.te, times) - 1, self.crate.size - 1)]*self.dtcorr(times)
+
+    def set_dtcorr(self, dtcorr):
+        self.dtcorr = dtcorr
 
     def _scale(self, val):
         return Bkgrate(self.te, self.crate*val)
@@ -87,6 +91,7 @@ class Bkgrate(object):
         rates = rates[idx]
 
     def integrate_in_timebins(self, te, dtcorr=None):
+        dtcorr = self.dtcorr
         if dtcorr is None:
             tloc = np.unique(np.concatenate([te,  self.te]))
             tc = (tloc[1:] + tloc[:-1])/2.
@@ -100,21 +105,36 @@ class Bkgrate(object):
             lc = np.array([quad(lambda t: self(t)*dtcorr(t), s, e)[0] for s, e in zip(te[:-1], te[1:])])
         return lc
 
-def make_overall_lc(times, urdgtis, dt=100, scales=urdbkgsc):
+def make_overall_lc(times, urdgtis, dt=100, scales=urdbkgsc, dtcorr={}):
     """
     for stored background events occurence times (times) produces overall for 7 detectors background lightcurve with time resolution dt
     """
     gtitot = reduce(lambda a, b: a | b, urdgtis.values())
     te, mgaps = gtitot.arange(dt, joinsize=0.8)
-    teg, mgapsg, se, scalef, cscalef = weigt_time_intervals(urdgtis)
-    cidx = times.searchsorted(te)
-    csf = cscalef(te)
-    print(np.diff(csf, 1)[mgaps].min())
-    ccts = np.diff(cidx, 1)
-    crate = ccts/np.diff(csf, 1)
-    crerr = np.sqrt(ccts)/np.diff(csf, 1)
+    if dtcorr != {}:
+        dtt = np.zeros(te.size - 1, np.double)
+        print("dtcorr case", scales)
+        for urdn in urdgtis:
+            tee, g = urdgtis[urdn].make_tedges(np.unique(np.concatenate([dtcorr[urdn].x, te])))
+            escale = dtcorr[urdn](tee)
+            dtcm = (escale[1:] + escale[:-1])[g]/2.*np.diff(tee)[g]*scales.get(urdn, 1.)
+            idx = np.searchsorted(te, (tee[1:] + tee[:-1])[g]/2.) - 1
+            print(idx.size, dtcm.size, tee.size, g.sum(), scales.get(urdn, 1.))
+            np.add.at(dtt, idx, dtcm)
+        cs = np.diff(np.searchsorted(times, te))
+        crate = cs/dtt
+        crerr = np.sqrt(cs)/dtt
+    else:
+        print("urdweights case")
+        teg, mgapsg, se, scalef, cscalef = weigt_time_intervals(urdgtis)
+        cidx = times.searchsorted(te)
+        csf = cscalef(te)
+        print(np.diff(csf, 1)[mgaps].min())
+        ccts = np.diff(cidx, 1)
+        crate = ccts/np.diff(csf, 1)
+        crerr = np.sqrt(ccts)/np.diff(csf, 1)
 
-    crate[np.logical_not(mgaps)] = 0.
+        crate[np.logical_not(mgaps)] = 0.
 
     return te, mgaps, crate, crerr, Bkgrate(te, crate)
 
