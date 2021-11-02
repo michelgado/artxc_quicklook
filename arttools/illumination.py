@@ -9,7 +9,7 @@ from .telescope import URDNS
 from .psf import get_ipsf_interpolation_func, unpack_inverse_psf_specweighted_ayut, rawxy_to_opaxoffset
 from .mosaic import SkyImageMP
 from .mosaic2 import SkyImage
-from .atthist import make_small_steps_quats
+from .atthist import make_small_steps_quats, make_wcs_steps_quats
 from copy import copy
 from math import pi, sin, cos
 from functools import reduce
@@ -189,6 +189,8 @@ class IlluminationSources(object):
         vmap = get_ipsf_interpolation_func()
         sky = SkyImage(wcs, vmap, mpnum=mpnum)
         sky.clean_img()
+        dtqt = {}
+        qt = {}
 
         for urdn, gti in urdgti.items():
             taskargs = []
@@ -199,21 +201,40 @@ class IlluminationSources(object):
             print("filters and nonfiltered exposures", gti.exposure, lgti.exposure)
             if lgti.exposure == 0:
                 continue
-            ts, qval, dtq, locgti = make_small_steps_quats(attdata, gti=lgti, timecorrection=dtcorr.get(urdn, lambda x: np.ones(x.size)))
+            #ts, qval, dtq, locgti = make_small_steps_quats(attdata, gti=lgti, timecorrection=dtcorr.get(urdn, lambda x: np.ones(x.size)))
+            ts, qval, dtq, locgti = make_wcs_steps_quats(wcs, attdata*get_boresight_by_device(urdn), gti=lgti, timecorrection=dtcorr.get(urdn, lambda x: np.ones(x.size)))
             dtq = dtq*urdweights.get(urdn, 1./7.)
             for source in self.sources:
                 source.setup_for_quats(qval, opax)
 
-            shmask = get_shadowmask_by_urd(urdn)
+            #shmask = get_shadowmask_by_urd(urdn)
+            shmask = imgfilters[urdn].meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
             xloc, yloc = self.x[shmask], self.y[shmask]
             qcorr = rawxy_to_qcorr(xloc, yloc)
             vecs = raw_xy_to_vec(xloc, yloc)
             i, j = rawxy_to_opaxoffset(xloc, yloc, urdn)
 
             mask = np.any([source.mask_vecs_with_setup(vecs, qval, mpnum=mpnum) for source in self.sources], axis=0)
+            for m, q, il, jl in zip(mask, qcorr, i, j):
+                if not np.any(m):
+                    continue
+                dtqt[(il, jl)] = dtqt.get((il, jl), []) + [dtq[m],]
+                qt[(il, jl)] = ql.get((iil, jl), []) + [qval[m]*q,]
             print("urdn %d process (featuring %d workers):" % (urdn, mpnum))
             #sky.interpolate_bunch([(qval[m]*q, dtq[m], ipsffunc(il, jl)) for m, q, il, jl in zip(mask, qcorr, i, j) if np.any(m)], kind=kind)
-            sky.rmap_convolve_multicore([(qval[m]*q, dtq[m], ipsffunc(il, jl)) for m, q, il, jl in zip(mask, qcorr, i, j) if np.any(m)])
+            if kind == "stright":
+                sky.rmap_convolve_multicore([(qval[m]*q, dtq[m], ipsffunc(il, jl)) for m, q, il, jl in zip(mask, qcorr, i, j) if np.any(m)])
+            elif kind == "fft_convolve":
+                sky.fft_convolve([(qval[m]*q, dtq[m], ipsffunc(il, jl)) for m, q, il, jl in zip(mask, qcorr, i, j) if np.any(m)])
+            """
+            tmpimg = np.zeros(sky.img.shape, np.double)
+            m = mask[0]
+            q = qcorr[0]
+            il, jl = i[0], j[0]
+            radec = np.rad2deg(vec_to_pol((qval[m]*q).apply([1, 0, 0])))
+            xy = (wcs.all_world2pix(radec.T, 1) - 0.5).astype(int)
+            np.add.at(tmpimg, (xy[:, 1], xy[:, 0]), dtq[m])
+            """
         #sky._accumulate_img()
         #sky._clean_img()
         sky.accumulate_img()
