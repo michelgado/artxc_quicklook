@@ -2,8 +2,11 @@ from .caldb import get_boresight_by_device, get_backprofile_by_urdn, get_shadowm
                     make_background_brightnes_profile, get_background_for_urdn, get_overall_background, \
                     get_crabspec_for_filters, get_optical_axis_offset_by_device
 from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttWCSHistmean, AttWCSHistinteg, convolve_profile, AttInvHist, make_small_steps_quats
+from .energy  import get_arf_energy_function
+from .orientation import get_photons_sky_coord
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from ._det_spatial import DL, dxya, offset_to_vec, vec_to_offset, vec_to_offset_pairs, raw_xy_to_vec, vec_to_offset_pairs
+from .psf import get_pix_overall_countrate_constbkg_ayut, select_psf_grups, urddata_to_opaxoffset
 from .lightcurve import make_overall_lc, Bkgrate
 from .mosaic import SkyImage
 from .telescope import URDNS
@@ -12,6 +15,7 @@ from multiprocessing import cpu_count
 from multiprocessing.pool import ThreadPool
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator, interp1d
+from scipy.integrate import quad
 import matplotlib.pyplot as plt
 from math import pi, sin, cos, sqrt
 
@@ -178,13 +182,19 @@ def get_background_events_weight(filters, udata):
     idxg = gidx[udata["GRADE"]]
     return spec[idxe, idxg]/np.sum(spec)
 
-def get_photon_vs_particle_prob(urdfilters, udata, urdweights={}):
+def get_photon_vs_particle_prob(urdfilters, udata, urdweights={}, cspec=None):
     pweights = {}
     for urdn in udata:
         filters = urdfilters[urdn]
 
         gridp, specp = get_crabspec_for_filters(filters)
         specp = (specp/np.diff(gridp["ENERGY"])[:, np.newaxis])/specp.sum()
+        if not cspec is None:
+            arf = get_arf_energy_function(get_arf())
+            cspec = np.array([quad(lambda e: arf(e)*cspec(e), elow, ehi)[0] for elow, ehi in zip(grid["ENERGY"][:-1], grid["ENERGY"][1:])]) #np.concatenate([cspec/cspec.sum()/np.diff(egrid), [0, ]])
+            cspec = cspec/cspec.sum()
+            specb = specb*(cspec/specb.sum(axis=1))[:, np.newaxis]
+            specb = specb/specb.sum()
 
         gridb, specb = get_background_spectrum(filters)
         specb = (specb/np.diff(gridb["ENERGY"])[:, np.newaxis])/specb.sum()
@@ -302,3 +312,18 @@ def make_mock_data(urdn, bkglc, imgfilter, gti):
     tidx = np.searchsorted(totcts.cumsum(), time)
     events["TIME"] = te[:-1][gaps][tidx] + dt*np.diff(te)[gaps][tidx]
     return events
+
+
+
+def photbkgrate(wcs, pbkgrmap, urdn, urddata, attdata, imgfilter, weight=1.):
+    """
+    assuming a constant(in time) and spline(which is almost does not changes on the PSF scales) photon background
+    provide with expected for the energy count rate ratio to background
+    """
+    pfun = get_pix_overall_countrate_constbkg_ayut(imgfilter)
+    i, j = urddata_to_opaxoffset(urddata, urdn)
+    #vecs = get_photons_vectors(urddata, URDN, attdata)
+    radec = np.rad2deg(get_photons_sky_coord(urddata, urdn, attdata))
+    xy = (wcs.all_world2pix(radec.T, 1) - 0.5).astype(int)[:, ::-1]
+    prates = pbkgrmap[xy[:, 0], xy[:, 1]]*weight*pfun(i, j)
+    return prates
