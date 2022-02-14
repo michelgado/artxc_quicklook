@@ -52,7 +52,6 @@ class PixInterpolator(object):
         result[mask] = self.values[rawx[mask], rawy[mask]]
         return result
 
-
 def get_energycorr_for_offset(urdn, xo, yo):
     shmask = get_shadowmask_by_urd(urdn)
     x0, y0 = get_optical_axis_offset_by_device(urdn)
@@ -249,6 +248,10 @@ def make_vignetting_for_urdn(urdn, imgfilter, cspec=None, app=None):
     imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
     return RegularGridInterpolator((dx, dx), img/imgmax, bounds_error=False, fill_value=0.) #TODO for spefici masks, pixel at optical axis position can be switched off, broking normalization
 
+def get_blank_vignetting_interpolation_func():
+    img = np.zeros((46*9 + 121 - 9, 46*9 + 121 - 9), np.double)
+    dx = (np.arange(img.shape[0]) - (img.shape[0] - 1.)/2.)/9.*DL
+    return RegularGridInterpolator((dx, dx), img, bounds_error=False, fill_value=0.)
 
 def make_overall_vignetting(imgfilters, subgrid=10, urdweights={}, **kwargs):
     """
@@ -305,3 +308,4 @@ def make_overall_vignetting(imgfilters, subgrid=10, urdweights={}, **kwargs):
 
     vmap = RegularGridInterpolator((x[:, 0][mx], y[0][my]), vmapnew, bounds_error=False, fill_value=0)
     return vmap
+
