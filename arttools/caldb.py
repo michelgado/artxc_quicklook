@@ -45,7 +45,7 @@ FLATBKG = False
 el = None
 bkggti = None
 
-qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])
+qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])*Rotation([ 1.07307728e-05,  2.94924883e-07, -3.05587484e-05, -9.99999999e-01])
 qgyro0 = Rotation([0., 0., 0., 1.])
 OPAX = np.array([1, 0, 0])
 
@@ -231,7 +231,7 @@ def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=in
 
 #temporary solution for time shifts in different device relative to spacecraft time
 def get_device_timeshift(dev):
-    return 0.97 if dev == "gyro" else 1.55
+    return 0.97 if dev == "gyro" else 0.97
 
 def get_background_for_urdn(urdn):
     global el, bkggti
