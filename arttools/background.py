@@ -1,7 +1,7 @@
 from .caldb import get_boresight_by_device, get_backprofile_by_urdn, get_shadowmask_by_urd, \
                     make_background_brightnes_profile, get_background_for_urdn, get_overall_background, \
-                    get_crabspec_for_filters, get_optical_axis_offset_by_device
-from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttWCSHistmean, AttWCSHistinteg, convolve_profile, AttInvHist, make_small_steps_quats
+                    get_crabspec_for_filters, get_optical_axis_offset_by_device, get_arf
+from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttWCSHistmean, AttWCSHistinteg, convolve_profile, AttInvHist, make_small_steps_quats, make_wcs_steps_quats
 from .energy  import get_arf_energy_function
 from .orientation import get_photons_sky_coord
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
@@ -65,7 +65,7 @@ def make_overall_background_map(subgrid=10, useshadowmask=True):
     bkgmap = RegularGridInterpolator((x[:, 0], y[0]), newvmap, bounds_error=False, fill_value=0)
     return bkgmap
 
-def make_bkgmap_for_wcs(wcs, attdata, urdgtis, urdbkg, imgfilters, shape=None, mpnum=MPNUM, time_corr={}, kind="convolve"):
+def make_bkgmap_for_wcs(wcs, attdata, urdgtis, urdbkg, imgfilters, shape=None, illuminations=None, mpnum=MPNUM, time_corr={}, kind="stright"):
     """
     produce background map on the provided wcs area, with provided GTI and attitude data
 
@@ -85,23 +85,13 @@ def make_bkgmap_for_wcs(wcs, attdata, urdgtis, urdbkg, imgfilters, shape=None, m
         time_corr - a dict containing functions {urdn: urdnbkgrate(time) ...}
         subscale - defined a number of subpixels (under detecto pixels) to interpolate bkgmap
     """
-    if shape is None:
-        ysize, xsize = int(wcs.wcs.crpix[0]*2 + 1), int(wcs.wcs.crpix[1]*2 + 1)
-        shape = [(0, xsize), (0, ysize)]
 
-    sky = SkyImage(wcs, shape=shape)
+    sky = SkyImage(wcs)
     overall_gti = emptyGTI
-    """
-    if time_corr:
-        overall_gti = reduce(lambda a, b: a & b, urdgtis.values())
-        tcorr = np.sort(np.concatenate([t.x for t in time_corr.values()]))
-        ts = np.sum([time_corr.get(urdn, lambda x: np.ones(x.size))(tcorr) for urdn in URDNS], axis=0)
-        tcorrf = interp1d(tcorr, ts, bounds_error=False, fill_value = np.median(ts))
-        bkgmap = make_overall_background_map()
-        exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti, tcorrf)
-        print(exptime.sum(), locgti.exposure, overall_gti.exposure)
-        bkg = AttWCSHistinteg.make_mp(bkgmap, exptime, qval, wcs, mpnum, subscale=10)
-    """
+    #X, Y = np.mgrid[0:48:1, 0:48:1]
+    #vecs = raw_xy_to_vec(X.ravel(), Y.ravel())
+    #shape = shape if not shape is None else [(0, int(locwcs.wcs.crpix[1]*2 + 1)), (0, int(locwcs.wcs.crpix[0]*2 + 1))]
+    #imgpool = [np.zeros(shape) for i in range(mpnum)]
 
     for urdn in urdgtis:
         gti = urdgtis[urdn] & ~overall_gti
@@ -109,8 +99,12 @@ def make_bkgmap_for_wcs(wcs, attdata, urdgtis, urdbkg, imgfilters, shape=None, m
             print("urd %d has no individual gti, continue" % urdn)
             continue
         print("urd %d progress:" % urdn)
-        exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urdn), gti, urdbkg[urdn])
-        print("processed exposure", gti.exposure, exptime.sum())
+        tc, qval, exptime, ugti = make_wcs_steps_quats(wcs, attdata*get_boresight_by_device(urdn), gti, urdbkg[urdn])
+        #exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urdn), gti, urdbkg[urdn])
+        print("processed exposure", gti.exposure) #, exptime.sum())
+        bkgprofile = get_background_surface_brigtnress(urdn, imgfilters[urdn], fill_value=0., normalize=True)
+        #shmask = filters.apply(np.column_stack([x.ravel(), y.ravel()]).ravel().view([("RAW_X", np.int), ("RAW_Y", np.int)])).reshape(x.shape)
+        shmask = imgfilters[urdn].meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
         bkgmap = make_background_det_map_for_urdn(urdn, imgfilters[urdn])
         sky._set_core(bkgmap.grid[0], bkgmap.grid[1], bkgmap.values)
         #bkg = AttWCSHistmean.make_mp(bkgmap, exptime, qval, wcs, mpnum, subscale=subscale) + bkg
@@ -156,7 +150,8 @@ def get_background_surface_brigtnress(urdn, filters, fill_value=np.nan, normaliz
     mgrade = filters["GRADE"].apply(grid["GRADE"])
     profile = datacube[:, :, menergys, :][:, :, :, mgrade].sum(axis=(2, 3))
     y, x = np.meshgrid(grid["RAW_Y"], grid["RAW_X"])
-    shmask = filters.apply(np.column_stack([x.ravel(), y.ravel()]).ravel().view([("RAW_X", np.int), ("RAW_Y", np.int)])).reshape(x.shape)
+    #shmask = filters.apply(np.column_stack([x.ravel(), y.ravel()]).ravel().view([("RAW_X", np.int), ("RAW_Y", np.int)])).reshape(x.shape)
+    shmask = filters.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
     profile[~shmask] = fill_value
     return profile/profile.sum() if normalize else profile
 
@@ -171,7 +166,8 @@ def get_background_spectrum(filters):
     mgrade = filters["GRADE"].apply(grid["GRADE"])
     rgrid = {"ENERGY": grid["ENERGY"][menergy], "GRADE": grid["GRADE"][mgrade]}
     y, x = np.meshgrid(grid["RAW_Y"], grid["RAW_X"])
-    shmask = filters.apply(np.column_stack([x.ravel(), y.ravel()]).ravel().view([("RAW_X", np.int), ("RAW_Y", np.int)])).reshape(x.shape)
+    #shmask = filters.apply(np.column_stack([x.ravel(), y.ravel()]).ravel().view([("RAW_X", np.int), ("RAW_Y", np.int)])).reshape(x.shape)
+    shmask = filters.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
     return rgrid, (datacube[:, :, menergys, :][:, :, :, mgrade]*shmask[:, :, np.newaxis, np.newaxis]).sum(axis=(0, 1))
 
 def get_background_events_weight(filters, udata):
@@ -191,10 +187,10 @@ def get_photon_vs_particle_prob(urdfilters, udata, urdweights={}, cspec=None):
         specp = (specp/np.diff(gridp["ENERGY"])[:, np.newaxis])/specp.sum()
         if not cspec is None:
             arf = get_arf_energy_function(get_arf())
-            cspec = np.array([quad(lambda e: arf(e)*cspec(e), elow, ehi)[0] for elow, ehi in zip(grid["ENERGY"][:-1], grid["ENERGY"][1:])]) #np.concatenate([cspec/cspec.sum()/np.diff(egrid), [0, ]])
-            cspec = cspec/cspec.sum()
-            specb = specb*(cspec/specb.sum(axis=1))[:, np.newaxis]
-            specb = specb/specb.sum()
+            spec = np.array([quad(lambda e: arf(e)*cspec(e), elow, ehi)[0] for elow, ehi in zip(gridp["ENERGY"][:-1], gridp["ENERGY"][1:])]) #np.concatenate([cspec/cspec.sum()/np.diff(egrid), [0, ]])
+            spec = spec/spec.sum()
+            specp = specp*(spec/specp.sum(axis=1))[:, np.newaxis]
+            specp = specp/specp.sum()
 
         gridb, specb = get_background_spectrum(filters)
         specb = (specb/np.diff(gridb["ENERGY"])[:, np.newaxis])/specb.sum()
@@ -252,7 +248,8 @@ def get_bkg_lightcurve_for_app(urdbkg, urdgti, filters, att, ax, appsize, te, dt
         teu, gaps = urdgti[urdn].make_tedges(tel)
         tc = (teu[1:] + teu[:-1])[gaps]/2.
         qlist = att(tc)*get_boresight_by_device(urdn)
-        shmask = get_shadowmask_by_urd(urdn)
+        #shmask = get_shadowmask_by_urd(urdn)
+        shmask = filters[urdn].meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
         x, y = xd[shmask], yd[shmask]
         pr = bkgprofiles[urdn][shmask]
         rl = urdbkg[urdn].integrate_in_timebins(teu, dtcorr.get(urdn, None))[gaps]
@@ -286,7 +283,7 @@ def get_background_bands_ratio(filters1, filters2):
     return np.sum(spec1)/np.sum(spec2)
 
 
-def make_mock_data(urdn, bkglc, imgfilter, gti):
+def make_mock_data(urdn, bkglc, imgfilter, gti, cspec=None):
     te, gaps = gti.make_tedges(bkglc.te)
     tc = (te[1:] + te[:-1])[gaps]/2.
     totcts = bkglc(tc)*np.diff(te)[gaps]
@@ -312,6 +309,14 @@ def make_mock_data(urdn, bkglc, imgfilter, gti):
     tidx = np.searchsorted(totcts.cumsum(), time)
     events["TIME"] = te[:-1][gaps][tidx] + dt*np.diff(te)[gaps][tidx]
     return events
+
+
+def make_bkgmock_img(locwcs, urdn, bkglc, imgfilter, gti, shape=None, scale=1, mpnum=10):
+    shape = shape if not shape is None else [(0, int(locwcs.wcs.crpix[1]*2 + 1)), (0, int(locwcs.wcs.crpix[0]*2 + 1))]
+    tmpimg = [np.zeros(shape, int) for _ in range(mpnum)]
+    X, Y = np.mgrid[0:48:1, 0:48:1]
+    bkgprofile = get_background_surface_brigtnress(urdn, imgfilter) #get_backprofile_by_urdn(urdn)
+    shmask = imgfilters[urdn].meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
 
 
 
