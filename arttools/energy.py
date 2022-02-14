@@ -60,7 +60,7 @@ def get_top_energy(eventlist, hkdata, caldb, randomize=True):
     maskt = np.logical_and(maskt, energt > topcal["THRESHOLD"][rawy])
     return energt, maskt, sigmat
 
-def get_events_energy(eventlist, hkdata, caldb):
+def get_events_energy(eventlist, hkdata, caldb, set_central_strip_triggered=True):
     """
     from the captured event, which described with 6 16bit int numbers (left,right,central; top and bot digital amplitudes),
     and 6 double values for voltages and temperatures, using calibration data one have to restore the energy of the photon,
@@ -99,6 +99,7 @@ def get_events_energy(eventlist, hkdata, caldb):
     PHAB = np.array([eventlist["PHA_BOT_SUB1"], eventlist["PHA_BOT"], eventlist["PHA_BOT_ADD1"]])
     energb = random_uniform(PHAB, rawx, T, botcal)
     maskb = np.logical_and(maskb, energb > botcal["THRESHOLD"][rawx])
+    maskb[1] = maskb[1] | set_central_strip_triggered
     bitmask[5:8, :] = maskb
     print("bot dist", np.unique(maskb.sum(axis=0), return_counts=True))
 
@@ -107,6 +108,7 @@ def get_events_energy(eventlist, hkdata, caldb):
     PHAT = np.array([eventlist["PHA_TOP_SUB1"], eventlist["PHA_TOP"], eventlist["PHA_TOP_ADD1"]])
     energt = random_uniform(PHAT, rawy, T, topcal) #PHA_to_PI(PHAT, rawy, T, topcal)
     maskt = np.logical_and(maskt, energt > topcal["THRESHOLD"][rawy])
+    maskt[1] = maskt[1] | set_central_strip_triggered
     bitmask[2:5, :] = maskt
     print("top dist", np.unique(maskt.sum(axis=0), return_counts=True))
 
