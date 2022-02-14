@@ -22,9 +22,35 @@ class RationalSet(set):
     def apply(self, vals):
         return np.isin(vals, list(self))
 
+    def __and__(self, other):
+        if type(other) == RationalSet:
+            return RationalSet(self.intersection(other))
+        if type(other) == InversedRationalSet:
+            return RationalSet(self.difference(other))
+
+    def __or__(self, other):
+        if type(other) == RationalSet:
+            return self.union(other)
+        if type(other) == InversedRationalSet:
+            return InversedRationalSet(other.difference(self))
+
 class InversedRationalSet(set):
     def apply(self, vals):
         return np.isin(vals, list(self), invert=True)
+
+    def __and__(self, other):
+        if type(other) == InversedRationalSet:
+            return InversedRationalSet(self.intersection(other))
+        if type(other) == RationalSet:
+            return other & self
+
+    def __or__(self, other):
+        if type(other) == InversedRationalSet:
+            return InversedRationalSet(self & other)
+        if type(other) == RationalSet:
+            return other & self
+
+
 
 class InversedIndexMask(OrderedDict):
     def __init__(self, indexfunctions, mask):
@@ -50,16 +76,23 @@ class InversedIndexMask(OrderedDict):
         if type(other) == type(self):
             if self.mask.shape != other.mask.shape:
                 raise ValueError("incompatible masks")
-            if not all([key in other for key in self]) or not all([ket in self for key in other]):
+            if not all([key in other for key in self]) or not all([key in self for key in other]):
                 raise ValueError("imcompatible fields")
-            return InversedIndexMask(self.items(), np.logical_and(mask))
+            swaporder = [list(other.keys()).index(k) for k in self]
+            mc = np.copy(other.mask)
+            for i in range(len(swaporder)):
+                if swaporder[i] == i:
+                    continue
+                mc = np.copy(mc.swapaxes(i, swaporder[i]))
+                swaporder[swaporder[i]] = swaporder[i]
+            return InversedIndexMask(self.items(), np.logical_and(self.mask, mc))
         if type(other) == RationalMultiSet:
             mask = np.copy(self.mask)
 
     def __or__(self, other):
         if self.mask.shape != other.mask.shape:
             raise ValueError("incompatible masks")
-        if not all([key in other for key in self]) or not all([ket in self for key in other]):
+        if not all([key in other for key in self]) or not all([key in self for key in other]):
             raise ValueError("imcompatible fields")
         return InversedIndexMask(self.items(), np.logical_or(mask))
 
@@ -77,8 +110,11 @@ class IndependentFilters(dict):
     multidimensional named interval
     """
     def __and__(self, other):
-        allfieds = set(list(self.keys()) + list(other.keys()))
-        return MultiInterval({k: self.get(k, other[k]) & other.get(k, self[k]) for k in allfields})
+        """
+        return the striktest possible filter, containing conditions from both independent filters set
+        """
+        allfields = set(list(self.keys()) + list(other.keys()))
+        return IndependentFilters({k: self.get(k, other[k]) & other.get(k, self[k]) for k in allfields})
 
     def __or__(self, other):
         allfieds = set(list(self.keys()) + list(other.keys()))
@@ -118,3 +154,5 @@ def get_shadowmask_filter(urdn):
 DEFAULTFILTERS = {urdn: IndependentFilters({"ENERGY": Intervals([4., 12.]),
                                             "GRADE": RationalSet(range(10)),
                                             "RAWXY": get_shadowmask_filter(urdn)}) for urdn in URDNS}
+
+
