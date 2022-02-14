@@ -34,6 +34,7 @@ def collect(res, qout, lock):
     res[0] = res[0] + val
     lock.release()
 
+
 def make_mosaic_expmap_mp_executor(shape, wcs, vmap, qvals, exptime, mpnum):
     qin = Queue(100)
     qout = Queue()
@@ -92,7 +93,7 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, imgfilters, shape=None, mpnum=MPN
         print("overal exposure", overall_gti.exposure)
 
         if overall_gti.exposure > 0:
-            exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti)
+            exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti, wcs=wcs)
             vmap = make_overall_vignetting(imgfilters, urdweights=urdweights, **kwargs)
             sky.set_core(vmap)
             print("exptime sum", exptime.sum())
@@ -101,7 +102,8 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, imgfilters, shape=None, mpnum=MPN
                 #sky.interpolate_mp(qval[:], exptime[:], mpnum)
                 sky.simple_convolve(qval, exptime)
             elif kind == "convolve":
-                sky.convolve(qval, exptime, mpnum)
+                #sky.convolve_bunch(qval, exptime) #, mpnum)
+                sky.fft_convolve_prepare_task(qval, exptime)
             #emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum)
             #emap = make_mosaic_expmap_mp_executor(shape, wcs, vmap, qval, exptime, mpnum)
             print("\ndone!")
@@ -111,9 +113,9 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, imgfilters, shape=None, mpnum=MPN
         if gti.exposure == 0:
             print("urd %d has no individual gti, continue" % urdn)
             continue
-        print("urd %d, exposure %.1f, progress:" % (urdn, urdgtis[urdn].exposure))
+        print("urd %d, exposure %.1f, progress:" % (urdn, gti.exposure))
         exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urdn), gti, \
-                                                             dtcorr.get(urdn, lambda x: 1))
+                                                             timecorrection=dtcorr.get(urdn, lambda x: 1), wcs=wcs)
         vmap = make_vignetting_for_urdn(urdn, imgfilters[urdn], **kwargs)
         sky.set_core(vmap)
         #sky._set_core(vmap.grid[0], vmap.grid[1], vmap.values*urdweights.get(urdn, 1))
@@ -121,7 +123,8 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, imgfilters, shape=None, mpnum=MPN
         if kind == "direct":
             sky.simple_convolve(qval, exptime*urdweights.get(urdn, 1.))
         elif kind == "convolve":
-            sky.convolve(qval, exptime, mpnum)
+            #sky.convolve_bunch(qval, exptime)
+            sky.fft_convolve_prepare_task(qval, exptime*urdweights.get(urdn, 1.))
         print(" done!")
     sky.accumulate_img()
     return sky.img
@@ -131,7 +134,6 @@ def make_exposures(direction, te, attdata, urdgtis, urdfilters, urdweights={}, m
     gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
     print("gti exposure", gti.exposure)
     ts, qval, dtq, locgti = make_small_steps_quats(attdata, gti=gti, tedges=te)
-    print("dtq sum", dtq.sum())
     tel = np.empty(ts.size*2, np.double)
     tel[::2] = ts - dtq/2.
     tel[1::2] = ts + dtq/2.
@@ -153,6 +155,7 @@ def make_exposures(direction, te, attdata, urdgtis, urdfilters, urdweights={}, m
         idx = np.searchsorted(te, tc) - 1
         mloc = (idx >= 0) & (idx < te.size - 1)
         np.add.at(dtn, idx[mloc], vval[mloc]*dtu[mloc])
+    print("dtn sum", dtn.sum())
     return te, dtn
 
 def make_exposures_for_app(direction, te, attdata, urdgtis, urdfilters, urdweights={}, mpnum=MPNUM, dtcorr={}, app=None, illum_filters=None, **kwargs):
@@ -191,10 +194,8 @@ def make_exposures_for_app(direction, te, attdata, urdgtis, urdfilters, urdweigh
             xloc, yloc = x[shmask], y[shmask]
             vec = raw_xy_to_vec(xloc, yloc)
             opax = raw_xy_to_vec(*np.array(get_optical_axis_offset_by_device(urdn)).reshape((2, 1)))[0]
-            print("start src setup")
             for source in illum_filters.sources:
                 source.setup_for_quats(qlist, opax)
-            print("setup done")
             mask = np.any([source.mask_vecs_with_setup(vec, qlist, mpnum=mpnum) for source in illum_filters.sources], axis=0)
             m2 = np.array([(np.sum(vec*q.apply(direction, inverse=True), axis=1) > cosa) for q in qlist]).T
             mask = np.logical_and(mask, m2)
