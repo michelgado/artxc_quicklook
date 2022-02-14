@@ -197,6 +197,7 @@ class DataDistributer(object):
         self.qlist = []
         self.qct = []
         self.size = 0
+        self.stack_pixels = stack_pixels
 
     def set_stack_pixels(self, stack_pixels):
         self.stack_pixels = stack_pixels
@@ -220,7 +221,7 @@ class DataDistributer(object):
         return np.sum(mres)
 
     def __iter__(self):
-        if stack_pixels:
+        if self.stack_pixels:
             ipsffunc = self.ipsffuncs[0]
             ijt = np.array([np.concatenate(ar) for ar in [self.it, self.jt]])
             iju, uidx = np.unique(ijt, axis=1, return_inverse=True)
@@ -243,7 +244,8 @@ class DataDistributer(object):
         else:
             for i, j, mask, qlist, qc, dtq, ipsffunc in zip(self.it, self.jt, self.maskt, self.qlist, self.qct, self.dtqt, self.ipsffuncs):
                 for k in range(i.size):
-                    yield qlist[mask[k]]*qc[k], dtq[mask[k]], ipsffunc(i[k], j[k])
+                    if np.any(mask[k]):
+                        yield qlist[mask[k]]*qc[k], dtq[mask[k]], ipsffunc(i[k], j[k])
 
 
 
@@ -276,7 +278,7 @@ class IlluminationSources(object):
             mask = np.logical_or(mask, source.get_vectors_in_illumination_mask(quats, pvecs, opax, None if not qalignlist else qalignlist[i]))
         return mask
 
-    def prepare_data_for_computation(self, wcs, attdata, urdgti, imgfilters, urdweights={}, dtcorr={}, psfweightfunc=None):
+    def prepare_data_for_computation(self, wcs, attdata, urdgti, imgfilters, urdweights={}, dtcorr={}, psfweightfunc=None, mpnum=10, **kwargs):
 
         filts = list(imgfilters.values())
         matchpsf = all([(filts[0]["ENERGY"] == f["ENERGY"]) & (filts[0]["GRADE"] == f["GRADE"]) for f in filts[:]])
@@ -309,98 +311,19 @@ class IlluminationSources(object):
             data.add(i, j, mask, dtq, qval, qcorr, ipsffunc)
         return data
 
-    def get_illumination_expmap(self, wcs, attdata, urdgti, imgfilters, urdweights={}, dtcorr={}, mpnum=MPNUM, kind="stright", oipsffunc=None, **kwargs):
+    def get_illumination_expmap(self, wcs, attdata, urdgti, imgfilters, urdweights={}, dtcorr={}, psfweightfunc=None, mpnum=MPNUM, kind="direct", **kwargs):
         """
         note: deadtime correction is likely mandatory in the vicinity of illumination sources
         """
         vmap = get_ipsf_interpolation_func()
         sky = SkyImage(wcs, vmap, mpnum=mpnum)
         sky.clean_img()
+        data = self.prepare_data_for_computation(wcs, attdata, urdgti, imgfilters, urdweights=urdweights, dtcorr=dtcorr, psfweightfunc=psfweightfunc, mpnum=mpnum, **kwargs)
 
-        filts = list(imgfilters.values())
-        matchpsf = all([(filts[0]["ENERGY"] == f["ENERGY"]) & (filts[0]["GRADE"] == f["GRADE"]) for f in filts[:]])
-        if matchpsf:
-            print("psf matches")
-            ipsffunc = oipsffunc if not oipsffunc is None else iunpack_inverse_psf_specweighted_ayut(filts[0], **kwargs)
-            data = DataDistributer(ipsffunc)
-
-        for urdn, gti in urdgti.items():
-            taskargs = []
-            ipsffunc = unpack_inverse_psf_specweighted_ayut(imgfilters[urdn], **kwargs)
-            #ipsffuncs.append(unpack_inverse_psf_specweighted_ayut(imgfilters[urdn], **kwargs))
-            opax = raw_xy_to_vec(*np.array(get_optical_axis_offset_by_device(urdn)).reshape((2, 1)))[0]
-            bti = self.get_illumination_bti(attdata, [urdn,])
-            lgti = gti & bti
-            print("nonfiltered and filtered exposures", gti.exposure, lgti.exposure)
-            if lgti.exposure == 0:
-                continue
-            #ts, qval, dtq, locgti = make_small_steps_quats(attdata, gti=lgti, timecorrection=dtcorr.get(urdn, lambda x: np.ones(x.size)))
-            ts, qval, dtq, locgti = make_wcs_steps_quats(wcs, attdata*get_boresight_by_device(urdn), gti=lgti, timecorrection=dtcorr.get(urdn, lambda x: np.ones(x.size)))
-            dtq = dtq*urdweights.get(urdn, 1./7.)
-            for source in self.sources:
-                source.setup_for_quats(qval, opax)
-
-            #shmask = get_shadowmask_by_urd(urdn)
-            shmask = imgfilters[urdn].meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
-            xloc, yloc = self.x[shmask], self.y[shmask]
-            qcorr = rawxy_to_qcorr(xloc, yloc)
-            vecs = raw_xy_to_vec(xloc, yloc)
-            i, j = rawxy_to_opaxoffset(xloc, yloc, urdn)
-
-            mask = np.any([source.mask_vecs_with_setup(vecs, qval, mpnum=mpnum) for source in self.sources], axis=0)
-            """
-            qlist.append(qval)
-            dtqt.append(dtq)
-            it.append(i)
-            jt.append(j)
-            maskt.append(mask)
-            qct.append(qcorr)
-            print("mask done", urdn, i.size, j.size)
-            """
-            if matchpsf:
-                data.add(i, j, mask, dtq, qval, qcorr)
-            else:
-                if kind == "direct":
-                    sky.rmap_convolve_multicore(((qval[m]*q, dtq[m], ipsffunc(il, jl)) for m, q, il, jl in zip(mask, qcorr, i, j) if np.any(m)), size=np.sum(np.any(mask, axis=1)))
-                elif kind == "fft_convolve":
-                    sky.fft_convolve(((qval[m]*q, dtq[m], ipsffunc(il, jl)) for m, q, il, jl in zip(mask, qcorr, i, j) if np.any(m)), size=np.sum(np.any(mask, axis=1)))
-            """
-            for m, q, il, jl in zip(mask, qcorr, i, j):
-                if not np.any(m):
-                    continue
-                print("fill dict", il, jl)
-                dtqt[(il, jl)] = dtqt.get((il, jl), []) + [dtq[m],]
-                qt[(il, jl)] = qt.get((il, jl), []) + [qval[m]*q,]
-            #print("urdn %d process (featuring %d workers):" % (urdn, mpnum))
-            #sky.interpolate_bunch([(qval[m]*q, dtq[m], ipsffunc(il, jl)) for m, q, il, jl in zip(mask, qcorr, i, j) if np.any(m)], kind=kind)
-
-        ijt = np.array([np.concatenate(ar) for ar in [it, jt]])
-        iju, uidx = np.unique(ijt, axis=1, return_inverse=True)
-        cshift = np.repeat(np.cumsum([i.size for i in it]) - it[0].size, [i.size for i in it])
-        print(ijt.shape, cshift.shape)
-        def datagen(iju, uidx, cshift, dtqt, maskt, qlist, qct, ipsffuncs):
-            for k, ijpair in enumerate(iju.T):
-                iidx = np.where(k == uidx)[0]
-                print(iidx)
-                lidx = iidx - cshift[iidx]
-                q = Rotation(np.concatenate([(qloc[mloc[iloc]]*qc[iloc]).as_quat() for qloc, mloc, qc, iloc in zip(qlist, maskt, qct, iidx)], axis=0))
-                dtq = np.concatenate([dtl[mloc[iloc]] for dtl, mloc, iloc in zip(dtqt, maskt, iidx)])
-                yield (q, dtq, ipsffunc(*ijpair))
-
-        dgen = datagen(iju, uidx, cshift, dtqt, maskt, qlist, qct)
-
-        if kind == "stright":
-            sky.rmap_convolve_multicore(dgen, size=iju.shape[1]) #[(qt[k], dtqt[k], ipsffunc(*k)) for k in dtqt])
+        if kind == "direct":
+            sky.rmap_convolve_multicore(data, size=data.get_size())
         elif kind == "fft_convolve":
-            #sky.fft_convolve(((qt[k], dtqt[maskt[iidx == k], ipsffunc(*ij)) for k, ij in enumerate(ijpair)])
-            sky.fft_convolve(dgen, size=iju.shape[1])
-            """
-        if matchpsf:
-            #return data
-            if kind == "direct":
-                sky.rmap_convolve_multicore(data, size=data.get_size())
-            elif kind == "fft_convolve":
-                sky.fft_convolve(data, size=data.get_size())
+            sky.fft_convolve(data, size=data.get_size())
         sky.accumulate_img()
         return sky.img
 
