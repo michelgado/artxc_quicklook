@@ -66,7 +66,6 @@ def join_lcs(urdbkg):
     return Bkgrate(tetot, crsum)
 
 
-
 class Bkgrate(object):
 
     def __init__(self, te, crate, dtcorr=lambda x: 1.):
@@ -79,6 +78,10 @@ class Bkgrate(object):
 
     def set_dtcorr(self, dtcorr):
         self.dtcorr = dtcorr
+
+    def median(self, gti):
+        tc = (self.te[:-1] +self.te[1:])/2.
+        return np.median(self.crate[gti.mask_external(tc)])
 
     def _scale(self, val):
         return Bkgrate(self.te, self.crate*val)
@@ -113,12 +116,11 @@ def make_overall_lc(times, urdgtis, dt=100, scales=urdbkgsc, dtcorr={}):
     te, mgaps = gtitot.arange(dt, joinsize=0.8)
     if dtcorr != {}:
         dtt = np.zeros(te.size - 1, np.double)
-        print("dtcorr case", scales)
         for urdn in urdgtis:
             tee, g = urdgtis[urdn].make_tedges(np.unique(np.concatenate([dtcorr[urdn].x, te])))
-            escale = dtcorr[urdn](tee)
-            dtcm = (escale[1:] + escale[:-1])[g]/2.*np.diff(tee)[g]*scales.get(urdn, 1.)
-            idx = np.searchsorted(te, (tee[1:] + tee[:-1])[g]/2.) - 1
+            tec = (tee[1:] + tee[:-1])[g]/2.
+            dtcm = dtcorr[urdn](tec)*np.diff(tee)[g]*scales.get(urdn, 1.)
+            idx = np.searchsorted(te, tec) - 1
             print(idx.size, dtcm.size, tee.size, g.sum(), scales.get(urdn, 1.))
             np.add.at(dtt, idx, dtcm)
         cs = np.diff(np.searchsorted(times, te))
