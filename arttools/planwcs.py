@@ -76,7 +76,6 @@ def get_outof_trinagle(vec1, vec2, vec3, vecs):
     s3 = np.sum(vort3*vecs, axis=1)
     return  np.any([s1*s2 < 0, s1*s3 < 0, s2*s3 < 0], axis=0)
 
-
 class ConvexHullonSphere(object):
     """
     class to define convex hull on the sphere surface
@@ -191,6 +190,17 @@ class ConvexHullonSphere(object):
         if not isinstance(other, self.__class__):
             raise ValueError("one of the arguments is not  an ConvexHullonSphere instance")
         return self.__class__(np.concatenate([self.vertices, other.vertices]))
+
+    def get_wcs(self, delta, alpha=None):
+        if alpha is None:
+            res = minimize(lambda alpha: self.__class__(self.get_containing_rectangle(alpha)).area, 0.)
+            alpha = res.x[0]
+        corners = self.get_containing_rectangle(alpha)
+        sizex = int(np.arccos(np.sum(corners[0]*corners[1]))*180/pi/delta)
+        sizey = int(np.arccos(np.sum(corners[0]*corners[-1]))*180/pi/delta)
+        ra, dec = vec_to_pol(self.__class__(corners).get_center_of_mass())
+        return make_tan_wcs(ra, dec, sizex//2 + (sizex//2)%2 - 1, sizey//2 + (sizey//2)%2 - 1, delta, alpha)
+
 
 
 def get_vecs_convex(vecs):
