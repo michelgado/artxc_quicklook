@@ -200,6 +200,9 @@ class Intervals(object):
             raise ValueError("division on inf to the set of intervals will lead to the incorrect behavior")
         return self.__class__(self.arr/val)
 
+    def __eq__(self, other):
+        return (self.length == other.length) & (self.length == (self & other).length)
+
     def merge_close_intervals(self, dt):
         """
         merge GTI intervals which separated by less then dt
@@ -270,4 +273,26 @@ class Intervals(object):
         maskshort[idxgaps + 1] = dt[idxgaps] > dtmed*joinsize
         maskshort[idxgaps - 2] = dt[idxgaps - 2] > dtmed*joinsize
         return newts[maskshort], maskgaps[maskshort[:-1]]
+
+    def arange(self, dt, joinsize=0.2):
+        t0 = np.median(self.arr[:, 0]%dt) + (self.arr[0, 0]//dt - 1)*dt
+        te = np.unique(np.concatenate([np.arange((s - t0)//dt + 1, (e - t0)//dt + 1)*dt + t0 for s, e in self.arr]))
+        eidx = np.searchsorted(te, self.arr)
+        mempty = eidx[:, 0] != eidx[:, 1]
+        sidx = np.searchsorted(te, self.arr[mempty, 0])
+        m1 = np.ones(te.size, np.bool)
+        m1[sidx] = te[sidx] - self.arr[mempty, 0] > dt*joinsize
+        te = te[m1]
+
+        eidx = np.searchsorted(te, self.arr)
+        mempty = eidx[:, 0] != eidx[:, 1]
+        sidx = np.searchsorted(te, self.arr[mempty, 1]) - 1
+        m1 = np.ones(te.size, np.bool)
+        m1[sidx] = self.arr[mempty, 1] - te[sidx] > dt*joinsize
+        te = te[m1]
+
+        te = np.unique(np.concatenate([self.arr.ravel(), te]))
+        mgaps = self.mask_external((te[1:] + te[:-1])/2.)
+
+        return te, mgaps
 
