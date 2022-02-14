@@ -22,7 +22,9 @@ temporal solution to the SED1/2 relativistic corrections on board
 from astropy.coordinates import SkyCoord
 from astropy import time as atime
 
+
 qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])
+#qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])
 qgyro0 = Rotation([0., 0., 0., 1.])
 OPAX = np.array([1, 0, 0])
 
@@ -303,6 +305,22 @@ def _urddata_lru_cache(function):
 def normalize(vecs):
     return vecs/np.sqrt(np.sum(vecs**2, axis=-1))[..., np.newaxis]
 
+
+def get_otrhogonal_vector(ax1, ax2=None):
+    """
+    producess orthogonal vector to ax1 in plane ax1, ax2
+    if ax2 is None, then random vector not colinear to ax1 will be peacked
+    """
+    ax2 = np.copy(ax1)
+    i, j = np.argmax(ax1), np.argmin(ax2)
+    ax2[[i, j]] = ax1[[j, i]]
+    ax1 = normalize(ax1)
+    ax2 = normalize(ax2)
+    if np.sum(ax1*ax2) == 1:
+        raise ValueError("ax1 colinear to ax2")
+    return normalize(ax2 - ax1*np.sum(ax1*ax2, axis=-1))
+
+
 def define_required_correction(attdata):
     """
     NAME
@@ -394,12 +412,17 @@ def read_bokz_fits(bokzhdu):
     """
     bokzdata = bokzhdu.data
     mat = np.array([[bokzdata["MOR%d%d" % (i, j)] for i in range(3)] for j in range(3)])
-    mat = np.copy(mat.swapaxes(2, 1).swapaxes(1, 0))
+    mat = np.copy(mat.swapaxes(2, 1).swapaxes(1, 0)) #.astype(np.float16)
+    matn = np.zeros(mat.shape, np.double)
+    matn[:, :, :] = mat
+    mat = matn
     mask0quats = np.linalg.det(mat) != 0.
     masktimes = bokzdata["TIME"] > T0
-    mask = np.logical_and(mask0quats, masktimes)
+    q = Rotation.from_matrix(mat)
+    #mask = np.logical_and(mask0quats, masktimes)
+    mask = ~np.isnan(np.sum(q.as_rotvec()**2, axis=1))
     jyear = get_hdu_times(bokzhdu).jyear[mask]
-    qbokz = earth_precession_quat(jyear).inv()*Rotation.from_matrix(mat[mask])*qbokz0*\
+    qbokz = earth_precession_quat(jyear).inv()*q[mask]*qbokz0*\
             get_boresight_by_device("BOKZ")
     ts, uidx = np.unique(bokzdata["TIME"][mask], return_index=True)
     return AttDATA(ts, qbokz[uidx])
@@ -437,7 +460,7 @@ def make_align_quat(ax1, ax2, zeroax=np.array([-1, 0, 0]), north=np.array([0, 0,
     and puts second provided vector in the plane within zeroax and north
     params:
         ax1, ax2 - two mandatory input vectors
-        zeroax - default direction to align ax1 with
+        zeroax - default direction to align ax1 with (default is [-1, 0, 0] for azimuth angle to be in the vicinity of 180 rather 0, 360
         north - second vector defining with zeroax the plane on which ax1 and ax2 should lie after rotation
     """
     cross = normalize(np.cross(north, zeroax))
@@ -553,10 +576,8 @@ def ra_dec_roll_to_quat(ra, dec, roll, opaxis=[1, 0, 0], north=[0, 0, 1]):
     proj = normalize(vecs - north*np.sum(vecs*north, axis=1)[:, np.newaxis])
     alpha = np.arctan2(proj[:, 1], proj[:, 0])
     qlon = Rotation.from_rotvec(north[np.newaxis, :]*alpha[:, np.newaxis])
-    print(proj - qlon.apply([1, 0, 0]))
     rr = normalize(np.cross(proj, north))
     qlat = Rotation.from_rotvec(rr*np.arcsin(np.sum(vecs*north, axis=1))[:, np.newaxis])
-    print(qlat.apply(proj) - vecs)
     qrot = Rotation.from_rotvec(-vecs*(pi + np.deg2rad(roll))[:, np.newaxis])
     return qrot*qlat*qlon
     #return qlat*qlon
@@ -613,10 +634,9 @@ def wcs_roll(wcs, qvals, axlist=np.array([1, 0, 0]), noffset=np.array([0., 0., 0
     xy = wcs.all_world2pix(radec, 1)
     ax2 = pol_to_vec(*np.deg2rad(wcs.all_pix2world(xy + [0, 1], 1)).T)
     qalign = make_align_quat(ax1, ax2, zeroax=np.array([1, 0, 0]))
-    print(qalign.as_rotvec())
-    print(qvals.as_rotvec())
     rvec = (qalign*qvals).as_rotvec()
-    return np.sqrt(np.sum(rvec**2, axis=-1))
+    addpart = np.zeros(rvec.shape[0], np.double)
+    return np.sqrt(np.sum(rvec**2., axis=-1))*np.sign(np.sum(rvec*ax1, axis=-1))
 
 def make_quat_for_wcs(wcs, x, y, roll):
     """
@@ -678,7 +698,6 @@ def get_earth_rot_quats(times, t0=None):
     """
     if t0 is None: t0 = times[0]
     q = np.empty(np.asarray(times).shape + (4, ), np.double)
-    print(q.shape)
     phase = 2.*pi/SECPERYR*(times - t0)
     sphase = np.sin(phase/2.)
     q[..., 0] = SOLARSYSTEMPLANENRMALEINFK5[0]*sphase
