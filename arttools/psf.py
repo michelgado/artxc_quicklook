@@ -3,7 +3,7 @@ from .caldb import get_optical_axis_offset_by_device, get_inverse_psf_data, get_
 from .energy  import get_arf_energy_function
 from .spectr import get_filtered_crab_spectrum, Spec
 from ._det_spatial import offset_to_vec
-from .planwcs import get_vec_triangle_area
+from .sphere import get_vec_triangle_area
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 from scipy.integrate import quad

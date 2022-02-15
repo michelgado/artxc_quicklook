@@ -9,7 +9,7 @@ import datetime
 from astropy import time as atime
 import numpy as np
 from .telescope import URDTOTEL
-from .time import GTI, get_gti
+#from .time import GTI, get_gti
 from scipy.spatial.transform import Rotation
 from math import sin, cos, pi
 #from .energy import get_events_energy
@@ -20,7 +20,7 @@ import pickle
 MJDREF = 51543.875
 T0 = 617228538.1056 #first day of ART-XC work
 
-relativistic_corrections_gti = GTI([
+relativistic_corrections_gti = np.array([
                   [6.24401146e+08, 6.24410608e+08],
                   [6.24410643e+08, 6.26464675e+08],
                   [6.26472730e+08, 6.27085963e+08],
@@ -98,10 +98,9 @@ def get_illumination_mask():
     return wcstempalte, np.copy(mfile[1].data), np.copy(mfile[2].data)
 
 
+"""
 def get_caldata(urdn, ctype, gti=GTI([(atime.Time(datetime.datetime.now()) - atime.Time(MJDREF, format="mjd")).sec,]*2,)):
-    """
     given the urd as a unique key for calibration data
-    """
     caldata = idxtabl.query("INSTRUME=='%s' and CAL_CNAME=='%s'" % (TELTOURD[urdn], ctype)).sort_index()
     timestamps = (atime.Time(caldata.index.values) - atime.Time(MJDREF)).sec
     caldata["tstart"] = timestamps
@@ -110,37 +109,7 @@ def get_caldata(urdn, ctype, gti=GTI([(atime.Time(datetime.datetime.now()) - ati
     idxloc = np.maximum(np.unique(timestamps.searchsorted(gti.arr)) - 1, 0)
     caldata = caldata.iloc[idxloc].groupby(["CAL_DIR", "CAL_FILE"])
     return {g: GTI(caldata.iloc[idx][["tstart", "tstop"]].values) for g, idx in caldata.groups.items()}
-
-"""
-def apply_energycal(hdulist, gti=None):
-    URDN = hdulist["EVENTS"].header["URDN"]
-    if gti is None: gti = get_gti(hdulist)
-    ecals = get_caldata(URDN, "ENERGY", gti)
-    data = Table(hdulist["EVENTS"])
-    energy = np.empty(hdulist["EVENTS"].data.size, np.double)
-    grade = np.empty(hdulist["EVENTS"].data.size, np.double)
-    mask = np.ones(energy.size, np.bool)
-    calinfo = {"TSTART": [], "TSTOP": [], "CALNAME": [], "CALVER": [], "INSTRUME": []}
-
-    for e, gtiloc in ecals:
-        gtimask = gtiloc.mask_external(data["TIME"])
-        ecal = fits.open(e)
-        eloc, xc, yc, gloc = get_events_energy(data[gtimask], hdulist["HK"].data, ecal)
-        energy[gtimask] = eloc
-        grage[gtimask] = gloc
-        mask[gtimask] = False
-        for tstart, tstop in gtiloc.arr:
-            calinfo["TSTART"].append(tstart)
-            calinfo["TSTOP"].append(tstop)
-            calinfo["INSTRUME"].append(URDTOTEL[URDN])
-            calinfo["CALNAME"].append(e)
-            calinfo["CALVER"].append(ecal[0].header["VERSION"])
-    if np.any(mask):
-        raise ValueError("Some data is not covered with calibrations")
-    hdulist.append(fits.BintableHDU(data=Table(calinfo), name="CALIB")
-    #energy, xc, yc, grade = get_events_energy(hdulist["EVENTS"], hdulist["HK"]
-"""
-
+    """
 
 
 def get_cif(cal_cname, instrume):

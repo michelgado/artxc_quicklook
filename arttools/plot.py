@@ -7,7 +7,8 @@ from .planwcs import make_wcs_for_attdata
 from .caldb import get_energycal, get_shadowmask, get_energycal_by_urd, get_shadowmask_by_urd, urdbkgsc, OPAXOFFSET
 from .energy import get_events_energy
 from .telescope import URDNS
-from .orientation import get_photons_sky_coord, read_gyro_fits, read_bokz_fits, AttDATA, define_required_correction, get_attdata, get_photons_vectors, vec_to_pol
+from .orientation import get_photons_sky_coord, read_gyro_fits, read_bokz_fits, AttDATA, define_required_correction, get_attdata, get_photons_vectors
+from .vector import vec_to_pol
 from .lightcurve import make_overall_lc, weigt_time_intervals
 from .vignetting import load_raw_wignetting_function
 from .filters import IndependentFilters, RationalSet, get_shadowmask_filter, InversedRationalSet

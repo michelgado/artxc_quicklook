@@ -6,7 +6,7 @@ from .telescope import URDNS
 from .lightcurve import sum_lcs, Bkgrate
 from .time import emptyGTI
 from .atthist import hist_orientation_for_attdata, make_wcs_steps_quats
-from .orientation import vec_to_pol, pol_to_vec
+from .vector import vec_to_pol, pol_to_vec
 from .filters import get_shadowmask_filter
 from .energy  import get_arf_energy_function
 from .caldb import  get_optical_axis_offset_by_device, get_arf, get_crabspec

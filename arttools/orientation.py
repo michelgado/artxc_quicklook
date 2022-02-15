@@ -3,7 +3,8 @@ import numpy as np
 from math import pi, cos, sin, sqrt
 from ._det_spatial import urd_to_vec, F, DL
 from .time import get_hdu_times, GTI, tGTI, emptyGTI
-from .caldb import T0, get_boresight_by_device, get_device_timeshift
+from .vector import vec_to_pol, pol_to_vec, normalize
+from .caldb import T0, get_boresight_by_device, get_device_timeshift, relativistic_corrections_gti
 from .mask import edges as medges
 from functools import reduce, lru_cache
 from scipy.optimize import minimize
@@ -31,11 +32,11 @@ OPAX = np.array([1, 0, 0])
 SECPERYR = 3.15576e7
 SOLARSYSTEMPLANENRMALEINFK5 = np.array([-9.83858346e-08, -3.97776911e-01,  9.17482168e-01])
 
-def to_2pi_range(val): return val%(2.*pi)
 
 
-gyrocorrectionbti = GTI([[624390347, 624399808], [6.24410643e+08, 6.30954575e+08]])
-gyrocorrectionbti = emptyGTI #GTI([[624390347, 624399808], [6.24410643e+08, 6.30954575e+08]])
+#gyrocorrectionbti = GTI([[624390347, 624399808], [6.24410643e+08, 6.30954575e+08]])
+gyrocorrectionbti = GTI(relativistic_corrections_gti)
+#gyrocorrectionbti = emptyGTI #GTI([[624390347, 624399808], [6.24410643e+08, 6.30954575e+08]])
 
 class SlerpWithNaiveIndexing(Slerp):
     """
@@ -281,7 +282,13 @@ class AttDATA(SlerpWithNaiveIndexing):
         return gti & self.gti
 
     def chull_gti(self, chull, ax=OPAX):
-        gti = reduce(lambda a, b: a & b, [self.circ_gti(-v, 90.*3600. - 0.1, ax=OPAX) for v in chull.orts])
+        gti = tGTI
+        attl = self
+        for v in chull.orts:
+            gti = gti & attl.circ_gti(-v, 90.*3600 - 0.1, ax=OPAX)
+            if gti.exposure == 0:
+                break
+            attl = attl.apply_gti(gti)
         return gti
 
 
@@ -301,24 +308,6 @@ def _urddata_lru_cache(function):
         else:
             return function(*args, **kwargs)
     return newfunction
-
-def normalize(vecs):
-    return vecs/np.sqrt(np.sum(vecs**2, axis=-1))[..., np.newaxis]
-
-
-def get_otrhogonal_vector(ax1, ax2=None):
-    """
-    producess orthogonal vector to ax1 in plane ax1, ax2
-    if ax2 is None, then random vector not colinear to ax1 will be peacked
-    """
-    ax2 = np.copy(ax1)
-    i, j = np.argmax(ax1), np.argmin(ax2)
-    ax2[[i, j]] = ax1[[j, i]]
-    ax1 = normalize(ax1)
-    ax2 = normalize(ax2)
-    if np.sum(ax1*ax2) == 1:
-        raise ValueError("ax1 colinear to ax2")
-    return normalize(ax2 - ax1*np.sum(ax1*ax2, axis=-1))
 
 
 def define_required_correction(attdata):
@@ -357,23 +346,6 @@ def make_gyro_relativistic_correction(attdata):
     return AttDATA(attdata.times, Rotation(qcorr).inv()*attdata(attdata.times), gti=attdata.gti)
 #-===========================================================================================
 
-def vec_to_pol(phvec):
-    """
-    given the cartesian vectors produces phi and theta coordinates in the same frame
-    """
-    dec = np.arctan(phvec[...,2]/np.sqrt(phvec[...,0]**2. + phvec[...,1]**2.))
-    ra = (np.arctan2(phvec[...,1], phvec[...,0])%(2.*pi))
-    return ra, dec
-
-def pol_to_vec(phi, theta):
-    """
-    given the spherical coordinates phi and theta produces cartesian vector
-    """
-    vec = np.empty((tuple() if not type(theta) is np.ndarray else theta.shape) + (3,), np.double)
-    vec[..., 0] = np.cos(theta)*np.cos(phi)
-    vec[..., 1] = np.cos(theta)*np.sin(phi)
-    vec[..., 2] = np.sin(theta)
-    return vec
 
 
 def read_gyro_fits(gyrohdu):
@@ -604,58 +576,6 @@ def earth_precession_quat(jyear):
     z = np.polyval(pz, T) / 3600.0
     theta = np.polyval(ptheta, T) / 3600.0
     return Rotation.from_euler("ZYZ", np.array([z, -theta, zeta]).T, degrees=True)
-
-def get_wcs_roll_for_qval(wcs, qval, axlist=np.array([1, 0, 0])):
-    """
-    for provided wcs coordinate system, for each provided quaternion,
-    defines roll angle between between local wcs Y axis and detector plane coordinate system in detector plane
-
-    -------
-    Params:
-        wcs: astropy.wcs coordinate definition
-        qval: set of quaternions, which rotate SC coordinate system
-
-    return:
-        for each quaternion returns roll angle
-    """
-    radec = np.rad2deg(vec_to_pol(qval.apply(axlist))).T
-    x, y = wcs.all_world2pix(radec, 1).T
-    r1, d1 = (wcs.all_pix2world(np.array([x, y - max(1./wcs.wcs.cdelt[1], 50.)]).T, 1)).T
-    r2, d2 = (wcs.all_pix2world(np.array([x, y + max(1./wcs.wcs.cdelt[1], 50.)]).T, 1)).T
-    vbot = pol_to_vec(r1*pi/180., d1*pi/180.)
-    vtop = pol_to_vec(r2*pi/180., d2*pi/180.)
-    vimgyax = vtop - vbot
-    vimgyax = qval.apply(vimgyax, inverse=True)
-    return np.arctan2(vimgyax[:, 1], vimgyax[:, 2])
-
-def wcs_roll(wcs, qvals, axlist=np.array([1, 0, 0]), noffset=np.array([0., 0., 0.01])):
-    ax1 = qvals.apply(axlist)
-    radec = np.rad2deg(vec_to_pol(ax1)).T
-    xy = wcs.all_world2pix(radec, 1)
-    ax2 = pol_to_vec(*np.deg2rad(wcs.all_pix2world(xy + [0, 1], 1)).T)
-    qalign = make_align_quat(ax1, ax2, zeroax=np.array([1, 0, 0]))
-    rvec = (qalign*qvals).as_rotvec()
-    addpart = np.zeros(rvec.shape[0], np.double)
-    return np.sqrt(np.sum(rvec**2., axis=-1))*np.sign(np.sum(rvec*ax1, axis=-1))
-
-def make_quat_for_wcs(wcs, x, y, roll):
-    """
-    produces rotation quaternion, which orients a cartesian systen XYZ in a
-    wat X points at specified WCS system pixel and Z rotated on angle roll anticlockwise
-    relative to the north pole
-    params:
-        WCS: wcs system defined by the astropy.wcs.WCS class
-        x, y - coordinates where X cartesian vector should point after rotation
-        roll - anticlockwise rotation angle between wcs north direction and Z cartesian vector
-    """
-    vec = pol_to_vec(*np.deg2rad(wcs.all_pix2world(np.array([x, y]).reshape((-1, 2)), 1)[0]))
-    alpha = np.arccos(np.sum(vec*OPAX))
-    rvec = np.cross(OPAX, vec)
-    rvec = rvec/np.sqrt(np.sum(rvec**2))
-    q0 = Rotation.from_rotvec(rvec*alpha)
-    beta = get_wcs_roll_for_qval(wcs, q0)[0]
-    return Rotation.from_rotvec(vec*(roll - beta))*q0
-
 
 
 def get_axis_movement_speed(attdata):

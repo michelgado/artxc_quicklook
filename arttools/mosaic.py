@@ -8,9 +8,11 @@ from multiprocessing import Pool, Process, Queue, RawArray, cpu_count, Barrier
 from multiprocessing.pool import ThreadPool
 from threading import Thread, Lock, current_thread
 import tqdm
-from .orientation import vec_to_pol, pol_to_vec, OPAX, make_quat_for_wcs, get_wcs_roll_for_qval
+from .vector import vec_to_pol, pol_to_vec
+from .orientation import OPAX
+from .planwcs import get_wcs_roll_for_qval, make_quat_for_wcs
 from ._det_spatial import offset_to_vec, vec_to_offset
-from .planwcs import ConvexHullonSphere, PRIME_NUMBERS
+from .sphere import ConvexHullonSphere, PRIME_NUMBERS
 from .psf import unpack_inverse_psf, unpack_inverse_psf_ayut, get_ipsf_interpolation_func, ayutee
 from itertools import cycle, repeat
 from math import sin, cos, sqrt, pi, log

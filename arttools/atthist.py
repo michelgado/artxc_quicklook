@@ -1,6 +1,7 @@
 from .time import make_ingti_times, deadtime_correction, GTI, tGTI
-from .orientation import quat_to_pol_and_roll, pol_to_vec, \
-    vec_to_pol, get_wcs_roll_for_qval, align_with_z_quat, minimize_norm_to_survey
+from .vector import pol_to_vec, vec_to_pol
+from .orientation import quat_to_pol_and_roll, align_with_z_quat, minimize_norm_to_survey
+from .planwcs import get_wcs_roll_for_qval
 from ._det_spatial import DL, offset_to_vec, vec_to_offset_pairs, vec_to_offset
 from .telescope import OPAX
 from .mask import edges as medges

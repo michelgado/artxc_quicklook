@@ -11,6 +11,7 @@ from . import sensitivity
 from . import spectr
 from . import illumination
 from . import point_source
+from . import containers
 
 __version__ = "0.3.1"
 

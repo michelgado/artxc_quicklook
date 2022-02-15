@@ -1,6 +1,6 @@
 import numpy as np
 from .mask import edges as maskedges
-from .interval import Intervals
+from .filters import Intervals
 from math import pi
 from scipy.interpolate import interp1d
 import astropy.time as atime

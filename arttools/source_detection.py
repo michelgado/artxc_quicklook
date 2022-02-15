@@ -77,7 +77,7 @@ class PutiPSF(object):
         self.y, self.x = np.mgrid[1:self.img.shape[0] + 1:1, 1:self.img.shape[1] + 1:1]
         self.ra, self.dec = self.locwcs.all_pix2world(np.array([self.x.ravel(), self.y.ravel()]).T, 1).T
         self.ra, self.dec = self.ra.reshape(self.x.shape), self.dec.reshape(self.x.shape)
-        self.vecs = arttools.orientation.pol_to_vec(*np.deg2rad([self.ra, self.dec]))
+        self.vecs = arttools.vector.pol_to_vec(*np.deg2rad([self.ra, self.dec]))
 
     def _set_corners(self, vals=iPSFcorners):
         self.corners = vals
@@ -95,7 +95,7 @@ class PutiPSF(object):
 
             for i in range(len(qvals)):
                 qval = qvals[i]
-                ra, dec = arttools.orientation.vec_to_pol(qval.apply(self.corners))
+                ra, dec = arttools.vector.vec_to_pol(qval.apply(self.corners))
                 x, y = self.locwcs.all_world2pix(np.rad2deg([ra, dec]).T, 1).T
                 jl, jr = max(int(x.min()), 0), min(self.img.shape[1] - 1, int(x.max()+1))
                 il, ir = max(int(y.min()), 0), min(self.img.shape[0] - 1, int(y.max()+1))
@@ -160,7 +160,7 @@ if __name__ == "__main__":
     pickle.dump([gti, attdata, urdflist], open("lp20_srcdet.pickle", "wb"))
     """
     gti, attdata, urdflist = pickle.load(open("lp20_srcdet.pickle", "rb"))
-    ax = arttools.orientation.pol_to_vec(*np.deg2rad([278.38688, -10.571942]))
+    ax = arttools.vector.pol_to_vec(*np.deg2rad([278.38688, -10.571942]))
     gti = gti & arttools.time.GTI([6.24269e+8 + 6800, np.inf]) #& attdata.circ_gti(ax, pi/180.) #attdata.get_axis_movement_speed_gti(lambda x: x > pi/180.*10./3600.)
     urdflist = [name for name in urdflist if "urd.fits" in name]
 
@@ -257,7 +257,7 @@ if __name__ == "__main__":
     y01 = np.concatenate(yi0)
     qlist = Rotation.from_quat(np.concatenate([q.as_quat() for q in qlist], axis=0))
 
-    coord = np.rad2deg(arttools.orientation.vec_to_pol(qlist.apply([1, 0, 0])))
+    coord = np.rad2deg(arttools.vector.vec_to_pol(qlist.apply([1, 0, 0])))
     x, y = locwcs.all_world2pix(coord.T, 1).T.astype(np.int)
     img = np.zeros((xsize, ysize), np.int)
     ij, c = np.unique(np.array([x, y]), axis=1, return_counts=True)
