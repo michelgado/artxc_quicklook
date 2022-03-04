@@ -4,7 +4,7 @@ from math import pi, cos, sin, sqrt
 from ._det_spatial import urd_to_vec, F, DL
 from .time import get_hdu_times, GTI, tGTI, emptyGTI
 from .vector import vec_to_pol, pol_to_vec, normalize
-from .caldb import T0, get_boresight_by_device, get_device_timeshift, relativistic_corrections_gti
+from .caldb import T0, get_boresight_by_device, get_device_timeshift, relativistic_corrections_gti, MJDREF
 from .mask import edges as medges
 from functools import reduce, lru_cache
 from scipy.optimize import minimize
@@ -31,8 +31,6 @@ OPAX = np.array([1, 0, 0])
 
 SECPERYR = 3.15576e7
 SOLARSYSTEMPLANENRMALEINFK5 = np.array([-9.83858346e-08, -3.97776911e-01,  9.17482168e-01])
-
-
 
 #gyrocorrectionbti = GTI([[624390347, 624399808], [6.24410643e+08, 6.30954575e+08]])
 gyrocorrectionbti = GTI(relativistic_corrections_gti)
@@ -85,7 +83,7 @@ class SlerpWithNaiveIndexing(Slerp):
         # but, one can imagine, that sparse points are completed with more
         idxmix = np.searchsorted(self.times, other.times)
         mask = np.logical_and(idxmix > 0, idxmix < self.times.size)
-        #print("quat crossing", mask.sum())
+        print("quat crossing", mask.sum())
         if np.any(mask):
             if not np.allclose(self(other.times[mask]).as_quat(),
                                other(other.times[mask]).as_quat()):
@@ -259,12 +257,12 @@ class AttDATA(SlerpWithNaiveIndexing):
         return self.__class__(self.times, val*self(self.times), gti=self.gti)
 
     @classmethod
-    def concatenate(cls, attlist):
+    def concatenate(cls, attlist, **kwargs):
         qlist = np.concatenate([att(att.times).as_quat() for att in attlist], axis=0)
         tlist = np.concatenate([att.times for att in attlist])
         tgti = reduce(lambda a, b: a | b, [att.gti for att in attlist])
         ut, uidx = np.unique(tlist, return_index=True)
-        return cls(ut, Rotation(qlist[uidx]), gti=tgti)
+        return cls(ut, Rotation(qlist[uidx]), gti=tgti, **kwargs)
 
     def set_nodes(self, te):
         te, mgaps = self.gti.make_tedges(te)
@@ -321,14 +319,28 @@ def define_required_correction(attdata):
     The precise information on when to apply this corrections is stored in the CALDB files.
 
     """
-    a1 = attdata.apply_gti((attdata.gti & gyrocorrectionbti) + [0.4, -0.4])
-    a2 = attdata.apply_gti((attdata.gti & ~gyrocorrectionbti) + [0.4, -0.4])
-    return a2 + make_gyro_relativistic_correction(a1)
+    a1 = attdata.apply_gti((attdata.gti & gyrocorrectionbti) + [1.4, -1.4])
+    a2 = attdata.apply_gti((attdata.gti & ~gyrocorrectionbti) + [1.4, -1.4])
+    print(a1.gti.exposure, a2.gti.exposure, (a1.gti & a2.gti).exposure)
+    return AttDATA.concatenate([a2, make_gyro_relativistic_correction(a1)]) #a2 + make_gyro_relativistic_correction(a1)
+
+
+def lorentz_transform(speed, vec, beta):
+    speed = normalize(speed)
+    vec = normalize(vec)
+    calpha = np.sum(speed*vec, axis=-1)
+    alpha = np.arccos(calpha)
+    return Rotation.from_rotvec(normalize(np.cross(vec, speed))*(alpha - np.arccos((calpha + beta)/(1 + beta*calpha)))[:, np.newaxis])
+
+    #gamma = np.sqrt(1 - beta**2)
+    #return Rotation.from_rotvec(normalize(np.cross(vec, speed))*np.arccos((1. + (gamma - 1)*calpha**2)/np.sqrt(1. + 2*(gamma - 1)*calpha**2 + (gamma - 1)**2*calpha**2.)))
+
 
 def make_gyro_relativistic_correction(attdata):
     if attdata.gti.exposure == 0:
         return attdata
     print("inverse relativistic correction required")
+    """
     vec = attdata(attdata.times).apply(OPAX)
     ra, dec = vec_to_pol(vec)
     ra, dec = np.rad2deg(ra), np.rad2deg(dec)
@@ -344,6 +356,18 @@ def make_gyro_relativistic_correction(attdata):
     qcorr[:, :3] = vrot*salphap2[:, np.newaxis]
     qcorr[:, 3] = calphap2
     return AttDATA(attdata.times, Rotation(qcorr).inv()*attdata(attdata.times), gti=attdata.gti)
+    """
+
+    sunfk5j2000 = pol_to_vec(*np.deg2rad(np.array([281.28189297, -23.03376005]).reshape((2, -1))))[0]
+    enpfk5j2000 = pol_to_vec(*np.deg2rad(np.array([270.0142976, 66.56177014]).reshape((2, -1))))[0]
+    secperyear = 31557600.0
+    ebeta = 9.93529142270535e-05
+    tshift = (Time(MJDREF, format="mjd") - Time(datetime(2000, 1, 1, 12))).sec
+    #attdata times provided in seconds since J2000 + 0.624 seconds
+    speed = Rotation.from_rotvec(enpfk5j2000*(tshift + attdata.times)[:,np.newaxis]/secperyear*2.*pi).apply(normalize(np.cross(enpfk5j2000, sunfk5j2000)))
+    qcorr = lorentz_transform(speed, attdata(attdata.times).apply([1, 0, 0]), ebeta)
+    return AttDATA(attdata.times, qcorr*attdata(attdata.times), gti=attdata.gti)
+
 #-===========================================================================================
 
 
@@ -825,12 +849,21 @@ def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
     """
     frac = np.zeros(slerp.timedelta.size, np.double)
 
-    rmod = np.sqrt(np.sum(slerp.rotvecs**2, axis=1))
-    rvec = slerp.rotvecs[mask]/rmod[mask, np.newaxis]
-    a0 = slerp.rotations[mask].inv().apply(loc)
+    """
+    """
+    v = slerp(slerp.times).apply(offvec)
+    rvec = normalize(np.cross(v[:-1], v[1:]))
+    rmod = np.arccos(np.sum(v[1:]*v[:-1], axis=1))
+
+    offvec = v[:-1]
+    print(rvec.shape, offvec.shape)
+
+    #rmod = np.sqrt(np.sum(slerp.rotvecs**2, axis=1))
+    #rvec = slerp.rotvecs[mask]/rmod[mask, np.newaxis]
+    a0 = slerp.rotations[mask].inv().apply(loc)  # location vector in the rotating coordinate system
     cosa = np.sum(rvec*offvec, axis=1)
     cosb = np.sum(rvec*a0, axis=1)
-    cose = cos(appsize*pi/180/3600)
+    cose = cos(appsize*pi/180/3600.)
     """
     despite the phase of a0 vec, in order to vector trajectorie to fall inside circula aperture following
     conditions should be satisfied
@@ -850,20 +883,43 @@ def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
     cosa, cosb, rmod, rvec, a0 = [arr[maskoutofapp] for arr in (cosa, cosb, rmod, rvec, a0)]
     sinbsq = 1 - cosb**2
 
+    """
+    iam interesting about the angles, between the sphere, described by the rotaion of offvec vector around rotvec
+    and circle with appsize appsize aroung a0 vector
+    the solution is defined by following equation
+    (a0*v) = cosa
+    (rvec*v) = cose
+
+
+    a - is a vector, line in the plane containe both solutions (a[1,2]*a0 = cose and a[1,2]*rvec = cosa) and line between them
+    a is directed along a1 + a2, which can be decomposed on two projectionss - rvec and (a0 - rvec*cosb)/sinb
+    this projections are: rvec*(a1 + a2) = cosa
+    and (a1 + a2)*(a0 - rvec*cosb)/sinb = (2cose - 2cosacosb)/sinb
+    composing a from product of this projections and rvec and (a0 - rvec*cos)/sinb one will get non unit vector presented bellow
+    the length of the vector is actually defined by the projection angle gamma of vectors a1 and a2 on a
+    """
     a = rvec*((cosa - cose*cosb)/sinbsq)[:, np.newaxis] + \
         a0*((cose - cosa*cosb)/sinbsq)[:, np.newaxis]
-    """
-    rot vec projections
-    a = a0((cose - cosa*cosb)/sinbsq - rvec csosb(cose - cosa*cosb)/sinbsq
-    """
-    aort = np.cross(rvec, a0)
-    port = np.cross(rvec, offvec) #/sina[:, np.newaxis]
-    pdir = (offvec - rvec*cosa[:, np.newaxis]) #/sina[:, np.newaxis]
+
+    cgammasq = np.sum(a**2, axis=1)
+
+    aort = normalize(np.cross(rvec, a0))
+    port = normalize(np.cross(rvec, offvec)) #/sina[:, np.newaxis]
+    pdir = normalize(offvec - rvec*cosa[:, np.newaxis]) #/sina[:, np.newaxis]
     """
     a1 and a2 - two vectors in the crosssection of the circles around rotation vector and loc
     """
-    a1 = a - aort*(np.sqrt(sinbsq - cosa**2 - cose**2 + 2.*cose*cosa*cosb)/sinbsq)[:, np.newaxis]
-    a2 = a + aort*(np.sqrt(sinbsq - cosa**2 - cose**2 + 2.*cose*cosa*cosb)/sinbsq)[:, np.newaxis]
+    #a1 = a - aort*(np.sqrt(sinbsq - cosa**2 - cose**2 + 2.*cose*cosa*cosb)/sinbsq)[:, np.newaxis]
+    #a2 = a + aort*(np.sqrt(sinbsq - cosa**2 - cose**2 + 2.*cose*cosa*cosb)/sinbsq)[:, np.newaxis]
+
+    a1 = a - aort*np.sqrt(1. - cgammasq)[:, np.newaxis] - rvec*cosa[:, np.newaxis]
+    a2 = a + aort*np.sqrt(1. - cgammasq)[:, np.newaxis] - rvec*cosa[:, np.newaxis]
+    #plt.figure(2)
+    #plt.hist(np.sum(aort**2, axis=1), 64, histtype="step", color="k")
+    #plt.hist(np.sum(a*aort, axis=1), 64, histtype="step", color="k")
+    #plt.hist(np.sum(a1**2, axis=1), 64, histtype="step", color="r")
+    #plt.hist(np.sum(a2**2, axis=1), 64, histtype="step", color="g")
+    #plt.show()
 
     """
     phi1 and phi2 - are angles, we should to rotate offvec in order to get in to the epsilon vicinity of loc
