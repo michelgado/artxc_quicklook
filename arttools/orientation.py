@@ -849,18 +849,9 @@ def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
     """
     frac = np.zeros(slerp.timedelta.size, np.double)
 
-    """
-    """
-    v = slerp(slerp.times).apply(offvec)
-    rvec = normalize(np.cross(v[:-1], v[1:]))
-    rmod = np.arccos(np.sum(v[1:]*v[:-1], axis=1))
-
-    offvec = v[:-1]
-    print(rvec.shape, offvec.shape)
-
-    #rmod = np.sqrt(np.sum(slerp.rotvecs**2, axis=1))
-    #rvec = slerp.rotvecs[mask]/rmod[mask, np.newaxis]
-    a0 = slerp.rotations[mask].inv().apply(loc)  # location vector in the rotating coordinate system
+    rmod = np.sqrt(np.sum(slerp.rotvecs**2, axis=1))
+    rvec = slerp.rotvecs[mask]/rmod[mask, np.newaxis]
+    a0 = slerp.rotations[mask].apply(loc, inverse=True)  # location vector in the rotating coordinate system
     cosa = np.sum(rvec*offvec, axis=1)
     cosb = np.sum(rvec*a0, axis=1)
     cose = cos(appsize*pi/180/3600.)
@@ -875,12 +866,17 @@ def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
     """
     if alpha + beta < epsilon than the interpolation trajectroie is in the circular aperture despite the phase
     """
-    maskallinsideapp = alpha + beta < appsize*pi/180/3600
+    malpha = alpha < pi/2.
+    maskallinsideapp = np.zeros(malpha.size, bool)
+    maskallinsideapp[malpha] = alpha[malpha] + beta[malpha] < appsize*pi/180/3600
+    maskallinsideapp[~malpha] = (2.*pi - alpha[~malpha]) - beta[~malpha] < appsize*pi/180/3600
     frac[mask] = maskallinsideapp.astype(np.double)
+    gtiallin = GTI(np.array([slerp.times[:-1][maskallinsideapp], slerp.times[1:][maskallinsideapp]]).T)
 
-    maskoutofapp = np.logical_and(alpha + appsize*pi/180/3600 > beta,
-                                  alpha - appsize*pi/180/3600 < beta)
-    cosa, cosb, rmod, rvec, a0 = [arr[maskoutofapp] for arr in (cosa, cosb, rmod, rvec, a0)]
+    maskoutofapp = np.logical_and(beta + appsize*pi/180/3600 > alpha,
+                                  beta - appsize*pi/180/3600 < alpha)
+    msimplecase = np.logical_and(maskoutofapp, ~maskallinsideapp) #maskoutofapp | ~maskallinsideapp
+    cosa, cosb, rmod, rvec, a0 = [arr[msimplecase] for arr in (cosa, cosb, rmod, rvec, a0)]
     sinbsq = 1 - cosb**2
 
     """
@@ -900,41 +896,37 @@ def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
     """
     a = rvec*((cosa - cose*cosb)/sinbsq)[:, np.newaxis] + \
         a0*((cose - cosa*cosb)/sinbsq)[:, np.newaxis]
-
     cgammasq = np.sum(a**2, axis=1)
 
-    aort = normalize(np.cross(rvec, a0))
+    aort = normalize(np.cross(rvec, a0)) #*np.sign(cose - cosa*cosb)
     port = normalize(np.cross(rvec, offvec)) #/sina[:, np.newaxis]
     pdir = normalize(offvec - rvec*cosa[:, np.newaxis]) #/sina[:, np.newaxis]
     """
     a1 and a2 - two vectors in the crosssection of the circles around rotation vector and loc
     """
-    #a1 = a - aort*(np.sqrt(sinbsq - cosa**2 - cose**2 + 2.*cose*cosa*cosb)/sinbsq)[:, np.newaxis]
-    #a2 = a + aort*(np.sqrt(sinbsq - cosa**2 - cose**2 + 2.*cose*cosa*cosb)/sinbsq)[:, np.newaxis]
 
-    a1 = a - aort*np.sqrt(1. - cgammasq)[:, np.newaxis] - rvec*cosa[:, np.newaxis]
-    a2 = a + aort*np.sqrt(1. - cgammasq)[:, np.newaxis] - rvec*cosa[:, np.newaxis]
-    #plt.figure(2)
-    #plt.hist(np.sum(aort**2, axis=1), 64, histtype="step", color="k")
-    #plt.hist(np.sum(a*aort, axis=1), 64, histtype="step", color="k")
-    #plt.hist(np.sum(a1**2, axis=1), 64, histtype="step", color="r")
-    #plt.hist(np.sum(a2**2, axis=1), 64, histtype="step", color="g")
-    #plt.show()
-
+    ap = a - rvec*cosa[:, np.newaxis]
+    a1 = ap - aort*np.sqrt(1. - cgammasq)[:, np.newaxis]
+    dphi = 2.*np.arccos(np.sum(normalize(a0 - cosb[:, np.newaxis]*rvec)*normalize(a1), axis=1))
     """
     phi1 and phi2 - are angles, we should to rotate offvec in order to get in to the epsilon vicinity of loc
     """
     phi1 = np.arctan2(np.sum(a1*port, axis=1), np.sum(a1*pdir, axis=1))
-    phi2 = np.arctan2(np.sum(a2*port, axis=1), np.sum(a2*pdir, axis=1))
+    phi1[phi1 < 0] = phi1[phi1 < 0.] + 2.*pi
+    phis = np.maximum(phi1 + dphi, 2.*pi) - 2.*pi
 
     m2 = np.copy(mask)
-    m2[m2] = maskoutofapp
-    t1 = slerp.times[:-1][m2] + slerp.timedelta[m2]*np.maximum(phi1, 0)/rmod
-    t2 = slerp.times[:-1][m2] + slerp.timedelta[m2]*np.minimum(phi2, rmod)/rmod
-    gti = GTI(np.array([t1, t2]).T)
+    m2[m2] = msimplecase
+    t1 = slerp.times[:-1][m2] + slerp.timedelta[m2]*np.minimum(phis, rmod)/rmod
+    t2 = slerp.times[:-1][m2] + slerp.timedelta[m2]*np.minimum(phi1, rmod)/rmod
+    t3 = slerp.times[:-1][m2] + slerp.timedelta[m2]*np.minimum(phi1 + dphi, rmod)/rmod
+    g1 = GTI(np.array([slerp.times[:-1][m2], t1]).T)
+    g2 = GTI(np.array([t2, t3]).T)
+    print("gtis", g1.exposure, g2.exposure, gtiallin.exposure)
+    gti = GTI(np.array([slerp.times[:-1][m2], t1]).T) | GTI(np.array([t2, t3]).T) | gtiallin
     gti.merge_joint()
 
-    frac[m2] = np.maximum((np.minimum(phi2, rmod) - np.maximum(phi1, 0)), 0)/rmod #*slerp.timedelta[m2]
+    frac[m2] = (t1 - slerp.times[:-1][m2] + t3 - t2)/slerp.timedelta[m2] #np.maximum((np.minimum(phi2, rmod) - np.maximum(phi1, 0)), 0)/rmod #*slerp.timedelta[m2]
     return frac, gti
 
 def minimize_norm_to_survey(attdata, rpvec):
@@ -974,8 +966,6 @@ def align_with_z_quat(vec):
     q[:3] = vrot*sin(alpha/2.)
     q[3] = cos(alpha/2.)
     return Rotation(q)
-
-
 
 def get_attdata(fname, **kwargs):
     ffile = fits.open(fname)
