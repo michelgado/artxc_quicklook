@@ -520,7 +520,7 @@ def nonzero_quaternions(quat):
     mask = np.sum(quat**2, axis=1) > 0
     return mask
 
-def quat_to_pol_and_roll(qfin, opaxis=[1, 0, 0], north=[0, 1, 0]):
+def quat_to_pol_and_roll(qfin, opaxis=[1, 0, 0], north=[0, 0, 1]):
     """
     it is assumed that quaternion is acting on the sattelite coordinate system
     in order to orient in in icrs coordinates
@@ -538,14 +538,16 @@ def quat_to_pol_and_roll(qfin, opaxis=[1, 0, 0], north=[0, 1, 0]):
     return:
         ra, dec, roll - attitude fk5 coordinates (ra, dec) and roll angle relative to north axis ! note that all angles are returned in radians
     """
-    opticaxis = normalize(qfin.apply(opaxis))
-    dec = np.arcsin(opticaxis[:,2])
-    ra = np.arctan2(opticaxis[:,1], opticaxis[:,0])
+    vecs = normalize(qfin.apply(opaxis))
+    dec = np.arcsin(vecs[:,2])
+    ra = np.arctan2(vecs[:,1], vecs[:,0])
 
-    yzprojection = normalize(np.cross(opticaxis, north))
+
+    yzprojection = normalize(np.cross(vecs, north))
+    zprojection = normalize(np.array(north) - vecs*np.sum(vecs*north, axis=1)[:, np.newaxis])
 
     rollangle = np.arctan2(np.sum(yzprojection*qfin.apply([0, 0, 1]), axis=1),
-                           np.sum(yzprojection*qfin.apply([0, 1, 0]), axis=1))
+                           np.sum(zprojection*qfin.apply([0, 0, 1]), axis=1))
     return ra, dec, rollangle
 
 def ra_dec_roll_to_quat(ra, dec, roll, opaxis=[1, 0, 0], north=[0, 0, 1]):
@@ -574,7 +576,7 @@ def ra_dec_roll_to_quat(ra, dec, roll, opaxis=[1, 0, 0], north=[0, 0, 1]):
     qlon = Rotation.from_rotvec(north[np.newaxis, :]*alpha[:, np.newaxis])
     rr = normalize(np.cross(proj, north))
     qlat = Rotation.from_rotvec(rr*np.arcsin(np.sum(vecs*north, axis=1))[:, np.newaxis])
-    qrot = Rotation.from_rotvec(-vecs*(pi + np.deg2rad(roll))[:, np.newaxis])
+    qrot = Rotation.from_rotvec(vecs*np.deg2rad(roll)[:, np.newaxis])
     return qrot*qlat*qlon
     #return qlat*qlon
 
