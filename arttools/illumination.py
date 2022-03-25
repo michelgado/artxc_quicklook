@@ -1,5 +1,6 @@
 from .telescope import URDNS
 import numpy as np
+import tqdm
 from .caldb import get_boresight_by_device, get_optical_axis_offset_by_device, get_illumination_mask, get_shadowmask_by_urd
 from ._det_spatial import offset_to_vec, raw_xy_to_vec, rawxy_to_qcorr
 from .orientation import vec_to_pol, pol_to_vec, get_photons_vectors, make_align_quat
@@ -7,7 +8,6 @@ from .interval import Intervals
 from .time import emptyGTI, GTI
 from .telescope import URDNS
 from .psf import get_ipsf_interpolation_func, unpack_inverse_psf_specweighted_ayut, rawxy_to_opaxoffset, unpack_inverse_psf_with_weights
-from .mosaic import SkyImageMP
 from .mosaic2 import SkyImage
 from .atthist import make_small_steps_quats, make_wcs_steps_quats
 from copy import copy
@@ -120,9 +120,11 @@ class IlluminationSource(object):
         opaxvecs = quats.apply(opax)
         self.qalign = make_align_quat(np.tile(self.sourcevector, (opaxvecs.shape[0], 1)), opaxvecs)
         angles = -np.sum(self.sourcevector*opaxvecs, axis=-1)
+        print(angles)
         offedges = -np.array([np.cos(self.offsets["OPAXOFFL"]*pi/181./3600.), np.cos(self.offsets["OPAXOFFH"]*pi/180./3600.)]).T
         self.sidx = np.argsort(angles)
-        self.cedges = np.maximum(np.searchsorted(angles[self.sidx], offedges) - 1, 0)
+        #self.cedges = np.maximum(np.searchsorted(angles[self.sidx], offedges) - 1, 0)
+        self.cedges = np.searchsorted(angles[self.sidx], offedges)
         print("setup done", self.sourcevector)
 
     @staticmethod
@@ -168,7 +170,7 @@ class IlluminationSource(object):
                 continue
             self.wcs.wcs.crval[1] = crval/3600.
             w1 = WCS(self.wcs.to_header())
-            pvecsis = np.array(pool.map(qloc[s:e].apply, pvecs)).reshape((-1, 3))
+            pvecsis = np.array(pool.map(qloc[s:e + 1].apply, pvecs)).reshape((-1, 3))
             xyl = (w1.all_world2pix(np.rad2deg(vec_to_pol(pvecsis)).T, 1) - 0.5).astype(int)
             imask = np.copy(self.imask[i])
             y0, x0 = (w1.all_world2pix(np.array([[180., 0.],]), 1) - 0.5).astype(int)[0]
@@ -278,21 +280,22 @@ class IlluminationSources(object):
             mask = np.logical_or(mask, source.get_vectors_in_illumination_mask(quats, pvecs, opax, None if not qalignlist else qalignlist[i]))
         return mask
 
-    def prepare_data_for_computation(self, wcs, attdata, urdgti, imgfilters, urdweights={}, dtcorr={}, psfweightfunc=None, mpnum=10, **kwargs):
+    def prepare_data_for_computation(self, wcs, attdata, imgfilters, urdweights={}, dtcorr={}, psfweightfunc=None, mpnum=10, **kwargs):
 
         filts = list(imgfilters.values())
         matchpsf = all([(filts[0]["ENERGY"] == f["ENERGY"]) & (filts[0]["GRADE"] == f["GRADE"]) for f in filts[:]])
         data = DataDistributer(matchpsf)
 
-        for urdn, gti in urdgti.items():
+        for urdn, f in imgfilters.items():
             if psfweightfunc is None:
-                ipsffunc = unpack_inverse_psf_specweighted_ayut(imgfilters[urdn], **kwargs)
+                ipsffunc = unpack_inverse_psf_specweighted_ayut(imgfilters[urdn].filter, **kwargs)
             else:
                 ipsffunc = unpack_inverse_psf_with_weights(psfweightfunc)
-
+            gti = f.filter["TIME"]
             opax = raw_xy_to_vec(*np.array(get_optical_axis_offset_by_device(urdn)).reshape((2, 1)))[0]
             bti = self.get_illumination_bti(attdata, [urdn,])
             lgti = gti & bti
+
             print("nonfiltered and filtered exposures", gti.exposure, lgti.exposure)
             if lgti.exposure == 0:
                 continue
@@ -311,20 +314,19 @@ class IlluminationSources(object):
             data.add(i, j, mask, dtq, qval, qcorr, ipsffunc)
         return data
 
-    def get_illumination_expmap(self, wcs, attdata, urdgti, imgfilters, urdweights={}, dtcorr={}, psfweightfunc=None, mpnum=MPNUM, kind="direct", **kwargs):
+    def get_illumination_expmap(self, wcs, attdata, imgfilters, urdweights={}, dtcorr={}, psfweightfunc=None, mpnum=MPNUM, kind="direct", **kwargs):
         """
         note: deadtime correction is likely mandatory in the vicinity of illumination sources
         """
         vmap = get_ipsf_interpolation_func()
         sky = SkyImage(wcs, vmap, mpnum=mpnum)
-        sky.clean_img()
-        data = self.prepare_data_for_computation(wcs, attdata, urdgti, imgfilters, urdweights=urdweights, dtcorr=dtcorr, psfweightfunc=psfweightfunc, mpnum=mpnum, **kwargs)
+        list(sky.clean_image())
+        data = self.prepare_data_for_computation(wcs, attdata, imgfilters, urdweights=urdweights, dtcorr=dtcorr, psfweightfunc=psfweightfunc, mpnum=mpnum, **kwargs)
 
         if kind == "direct":
-            sky.rmap_convolve_multicore(data, size=data.get_size())
+            sky.rmap_convolve_multicore(data, total=data.get_size())
         elif kind == "fft_convolve":
-            sky.fft_convolve(data, size=data.get_size())
-        sky.accumulate_img()
+            sky.fft_convolve_multiple(data)
         return sky.img
 
 def get_illumination_gtis(att, brightsourcevec, urdgti=None):
