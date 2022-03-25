@@ -2,9 +2,9 @@ from astropy.wcs import WCS
 from .time import tGTI, GTI
 from .mask import edges as medges
 from ._det_spatial import offset_to_vec, DL
-from .vector import vec_to_pol, normalize
-from .orientation import get_elongation_plane_norm, align_with_z_quat, minimize_norm_to_survey
-from .sphere import ConvexHullonSphere, get_vecs_convex
+from .vector import pol_to_vec, vec_to_pol, normalize
+from .orientation import get_elongation_plane_norm, align_with_z_quat, minimize_norm_to_survey, make_align_quat
+from .sphere import ConvexHullonSphere, get_vecs_convex, get_convex_center, get_angle_betwee_three_vectors
 import numpy as np
 from math import cos, sin, pi, sqrt, asin, acos
 from scipy.optimize import minimize
@@ -30,7 +30,7 @@ def convexhull_to_wcs(chull, alpha=None, cax=None, pixsize=10./3600., maxsize=Fa
         alpha = minimize(lambda a: ConvexHullonSphere(chull.get_containing_rectangle(a, cax)).area, [0.,], method="Nelder-Mead").x[0]
     locwcs = make_tan_wcs(ra, dec, pixsize=pixsize)
     xy = locwcs.all_world2pix(np.rad2deg(vec_to_pol(chull.vertices)).T, 1).astype(np.int)
-    print(xy.shape)
+    #print(xy.shape)
     if maxsize:
         locwcs.wcs.crpix = (np.max(xy, axis=0) - np.min(xy, axis=0) + 1)//2 + [1, 1]
     else:
@@ -76,6 +76,18 @@ def minarea_ver2(vecs, pixsize=20./3600.):
     sizey = max(int(y.max() - locwcs.wcs.crpix[1]), int(locwcs.wcs.crpix[1] - y.min())) #int((y.max() - y.min())//2)
     locwcs.wcs.crpix = [sizex + 1 - sizex%2, sizey + 1 - sizey%2]
     return locwcs
+
+
+
+def wcs_qoffset(lwcs, dx, dy):
+    dx = np.asarray(dx)
+    dy = np.asarray(dy)
+    vshift = pol_to_vec(*np.deg2rad(lwcs.all_pix2world(lwcs.wcs.crpix + np.array([[-1, 0], [1, 0], [0, -1], [0, 1]]), 0)).T)
+    xshift = normalize(np.cross(vshift[0], vshift[1]))
+    yshift = normalize(np.cross(vshift[2], vshift[3]))
+    return Rotation.from_rotvec(xshift[np.newaxis, :]*dx[:, np.newaxis]*lwcs.wcs.cdelt[0]*pi/180.)*\
+            Rotation.from_rotvec(yshift[np.newaxis, :]*dy[:, np.newaxis]*lwcs.wcs.cdelt[1]*pi/180.)
+
 
 
 def min_area_wcs_for_vecs(vecs, pixsize=20./3600.):
@@ -315,57 +327,3 @@ def make_quat_for_wcs(wcs, x, y, roll):
     q0 = Rotation.from_rotvec(rvec*alpha)
     beta = get_wcs_roll_for_qval(wcs, q0)[0]
     return Rotation.from_rotvec(vec*(roll - beta))*q0
-
-
-def get_wcs_roll_for_qval(wcs, qval, axlist=np.array([1, 0, 0])):
-    """
-    for provided wcs coordinate system, for each provided quaternion,
-    defines roll angle between between local wcs Y axis and detector plane coordinate system in detector plane
-
-    -------
-    Params:
-        wcs: astropy.wcs coordinate definition
-        qval: set of quaternions, which rotate SC coordinate system
-
-    return:
-        for each quaternion returns roll angle
-    """
-    radec = np.rad2deg(vec_to_pol(qval.apply(axlist))).T
-    x, y = wcs.all_world2pix(radec, 1).T
-    r1, d1 = (wcs.all_pix2world(np.array([x, y - max(1./wcs.wcs.cdelt[1], 50.)]).T, 1)).T
-    r2, d2 = (wcs.all_pix2world(np.array([x, y + max(1./wcs.wcs.cdelt[1], 50.)]).T, 1)).T
-    vbot = pol_to_vec(r1*pi/180., d1*pi/180.)
-    vtop = pol_to_vec(r2*pi/180., d2*pi/180.)
-    vimgyax = vtop - vbot
-    vimgyax = qval.apply(vimgyax, inverse=True)
-    return np.arctan2(vimgyax[:, 1], vimgyax[:, 2])
-
-def wcs_roll(wcs, qvals, axlist=np.array([1, 0, 0]), noffset=np.array([0., 0., 0.01])):
-    ax1 = qvals.apply(axlist)
-    radec = np.rad2deg(vec_to_pol(ax1)).T
-    xy = wcs.all_world2pix(radec, 1)
-    ax2 = pol_to_vec(*np.deg2rad(wcs.all_pix2world(xy + [0, 1], 1)).T)
-    qalign = make_align_quat(ax1, ax2, zeroax=np.array([1, 0, 0]))
-    rvec = (qalign*qvals).as_rotvec()
-    addpart = np.zeros(rvec.shape[0], np.double)
-    return np.sqrt(np.sum(rvec**2., axis=-1))*np.sign(np.sum(rvec*ax1, axis=-1))
-
-def make_quat_for_wcs(wcs, x, y, roll):
-    """
-    produces rotation quaternion, which orients a cartesian systen XYZ in a
-    wat X points at specified WCS system pixel and Z rotated on angle roll anticlockwise
-    relative to the north pole
-    params:
-        WCS: wcs system defined by the astropy.wcs.WCS class
-        x, y - coordinates where X cartesian vector should point after rotation
-        roll - anticlockwise rotation angle between wcs north direction and Z cartesian vector
-    """
-    vec = pol_to_vec(*np.deg2rad(wcs.all_pix2world(np.array([x, y]).reshape((-1, 2)), 1)[0]))
-    alpha = np.arccos(np.sum(vec*OPAX))
-    rvec = np.cross(OPAX, vec)
-    rvec = rvec/np.sqrt(np.sum(rvec**2))
-    q0 = Rotation.from_rotvec(rvec*alpha)
-    beta = get_wcs_roll_for_qval(wcs, q0)[0]
-    return Rotation.from_rotvec(vec*(roll - beta))*q0
-
-
