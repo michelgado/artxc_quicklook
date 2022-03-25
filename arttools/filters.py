@@ -496,10 +496,6 @@ class InversedIndexMask(OrderedDict):
 
 INDEXMAPS = {"INTMAP": strightindex}
 
-
-
-
-
 #======================================================================================================================
 
 FILTERSOBJS = {"RSET": RationalSet, "IRSET": InversedRationalSet, "INTERVAL": Intervals, "FMAP": InversedIndexMask}
@@ -525,6 +521,13 @@ class IndependentFilters(dict):
         commonfields = set(self.keys()).intersection(set(other.keys()))
         return IndependentFilters({k: self[k] | other[k]  for k in commonfields})
 
+    @property
+    def filter(self):
+        """
+        the idea behind this method is to use urddata containers instead of the separate filters
+        this approach protect against error, arising due to inconsistent data selection and produced products
+        """
+        return self
 
     @property
     def volume(self):
@@ -576,6 +579,14 @@ class IndependentFilters(dict):
         if set(self.keys()) != set(other.keys()):
             return False
         return np.all([self[k] == other[k] for k in self])
+
+    @classmethod
+    def from_fits(cls, ffile):
+        """
+        read fits file and extract IndependentFilter
+        TODO: decide and implement on the format to write and read filters in fits compatible format
+        """
+        return cls({})
 
 
 #======================================================================================================================
