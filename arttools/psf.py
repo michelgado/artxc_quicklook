@@ -1,7 +1,6 @@
-from .caldb import get_optical_axis_offset_by_device, get_inverse_psf_data, get_arf, \
+from .caldb import get_optical_axis_offset_by_device, get_inverse_psf_data, \
         get_inversed_psf_data_packed, get_inverse_psf_datacube_packed, get_ayut_inverse_psf_datacube_packed
-from .energy  import get_arf_energy_function
-from .spectr import get_filtered_crab_spectrum, Spec
+from .spectr import get_filtered_crab_spectrum, Spec, get_specweights
 from ._det_spatial import offset_to_vec
 from .sphere import get_vec_triangle_area
 import numpy as np
@@ -23,7 +22,6 @@ def urddata_to_opaxoffset(urddata, urdn):
 def opaxoffset_to_pix(x, y, urdn=None):
     x0, y0 = (23, 23) if urdn is None else get_optical_axis_offset_by_device(urdn)
     return np.round(x0 - 0.5 + x).astype(np.int), np.round(y - 0.5 + y0).astype(np.int)
-
 
 def get_inversed_psf_profiles(xshift, yshift):
     ipsf = get_inversed_psf_profiles()
@@ -77,27 +75,6 @@ def unpack_inverse_psf(i, j):
     return data
 
 ayutee = np.array([4., 6., 8., 10., 12., 16., 20., 24., 30.])
-
-
-def get_ayut_specweights(imgfilter, cspec=None):
-    w = np.zeros(ayutee.size - 1, np.double)
-    if not cspec is None:
-        egloc, egaps = imgfilter["ENERGY"].make_tedges(ayutee)
-        ec = (egloc[1:] + egloc[:-1])[egaps]/2.
-        arf = get_arf_energy_function(get_arf())
-        cspec = np.array([quad(lambda e: arf(e)*cspec(e), elow, ehi)[0] for elow, ehi in zip(egloc[:-1][egaps], egloc[1:][egaps])]) #np.concatenate([cspec/cspec.sum()/np.diff(egrid), [0, ]])
-        cspec = cspec/cspec.sum()
-        np.add.at(w, np.searchsorted(ayutee, ec) - 1, cspec)
-    else:
-        rgrid, cspec = get_filtered_crab_spectrum(imgfilter, collapsegrades=True)
-        crabspec = Spec(rgrid["ENERGY"][:-1], rgrid["ENERGY"][1:], cspec)
-        egloc, egaps = imgfilter["ENERGY"].make_tedges(np.unique(np.concatenate([ayutee, rgrid["ENERGY"]])))
-        ec = (egloc[1:] + egloc[:-1])[egaps]/2.
-        cspec = crabspec.integrate_in_bins(np.array([egloc[:-1], egloc[1:]]).T[egaps])
-        cspec = cspec.sum()
-        np.add.at(w, np.searchsorted(ayutee, ec) - 1, cspec)
-    return w
-
 
 def unpack_inverse_psf_ayut(i, j, e=None):
     """
@@ -177,7 +154,7 @@ def unpack_inverse_psf_specweighted_ayut(imgfilter, cspec=None, app=None):
     produces spectrum weights for ipsf channels
     """
 
-    w = get_ayut_specweights(imgfilter, cspec)
+    w = get_specweights(imgfilter, ayutee, cspec)
 
     data = np.sum(get_ayut_inverse_psf_datacube_packed()*w[np.newaxis, :, np.newaxis, np.newaxis], axis=1)
     imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
@@ -204,8 +181,8 @@ def get_pix_overall_countrate_constbkg_ayut(imgfilter, cspec=None, app=None):
                                   offset_to_vec(iifun.grid[0][1: ], iifun.grid[0][:-1]),
                                   offset_to_vec(iifun.grid[0][1: ], iifun.grid[0][1: ]))
     sarea = np.mean(sarea)*2.
-    print("psf fun pix area", sarea)
-    w = get_ayut_specweights(imgfilter, cspec)
+    #print("psf fun pix area", sarea)
+    w = get_specweights(imgfilter, ayutee, cspec)
     data = np.sum(get_ayut_inverse_psf_datacube_packed()*w[np.newaxis, :, np.newaxis, np.newaxis], axis=1)
     imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
     data = data/imgmax
