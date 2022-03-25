@@ -1,7 +1,7 @@
 from .caldb import get_boresight_by_device, get_optical_axis_offset_by_device
 from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttInvHist, make_small_steps_quats
 from .mosaic2 import SkyImage
-from .vignetting import make_vignetting_for_urdn, make_overall_vignetting, make_vignetting_from_inverse_psf
+from .vignetting import make_vignetting_for_urdn, make_overall_vignetting
 from .psf import get_ipsf_interpolation_func, unpack_inverse_psf_specweighted_ayut, rawxy_to_opaxoffset
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from .lightcurve import weigt_time_intervals
@@ -63,7 +63,7 @@ def make_mosaic_expmap_mp_executor(shape, wcs, vmap, qvals, exptime, mpnum):
 
     return res[0]
 
-def make_expmap_for_wcs(wcs, attdata, urdgtis, imgfilters, shape=None, mpnum=MPNUM, dtcorr={}, kind="direct", urdweights={}, **kwargs):
+def make_expmap_for_wcs(wcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dtcorr={}, kind="direct", urdweights={}, **kwargs):
     """
     produce exposure map on the provided wcs area, with provided GTI and attitude data
 
@@ -73,6 +73,8 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, imgfilters, shape=None, mpnum=MPN
     2) wcs is expected to be astropy.wcs.WCS class,
         crpix is expected to be exactly the central pixel of the image
     """
+    urdgtis = {urdn: f.filter["TIME"] for urdn, f in imgfilters.items()}
+
     if shape is None:
         ysize, xsize = int(wcs.wcs.crpix[0]*2 + 1), int(wcs.wcs.crpix[1]*2 + 1)
         shape = [(0, xsize), (0, ysize)]
@@ -80,11 +82,9 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, imgfilters, shape=None, mpnum=MPN
     if kind not in ["direct", "convolve"]:
         raise ValueError("only  convolve and direct option for exposure mosiac is available")
     print(wcs)
-    #print(shape)
 
     print("sky image initilization")
     sky = SkyImage(wcs, shape=shape, mpnum=mpnum)
-    print("sky done")
 
     if dtcorr:
         overall_gti = emptyGTI
@@ -95,18 +95,13 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, imgfilters, shape=None, mpnum=MPN
         if overall_gti.exposure > 0:
             exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti, wcs=wcs)
             vmap = make_overall_vignetting(imgfilters, urdweights=urdweights, **kwargs)
-            sky.set_core(vmap)
+            sky.set_vmap(vmap)
             print("exptime sum", exptime.sum())
             print("produce overall urds expmap")
             if kind == "direct":
-                #sky.interpolate_mp(qval[:], exptime[:], mpnum)
-                sky.simple_convolve(qval, exptime)
+                sky.direct_convolve(qval, exptime)
             elif kind == "convolve":
-                #sky.convolve_bunch(qval, exptime) #, mpnum)
-                sky.fft_convolve_prepare_task(qval, exptime)
-            #emap = AttInvHist.make_mp(wcs, vmap, exptime, qval, mpnum)
-            #emap = make_mosaic_expmap_mp_executor(shape, wcs, vmap, qval, exptime, mpnum)
-            print("\ndone!")
+                sky.fft_convolve(qval, exptime)
 
     for urdn in urdgtis:
         gti = urdgtis[urdn] & ~overall_gti
@@ -116,20 +111,21 @@ def make_expmap_for_wcs(wcs, attdata, urdgtis, imgfilters, shape=None, mpnum=MPN
         print("urd %d, exposure %.1f, progress:" % (urdn, gti.exposure))
         exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urdn), gti, \
                                                              timecorrection=dtcorr.get(urdn, lambda x: 1), wcs=wcs)
-        vmap = make_vignetting_for_urdn(urdn, imgfilters[urdn], **kwargs)
-        sky.set_core(vmap)
-        #sky._set_core(vmap.grid[0], vmap.grid[1], vmap.values*urdweights.get(urdn, 1))
-        #sky.vmap.values = sky.vmap.values*urdweights.get(urdn, 1.)
+        vmap = make_vignetting_for_urdn(urdn, imgfilters[urdn].filter, **kwargs)
+        sky.set_vmap(vmap)
         if kind == "direct":
-            sky.simple_convolve(qval, exptime*urdweights.get(urdn, 1.))
+            sky.direct_convolve(qval, exptime*urdweights.get(urdn, 1.))
         elif kind == "convolve":
-            #sky.convolve_bunch(qval, exptime)
-            sky.fft_convolve_prepare_task(qval, exptime*urdweights.get(urdn, 1.))
+            sky.fft_convolve(qval, exptime*urdweights.get(urdn, 1.))
         print(" done!")
-    sky.accumulate_img()
     return sky.img
 
-def make_exposures(direction, te, attdata, urdgtis, urdfilters, urdweights={}, mpnum=MPNUM, dtcorr={}, illum_filters=None, **kwargs):
+def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNUM, dtcorr={}, illum_filters=None, **kwargs):
+    """
+    estimate exposure within timebins te, for specified directions
+    """
+    urdgtis = {urdn: f.filter["TIME"] for urdn, f in urdfilters.items()}
+
     tec, mgaps, se, scalefunc, cumscalefunc = weigt_time_intervals(urdgtis)
     gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
     print("gti exposure", gti.exposure)
@@ -149,7 +145,7 @@ def make_exposures(direction, te, attdata, urdgtis, urdfilters, urdweights={}, m
         tcc = (teu[1:] + teu[:-1])/2.
         tc = tcc[gaps]
         qlist = attdata(tc)*get_boresight_by_device(urdn)
-        vmap = make_vignetting_for_urdn(urdn, urdfilters[urdn], **kwargs)
+        vmap = make_vignetting_for_urdn(urdn, urdfilters[urdn].filter, **kwargs)
         dtc = dtcorr.get(urdn, lambda x: 1.)(tc)
         vval = vmap(vec_to_offset_pairs(qlist.apply(direction, inverse=True)))*urdweights.get(urdn, 1.)*dtc
         idx = np.searchsorted(te, tc) - 1
@@ -158,7 +154,8 @@ def make_exposures(direction, te, attdata, urdgtis, urdfilters, urdweights={}, m
     print("dtn sum", dtn.sum())
     return te, dtn
 
-def make_exposures_for_app(direction, te, attdata, urdgtis, urdfilters, urdweights={}, mpnum=MPNUM, dtcorr={}, app=None, illum_filters=None, **kwargs):
+def make_exposures_for_app(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNUM, dtcorr={}, app=None, illum_filters=None, **kwargs):
+    urdgtis = {urdn: f.filter["TIME"] for urdn, f in urdfilters.items()}
     tec, mgaps, se, scalefunc, cumscalefunc = weigt_time_intervals(urdgtis)
     ipsffun = get_ipsf_interpolation_func()
     gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
@@ -181,7 +178,7 @@ def make_exposures_for_app(direction, te, attdata, urdgtis, urdfilters, urdweigh
         tcc = (teu[1:] + teu[:-1])/2.
         tc = tcc[gaps]
         qlist = attdata(tc)*get_boresight_by_device(urdn)
-        vmap = make_vignetting_for_urdn(urdn, urdfilters[urdn], app=app, **kwargs)
+        vmap = make_vignetting_for_urdn(urdn, urdfilters[urdn].filter, app=app, **kwargs)
         dtc = dtu*dtcorr.get(urdn, lambda x: 1.)(tc)*urdweights.get(urdn, 1.)
         vval = vmap(vec_to_offset_pairs(qlist.apply(direction, inverse=True)))*dtc
         idx = np.searchsorted(te, tc) - 1
@@ -189,8 +186,8 @@ def make_exposures_for_app(direction, te, attdata, urdgtis, urdfilters, urdweigh
         np.add.at(dtn, idx[mloc], vval[mloc])
         if not illum_filters is None:
             #pool = ThreadPool(mpnum)
-            ipsff = unpack_inverse_psf_specweighted_ayut(urdfilters[urdn], **kwargs)
-            shmask = urdfilters[urdn].meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
+            ipsff = unpack_inverse_psf_specweighted_ayut(urdfilters[urdn].filter, **kwargs)
+            shmask = urdfilters[urdn].filter.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
             xloc, yloc = x[shmask], y[shmask]
             vec = raw_xy_to_vec(xloc, yloc)
             opax = raw_xy_to_vec(*np.array(get_optical_axis_offset_by_device(urdn)).reshape((2, 1)))[0]
