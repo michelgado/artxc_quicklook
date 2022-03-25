@@ -222,8 +222,9 @@ def make_spec(ra, dec, survey=None):
             print("4-12 events", {urdn: d.size for urdn, d in urdevt.items()})
 
             tgti = reduce(lambda a, b: a | b, urdgti.values())
-            locwcs = arttools.planwcs.make_wcs_for_attdata(att, gti=tgti, pixsize=5./3600.)
-            locwcs.wcs.crpix = [31, 31]
+            locwcs = arttools.planwcs.make_tan_wcs(ra*pi/180., dec*pi/180., sizex=15, sizey=15, pixsize=5./3600., alpha=0.)
+            #locwcs = arttools.planwcs.make_wcs_for_attdata(att, gti=tgti, pixsize=5./3600.)
+            #locwcs.wcs.crpix = [31, 31]
 
 
             qlist = [arttools.orientation.get_events_quats(urdevt[urdn], urdn, att)*arttools._det_spatial.get_qcorr_for_urddata(urdevt[urdn]) for urdn in arttools.telescope.URDNS if urdn in urdevt and urdevt[urdn].size > 0]

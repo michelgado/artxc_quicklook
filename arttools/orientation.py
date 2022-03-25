@@ -845,6 +845,8 @@ def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
     """
     if mask is None:
         mask = np.ones(slerp.timedelta.size, np.bool)
+
+    offvec = normalize(offvec)
     """
     scipy slerp works like q_i (q_i^-1 q_i+1 omega dt)
 
@@ -853,8 +855,10 @@ def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
 
     rmod = np.sqrt(np.sum(slerp.rotvecs**2, axis=1))
     rvec = slerp.rotvecs[mask]/rmod[mask, np.newaxis]
+    rvec[rmod < 1e-10] = offvec
     a0 = slerp.rotations[mask].apply(loc, inverse=True)  # location vector in the rotating coordinate system
     cosa = np.sum(rvec*offvec, axis=1)
+    cosa[rmod < 1e-10] == 1.
     cosb = np.sum(rvec*a0, axis=1)
     cose = cos(appsize*pi/180/3600.)
     """
@@ -864,6 +868,7 @@ def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
     alpha - epsilon > beta
     """
     alpha = np.arccos(cosa)
+    alpha[rmod < 1e-10] = 0.
     beta = np.arccos(cosb)
     """
     if alpha + beta < epsilon than the interpolation trajectroie is in the circular aperture despite the phase
@@ -880,6 +885,7 @@ def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
     msimplecase = np.logical_and(maskoutofapp, ~maskallinsideapp) #maskoutofapp | ~maskallinsideapp
     cosa, cosb, rmod, rvec, a0 = [arr[msimplecase] for arr in (cosa, cosb, rmod, rvec, a0)]
     sinbsq = 1 - cosb**2
+    print("simple cases (all in or all out", msimplecase.size, msimplecase.sum())
 
     """
     iam interesting about the angles, between the sphere, described by the rotaion of offvec vector around rotvec

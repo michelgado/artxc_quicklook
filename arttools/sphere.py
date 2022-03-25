@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 from math import sin, cos, pi, sqrt
-from .vector import vec_to_pol
+from .vector import vec_to_pol, normalize
 
 
 def get_vec_triangle_area(vec1, vec2, vec3):

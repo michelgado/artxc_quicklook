@@ -290,6 +290,7 @@ def get_ayut_inversed_psf_data_packed():
 @lru_cache(maxsize=1)
 def get_ayut_inverse_psf_datacube_packed():
     ipsf = np.copy(get_ayut_inversed_psf_data_packed()[1].data)
+    #ipsf = pickle.load(open("/srg/a1/work/srg/ARTCALDB/caldb_files/iPSF_marshall.pkl", "rb"))
     return ipsf
 
 def get_arf():

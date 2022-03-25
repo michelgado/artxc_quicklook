@@ -144,6 +144,14 @@ def make_quick_bkgmap_for_wcs(wcs, attdata, urdgtis, time_corr={}):
     return bkgimg
 
 def get_background_surface_brigtnress(urdn, filters, fill_value=np.nan, normalize=False):
+    """
+    provides count rate in each pixel of48x48 detector for specified by the urdn detector and events selection filter
+    signature:
+        urdn, fitler, fill_value[nan], normalize[False]
+
+    returns 48x48 2d array, which contains count rates in pixel if normalize is False,
+    if normalize is True then koeficcient is applied in order to sum of array became 1
+    """
     grid, datacube = get_background_for_urdn(urdn)
     menergy = filters["ENERGY"].apply(grid["ENERGY"])
     menergys = np.logical_and(menergy[1:], menergy[:-1])

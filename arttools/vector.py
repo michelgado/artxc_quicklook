@@ -1,4 +1,5 @@
 import numpy as np
+from math import sin, cos, pi, sqrt
 
 def to_2pi_range(val): return val%(2.*pi)
 
