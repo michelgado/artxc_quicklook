@@ -48,8 +48,8 @@ class DistributedObj(object):
         global localcopy
         localcopy = cls(**kwargs)
 
-    def __init__(self, mpnum=1, barrier=None, **kwargs):
-        if barrier is None:
+    def __init__(self, mpnum=0, barrier=None, **kwargs):
+        if barrier is None and mpnum > 0:
             self.barrier = Barrier(mpnum)
             kwargs["barrier"] = self.barrier
             self._pool = Pool(mpnum, initializer=self.initizlie_local_obj, initargs=(kwargs,))
@@ -71,19 +71,21 @@ class DistributedObj(object):
 
     @staticmethod
     def for_each_argument(method):
-        def mpmethod(self, *args, runmain=False, **kwargs):
+        def mpmethod(self, args, *largs, runmain=False, **kwargs):
             if self._pool is None or runmain:
-                return method(self, *args, **kwargs)
+                return method(self, args, *largs, **kwargs)
             else:
-                return self._pool.imap_unordered(self.perform_for_each_argument, zip(zip(*args), repeat(method.__name__), repeat(kwargs)))
+                return self._pool.imap_unordered(self.perform_for_each_argument, zip(args, repeat(method.__name__), repeat(kwargs)))
         return mpmethod
 
     @staticmethod
     def for_each_process(method):
-        def mpmethod(self, *args, **kwargs):
+        def mpmethod(self, *args, apply_to_main=False, **kwargs):
             if self._pool is None:
                 return method(self, *args, **kwargs)
             else:
+                if apply_to_main:
+                    method(self, *args, **kwargs)
                 return self._pool.imap_unordered(self.perform_for_each_proccess, repeat((args, method.__name__, kwargs), self._pool._processes))
         return mpmethod
 
@@ -107,16 +109,19 @@ def perform_over_localcopy_barrier(args):
     res = localcopy.__getattribute__(method)(*args, **kwargs)
     return res
 
-def run_for_each(method):
-    def mpmethod(self, *args, for_each_process=False, for_each_argument=False, **kwargs):
+def for_each_process(method):
+    def mpmethod(self, *args, runmain=False, **kwargs):
+        if runmain:
+            method(self, *args, **kwargs)
         self._barrier.reset()
         return self._pool.imap_unordered(perform_over_localcopy_barrier, repeat((args, method.__name__, kwargs), self._pool._processes))
     return mpmethod
 
 def for_each_argument(method):
-    def mpmethod(self, *args, **kwargs):
-        return self._pool.imap_unordered(perform_over_localcopy, zip(zip(*args), repeat(method.__name__), repeat(kwargs)))
+    def mpmethod(self, itargs, **kwargs):
+        return self._pool.imap_unordered(perform_over_localcopy, zip(itargs, repeat(method.__name__), repeat(kwargs)))
     return mpmethod
+
 
 class MPdistributed(type):
     def __new__(cls, clsname, superclasses, attributeddict):
