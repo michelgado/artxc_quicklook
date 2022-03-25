@@ -8,7 +8,7 @@ from multiprocessing.pool import ThreadPool
 import tqdm
 from .vector import vec_to_pol, pol_to_vec
 from .orientation import OPAX, ra_dec_roll_to_quat
-from .planwcs import get_wcs_roll_for_qval, make_quat_for_wcs, wcs_roll
+from .planwcs import get_wcs_roll_for_qval, make_quat_for_wcs, wcs_roll, wcs_qoffset
 from ._det_spatial import offset_to_vec, vec_to_offset, vec_to_offset_pairs
 from .sphere import ConvexHullonSphere, PRIME_NUMBERS
 from .psf import unpack_inverse_psf, unpack_inverse_psf_ayut, get_ipsf_interpolation_func, ayutee
@@ -76,7 +76,7 @@ class SkyImage(DistributedObj):
     """
     stores an image of the sky and allows to put specific core on the sky coordinates
     """
-    def __init__(self, locwcs, vmap=None, shape=None, mpnum=4, barrier=None):
+    def __init__(self, locwcs, vmap=None, shape=None, subres=10, mpnum=4, barrier=None):
         kwargs = locals()
         kwargs.pop("self")
         kwargs.pop("__class__")
@@ -94,7 +94,7 @@ class SkyImage(DistributedObj):
         self.vecs = pol_to_vec(*np.deg2rad([ra, dec])).reshape(list(self.img.shape) + [3, ])
         self.action = put_stright_on #set_action(put_stright_on)
         self.corners = None
-
+        self.subres = np.mgrid[-(0.5 - 0.5/subres):0.5:1./subres, -(0.5 - 0.5/subres):0.5:1./subres].reshape((2, -1))
         initpool.join()
 
         if not vmap is None:
@@ -177,6 +177,7 @@ class SkyImage(DistributedObj):
         for q, s in zip(qvals, scales):
             self.interpolate_vmap_for_qval(q, s)
 
+
     def cores_for_rolls(self, rolls):
         ra, dec = self.locwcs.wcs.crval
         vcentral = pol_to_vec(*np.deg2rad([ra, dec]).reshape((2, -1)))
@@ -190,8 +191,13 @@ class SkyImage(DistributedObj):
         xsize = int(np.max(np.abs(x - self.locwcs.wcs.crpix[1])) + 0.5)
         ysize = int(np.max(np.abs(y - self.locwcs.wcs.crpix[0])) + 0.5)
         shape = np.asarray(self.locwcs.wcs.crpix, int)[::-1] + [[-xsize, xsize +1], [-ysize, ysize + 1]]
-        lsky = self.__class__(self.locwcs, shape=shape, vmap=self.vmap, mpnum=1, barrier=False)
+        lsky = self.__class__(self.locwcs, shape=shape, vmap=self.vmap, mpnum=0, barrier=False)
+        for qloc in q0:
+            lsky.clean_image()
+            lsky.interpolate_vmap_for_qval(qloc, 1.)
+            yield np.copy(lsky.img)
 
+        """
         x, y = np.mgrid[-0.45:0.46:0.1, -0.45:0.46:0.1]
         ra, dec = self.locwcs.all_pix2world(np.array([x.ravel(), y.ravel()]).T + self.locwcs.wcs.crpix, 1).T
         for r in lroll:
@@ -200,14 +206,18 @@ class SkyImage(DistributedObj):
             for qv in q:
                 lsky.interpolate_vmap_for_qval(qv, 1./len(q))
             yield np.copy(lsky.img)
+        """
 
 
     @DistributedObj.for_each_argument
     def convolve_with_core(self, qvals, scales, core):
         tmpimg = np.zeros((self.img.shape), float)
         radec = np.rad2deg(vec_to_pol(qvals.apply([1, 0, 0])))
-        xy = (self.locwcs.all_world2pix(radec.T, 0) + 0.5).astype(int)
-        np.add.at(tmpimg, (xy[:, 1], xy[:, 0]), scales)
+        xy = self.locwcs.all_world2pix(radec.T, 0).T
+        #print("in conv", len(qvals), radec.shape, xy.shape, current_process(), tmpimg.shape)
+        xy = (xy[:, np.newaxis, :] + self.subres[:, :, np.newaxis]).astype(int).reshape((2, -1))
+        #print(xy.shape)
+        np.add.at(tmpimg, (xy[1], xy[0]), np.repeat(scales/self.subres.size*2, self.subres.size//2))
         self.img += convolve(tmpimg, core, mode="same")
 
     def fft_convolve(self, qvals, scales):
@@ -215,13 +225,16 @@ class SkyImage(DistributedObj):
         rolls = wcs_roll(self.locwcs, qvals)
         urolls, uiidx = np.unique((rolls*180./pi*2).astype(int), return_inverse=True)
         cores = self.cores_for_rolls((urolls + 0.5)/360.*pi)
-        list(self.convolve_with_core((qvals[k == uiidx] for k in range(urolls.size)), (scales[k == uiidx] for k in range(urolls.size)), cores)) #(qvals[k == uiidx] for k in range(urolls.size)), (scales[k == uiidx] for k in range(urolls.size))))
+        list(self.convolve_with_core(((qvals[k == uiidx], scales[k == uiidx], core) for k, core in enumerate(cores))))
         self.accumulate_img()
 
-    def fft_convolve_multiple(self, data):
+    def fft_convolve_multiple(self, data, total=np.inf):
         list(self.clean_image())
-
         def local_cores_and_rolls(data, sky):
+            """
+            xsh, ysh = np.mgrid[-0.45:0.46:0.1, -0.45:0.46:0.1] + np.random.uniform(-0.05, 0.05, (10, 10))
+            qsh = wcs_qoffset(self.locwcs, xsh.ravel(), ysh.ravel())
+            """
             for qloc, sloc, cloc in data:
                 rolls = wcs_roll(sky.locwcs, qloc)
                 sky.vmap.values = cloc
@@ -229,17 +242,21 @@ class SkyImage(DistributedObj):
 
                 lcores = sky.cores_for_rolls((urolls + 0.5)/360.*pi)
                 for k, core in enumerate(lcores):
+                    """
+                    ql = qloc[k == uiidx]
+                    ql = Rotation(np.tile(qsh.as_quat(), (len(ql), 1)))*Rotation(np.repeat(ql.as_quat(), len(qsh), axis=0))
+                    yield ql, np.repeat(sloc[k == uiidx], len(qsh))/100., core
+                    """
                     yield qloc[k == uiidx], sloc[k == uiidx], core
 
-        print("locals initialized")
-        for _ in tqdm.tqdm(self.convolve_with_core(*zip(*local_cores_and_rolls(data, self))), total=np.inf):
+        for _ in tqdm.tqdm(self.convolve_with_core(local_cores_and_rolls(data, self)), total=total):
             pass
         self.accumulate_img()
 
 
     def direct_convolve(self, qvals, scales):
         self.clean_image()
-        for _ in tqdm.tqdm(self.interpolate_vmap_for_qval(qvals, scales), total=len(qvals)):
+        for _ in tqdm.tqdm(self.interpolate_vmap_for_qval(zip(qvals, scales)), total=len(qvals)):
             pass
         self.accumulate_img()
 
@@ -248,8 +265,9 @@ class SkyImage(DistributedObj):
         try:
             total = total if not total is None else len(tasks)
         except:
-            list(self.interpolate_vmap_for_qvals(*zip(*tasks), **kwargs))
+            for _ in tqdm.tqdm(self.interpolate_vmap_for_qvals(tasks, **kwargs), total=np.inf):
+                continue
         else:
-            for _ in tqdm.tqdm(self.interpolate_vmap_for_qvals(*zip(*tasks), **kwargs), total=total):
+            for _ in tqdm.tqdm(self.interpolate_vmap_for_qvals(tasks, **kwargs), total=total):
                 continue
         self.accumulate_img()
