@@ -4,7 +4,7 @@ import tqdm
 from .caldb import get_boresight_by_device, get_optical_axis_offset_by_device, get_illumination_mask, get_shadowmask_by_urd
 from ._det_spatial import offset_to_vec, raw_xy_to_vec, rawxy_to_qcorr
 from .orientation import vec_to_pol, pol_to_vec, get_photons_vectors, make_align_quat
-from .interval import Intervals
+from .filters import Intervals
 from .time import emptyGTI, GTI
 from .telescope import URDNS
 from .psf import get_ipsf_interpolation_func, unpack_inverse_psf_specweighted_ayut, rawxy_to_opaxoffset, unpack_inverse_psf_with_weights
@@ -121,7 +121,7 @@ class IlluminationSource(object):
         self.qalign = make_align_quat(np.tile(self.sourcevector, (opaxvecs.shape[0], 1)), opaxvecs)
         angles = -np.sum(self.sourcevector*opaxvecs, axis=-1)
         print(angles)
-        offedges = -np.array([np.cos(self.offsets["OPAXOFFL"]*pi/181./3600.), np.cos(self.offsets["OPAXOFFH"]*pi/180./3600.)]).T
+        offedges = -np.array([np.cos(self.offsets["OPAXOFFL"]*pi/180./3600.), np.cos(self.offsets["OPAXOFFH"]*pi/180./3600.)]).T
         self.sidx = np.argsort(angles)
         #self.cedges = np.maximum(np.searchsorted(angles[self.sidx], offedges) - 1, 0)
         self.cedges = np.searchsorted(angles[self.sidx], offedges)
@@ -281,17 +281,16 @@ class IlluminationSources(object):
         return mask
 
     def prepare_data_for_computation(self, wcs, attdata, imgfilters, urdweights={}, dtcorr={}, psfweightfunc=None, mpnum=10, **kwargs):
-
         filts = list(imgfilters.values())
         matchpsf = all([(filts[0]["ENERGY"] == f["ENERGY"]) & (filts[0]["GRADE"] == f["GRADE"]) for f in filts[:]])
         data = DataDistributer(matchpsf)
 
-        for urdn, f in imgfilters.items():
+        for urdn in imgfilters:
             if psfweightfunc is None:
-                ipsffunc = unpack_inverse_psf_specweighted_ayut(imgfilters[urdn].filter, **kwargs)
+                ipsffunc = unpack_inverse_psf_specweighted_ayut(imgfilters[urdn].filters, **kwargs)
             else:
                 ipsffunc = unpack_inverse_psf_with_weights(psfweightfunc)
-            gti = f.filter["TIME"]
+            gti = imgfilters[urdn].filters["TIME"]
             opax = raw_xy_to_vec(*np.array(get_optical_axis_offset_by_device(urdn)).reshape((2, 1)))[0]
             bti = self.get_illumination_bti(attdata, [urdn,])
             lgti = gti & bti
@@ -326,7 +325,7 @@ class IlluminationSources(object):
         if kind == "direct":
             sky.rmap_convolve_multicore(data, total=data.get_size())
         elif kind == "fft_convolve":
-            sky.fft_convolve_multiple(data)
+            sky.fft_convolve_multiple(data, total=data.get_size())
         return sky.img
 
 def get_illumination_gtis(att, brightsourcevec, urdgti=None):
