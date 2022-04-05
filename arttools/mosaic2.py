@@ -94,6 +94,7 @@ class SkyImage(DistributedObj):
         self.vecs = pol_to_vec(*np.deg2rad([ra, dec])).reshape(list(self.img.shape) + [3, ])
         self.action = put_stright_on #set_action(put_stright_on)
         self.corners = None
+        self.cache = []
         self.subres = np.mgrid[-(0.5 - 0.5/subres):0.5:1./subres, -(0.5 - 0.5/subres):0.5:1./subres].reshape((2, -1))
         initpool.join()
 
@@ -171,54 +172,66 @@ class SkyImage(DistributedObj):
         xyl = vec_to_offset_pairs(qval.apply(vecs, inverse=True))
         img[il:ir, jl:jr][mask[il:ir, jl:jr]] += self.action(self.vmap(xyl), scale, rmap[il:ir, jl:jr][mask[il:ir, jl:jr]])
 
+
     @DistributedObj.for_each_argument
-    def interpolate_vmap_for_qvals(self, qvals, scales, vmap):
+    def clean_cache(self):
+        self.cache = []
+
+    @DistributedObj.for_each_process
+    def interpolate_cached(self):
+        for qvals, scales, core in self.cache:
+            self.vmap.values = core
+            for q, s in zip(qvals, scales):
+                self.interpolate_vmap_for_qval(q, s)
+
+
+    @DistributedObj.for_each_argument
+    def interpolate_vmap_for_qvals(self, qvals, scales, vmap, cache=False):
+        if cache:
+            self.cache.append((qvals, scales, vmap))
         self.vmap.values = vmap
         for q, s in zip(qvals, scales):
             self.interpolate_vmap_for_qval(q, s)
 
 
     def cores_for_rolls(self, rolls):
-        ra, dec = self.locwcs.wcs.crval
-        vcentral = pol_to_vec(*np.deg2rad([ra, dec]).reshape((2, -1)))
+        ra, dec = self.locwcs.all_pix2world([[self.locwcs.wcs.crpix[0], self.locwcs.wcs.crpix[1]],], 0)[0]
 
         q0 = ra_dec_roll_to_quat(*np.array([ra, dec, 0.]).reshape((3, 1)))[0]
 
         lroll = rolls - np.repeat(wcs_roll(self.locwcs, Rotation(q0.as_quat().reshape((-1, 4)))), np.asarray(rolls).size)
         q0 = ra_dec_roll_to_quat(*np.array([np.full(lroll.size, ra, float), np.full(lroll.size, dec, float), np.rad2deg(lroll)]))
-        x, y = np.concatenate([self._get_vmap_edges(q) for q in q0], axis=1)
+        y, x = np.concatenate([self._get_vmap_edges(q) for q in q0], axis=1)
 
         xsize = int(np.max(np.abs(x - self.locwcs.wcs.crpix[1])) + 0.5)
         ysize = int(np.max(np.abs(y - self.locwcs.wcs.crpix[0])) + 0.5)
-        shape = np.asarray(self.locwcs.wcs.crpix, int)[::-1] + [[-xsize, xsize +1], [-ysize, ysize + 1]]
+        shape = np.asarray(self.locwcs.wcs.crpix, int)[::-1].reshape((2, -1)) + [[-xsize, xsize +1], [-ysize, ysize + 1]]
         lsky = self.__class__(self.locwcs, shape=shape, vmap=self.vmap, mpnum=0, barrier=False)
         for qloc in q0:
             lsky.clean_image()
             lsky.interpolate_vmap_for_qval(qloc, 1.)
             yield np.copy(lsky.img)
 
-        """
-        x, y = np.mgrid[-0.45:0.46:0.1, -0.45:0.46:0.1]
-        ra, dec = self.locwcs.all_pix2world(np.array([x.ravel(), y.ravel()]).T + self.locwcs.wcs.crpix, 1).T
-        for r in lroll:
-            q = ra_dec_roll_to_quat(ra, dec, np.full(ra.size, r*180/pi, float))
-            lsky.clean_image()
-            for qv in q:
-                lsky.interpolate_vmap_for_qval(qv, 1./len(q))
-            yield np.copy(lsky.img)
-        """
+
+    @DistributedObj.for_each_process
+    def get_wcs(self):
+        return self.wcs
 
 
     @DistributedObj.for_each_argument
-    def convolve_with_core(self, qvals, scales, core):
-        tmpimg = np.zeros((self.img.shape), float)
+    def convolve_with_core(self, qvals, scales, core, cache=False):
+        #tmpimg = np.zeros((self.img.shape), float)
         radec = np.rad2deg(vec_to_pol(qvals.apply([1, 0, 0])))
         xy = self.locwcs.all_world2pix(radec.T, 0).T
-        #print("in conv", len(qvals), radec.shape, xy.shape, current_process(), tmpimg.shape)
-        xy = (xy[:, np.newaxis, :] + self.subres[:, :, np.newaxis]).astype(int).reshape((2, -1))
-        #print(xy.shape)
-        np.add.at(tmpimg, (xy[1], xy[0]), np.repeat(scales/self.subres.size*2, self.subres.size//2))
-        self.img += convolve(tmpimg, core, mode="same")
+        xy = (xy[:, np.newaxis, :] + self.subres[:, :, np.newaxis] + 0.5).astype(int).reshape((2, -1))
+        il, ih, jl, jh = xy[1].min(), xy[1].max(), xy[0].min(), xy[0].max()
+        il, ih = max(il - core.shape[0]//2, 0), min(ih + core.shape[0]//2 + 1, self.img.shape[0])
+        jl, jh = max(jl - core.shape[1]//2, 0), min(jh + core.shape[1]//2 + 1, self.img.shape[1])
+        tmpimg = np.zeros((ih - il, jh - jl), float)
+        #np.add.at(tmpimg, (xy[1], xy[0]), np.repeat(scales/self.subres.size*2, self.subres.size//2))
+        np.add.at(tmpimg, (xy[1] - il, xy[0] - jl), np.repeat(scales/self.subres.size*2, self.subres.size//2))
+        #self.img += convolve(tmpimg, core, mode="same")
+        self.img[il:ih, jl:jh] += convolve(tmpimg, core, mode="same")
 
     def fft_convolve(self, qvals, scales):
         list(self.clean_image())
@@ -231,10 +244,6 @@ class SkyImage(DistributedObj):
     def fft_convolve_multiple(self, data, total=np.inf):
         list(self.clean_image())
         def local_cores_and_rolls(data, sky):
-            """
-            xsh, ysh = np.mgrid[-0.45:0.46:0.1, -0.45:0.46:0.1] + np.random.uniform(-0.05, 0.05, (10, 10))
-            qsh = wcs_qoffset(self.locwcs, xsh.ravel(), ysh.ravel())
-            """
             for qloc, sloc, cloc in data:
                 rolls = wcs_roll(sky.locwcs, qloc)
                 sky.vmap.values = cloc
@@ -242,11 +251,6 @@ class SkyImage(DistributedObj):
 
                 lcores = sky.cores_for_rolls((urolls + 0.5)/360.*pi)
                 for k, core in enumerate(lcores):
-                    """
-                    ql = qloc[k == uiidx]
-                    ql = Rotation(np.tile(qsh.as_quat(), (len(ql), 1)))*Rotation(np.repeat(ql.as_quat(), len(qsh), axis=0))
-                    yield ql, np.repeat(sloc[k == uiidx], len(qsh))/100., core
-                    """
                     yield qloc[k == uiidx], sloc[k == uiidx], core
 
         for _ in tqdm.tqdm(self.convolve_with_core(local_cores_and_rolls(data, self)), total=total):
