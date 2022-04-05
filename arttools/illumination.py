@@ -9,7 +9,7 @@ from .time import emptyGTI, GTI
 from .telescope import URDNS
 from .psf import get_ipsf_interpolation_func, unpack_inverse_psf_specweighted_ayut, rawxy_to_opaxoffset, unpack_inverse_psf_with_weights
 from .mosaic2 import SkyImage
-from .atthist import make_small_steps_quats, make_wcs_steps_quats
+from .atthist import make_small_steps_quats, make_wcs_steps_quats, hist_orientation_for_attdata
 from copy import copy
 from math import pi, sin, cos
 from functools import reduce
@@ -120,7 +120,6 @@ class IlluminationSource(object):
         opaxvecs = quats.apply(opax)
         self.qalign = make_align_quat(np.tile(self.sourcevector, (opaxvecs.shape[0], 1)), opaxvecs)
         angles = -np.sum(self.sourcevector*opaxvecs, axis=-1)
-        print(angles)
         offedges = -np.array([np.cos(self.offsets["OPAXOFFL"]*pi/180./3600.), np.cos(self.offsets["OPAXOFFH"]*pi/180./3600.)]).T
         self.sidx = np.argsort(angles)
         #self.cedges = np.maximum(np.searchsorted(angles[self.sidx], offedges) - 1, 0)
@@ -157,7 +156,10 @@ class IlluminationSource(object):
 
     def mask_vecs_with_setup(self, pvecs, qinitrot=None, mpnum=MPNUM, opax=None):
         pool = Pool(mpnum, initializer=self.setup_initializer, initargs=(self, qinitrot))
-        return np.array(pool.map(self.get_mask_for_vector_with_setup, pvecs))
+        res = []
+        for m in tqdm.tqdm(pool.imap(self.get_mask_for_vector_with_setup, pvecs), total=pvecs.shape[0]):
+            res.append(m)
+        return np.array(res)
 
     def mask_vecs_with_setup2(self, pvecs, qinitrot=None, mpnum=MPNUM, opax=None):
         pool = ThreadPool(mpnum)
@@ -215,6 +217,8 @@ class DataDistributer(object):
         self.size = max(self.size, i.size)
 
     def get_size(self):
+        if len(self.it) == 0:
+            return 0
         ijt = np.array([np.concatenate(ar) for ar in [self.it, self.jt]])
         m = np.concatenate([np.any(m, axis=1) for m in self.maskt])
         iju, iidx = np.unique(ijt, axis=1, return_inverse=True)
@@ -225,7 +229,10 @@ class DataDistributer(object):
     def __iter__(self):
         if self.stack_pixels:
             ipsffunc = self.ipsffuncs[0]
-            ijt = np.array([np.concatenate(ar) for ar in [self.it, self.jt]])
+            if len(self.it) > 0:
+                ijt = np.array([np.concatenate(ar) for ar in [self.it, self.jt]])
+            else:
+                ijt = np.empty((2, 0), float)
             iju, uidx = np.unique(ijt, axis=1, return_inverse=True)
             self.size = iju.shape[1]
             cshift = np.repeat(np.cumsum([0, ] + [i.size for i in self.it[:-1]]), [i.size for i in self.it])
@@ -280,12 +287,13 @@ class IlluminationSources(object):
             mask = np.logical_or(mask, source.get_vectors_in_illumination_mask(quats, pvecs, opax, None if not qalignlist else qalignlist[i]))
         return mask
 
-    def prepare_data_for_computation(self, wcs, attdata, imgfilters, urdweights={}, dtcorr={}, psfweightfunc=None, mpnum=10, **kwargs):
+    def prepare_data_for_computation(self, wcs, attdata, imgfilters, urdweights={}, dtcorr={}, psfweightfunc=None, histattdata=False, mpnum=10, **kwargs):
         filts = list(imgfilters.values())
         matchpsf = all([(filts[0]["ENERGY"] == f["ENERGY"]) & (filts[0]["GRADE"] == f["GRADE"]) for f in filts[:]])
         data = DataDistributer(matchpsf)
 
         for urdn in imgfilters:
+            print("setup %d urdn illumination" % urdn)
             if psfweightfunc is None:
                 ipsffunc = unpack_inverse_psf_specweighted_ayut(imgfilters[urdn].filters, **kwargs)
             else:
@@ -298,9 +306,13 @@ class IlluminationSources(object):
             print("nonfiltered and filtered exposures", gti.exposure, lgti.exposure)
             if lgti.exposure == 0:
                 continue
-            ts, qval, dtq, locgti = make_wcs_steps_quats(wcs, attdata*get_boresight_by_device(urdn), gti=lgti, timecorrection=dtcorr.get(urdn, lambda x: np.ones(x.size)))
+            if histattdata:
+                dtq, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urdn), lgti, wcs=wcs, timecorrection=dtcorr.get(urdn, lambda x: np.ones(x.size)))
+            else:
+                ts, qval, dtq, locgti = make_wcs_steps_quats(wcs, attdata*get_boresight_by_device(urdn), gti=lgti, timecorrection=dtcorr.get(urdn, lambda x: np.ones(x.size)))
             dtq = dtq*urdweights.get(urdn, 1./7.)
             for source in self.sources:
+                print("computing illumination masks over pixels")
                 source.setup_for_quats(qval, opax)
 
             shmask = imgfilters[urdn].meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
@@ -320,12 +332,26 @@ class IlluminationSources(object):
         vmap = get_ipsf_interpolation_func()
         sky = SkyImage(wcs, vmap, mpnum=mpnum)
         list(sky.clean_image())
-        data = self.prepare_data_for_computation(wcs, attdata, imgfilters, urdweights=urdweights, dtcorr=dtcorr, psfweightfunc=psfweightfunc, mpnum=mpnum, **kwargs)
 
+        print("put illuminated pixels on sky")
         if kind == "direct":
+            data = self.prepare_data_for_computation(wcs, attdata, imgfilters, urdweights=urdweights, dtcorr=dtcorr, psfweightfunc=psfweightfunc, mpnum=mpnum, **kwargs)
             sky.rmap_convolve_multicore(data, total=data.get_size())
         elif kind == "fft_convolve":
-            sky.fft_convolve_multiple(data, total=data.get_size())
+            gparkinds = attdata.get_axis_movement_speed_gti(lambda x: x < pi/180.*5./3600.) # select all parkind and compute with interpolations there
+            pgti = {urdn: imgfilters[urdn]["TIME"] & gparkinds for urdn in imgfilters}
+            mgti = {urdn: imgfilters[urdn]["TIME"] & ~gparkinds for urdn in imgfilters}
+            for urdn in imgfilters:
+                imgfilters[urdn]["TIME"] = pgti[urdn]
+            print("compute parking with interpolations, overall exposure:", reduce(lambda a, b: a | b, pgti.values()).exposure)
+            data = self.prepare_data_for_computation(wcs, attdata, imgfilters, urdweights=urdweights, dtcorr=dtcorr, psfweightfunc=psfweightfunc, histattdata=True, mpnum=mpnum, **kwargs)
+            if data.get_size() > 0:
+                sky.rmap_convolve_multicore(data, total=data.get_size())
+            for urdn in imgfilters:
+                imgfilters[urdn]["TIME"] = mgti[urdn]
+            data = self.prepare_data_for_computation(wcs, attdata, imgfilters, urdweights=urdweights, dtcorr=dtcorr, psfweightfunc=psfweightfunc, mpnum=mpnum, **kwargs)
+            if data.get_size() > 0:
+                sky.fft_convolve_multiple(data, total=data.get_size())
         return sky.img
 
 def get_illumination_gtis(att, brightsourcevec, urdgti=None):

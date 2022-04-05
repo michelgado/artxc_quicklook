@@ -86,7 +86,7 @@ class GTI(Intervals):
 tGTI = GTI([-np.inf, np.inf])
 emptyGTI = GTI(np.empty((0, 2)))
 
-def get_gti(ffile, gtiextname="GTI", excludebki=True, merge_interval_dt=None):
+def get_gti(ffile, gtiextname="GTI", excludebki=True, merge_interval_dt=None, usehkgti=True):
     if not gtiextname is None:
         try:
             gti = GTI(np.array([ffile[gtiextname].data["START"], ffile[gtiextname].data["STOP"]]).T)
@@ -108,7 +108,8 @@ def get_gti(ffile, gtiextname="GTI", excludebki=True, merge_interval_dt=None):
         garr[:-1, 1] += 7./crate[:-1]
         gti = GTI(garr)
 
-    gti = gti & make_hv_gti(ffile["HK"].data)
+    if usehkgti:
+        gti = gti & make_hv_gti(ffile["HK"].data)
     if excludebki:
         gti = gti & ~make_bki_gti(ffile)
     return gti

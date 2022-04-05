@@ -1,4 +1,5 @@
 from scipy.interpolate import interp1d
+from .containers import Urddata
 import numpy as np
 
 GRADESI = np.ones(256)*(-1)
@@ -130,7 +131,7 @@ def get_events_energy(eventlist, hkdata, caldb, set_central_strip_triggered=True
 
 def add_energies_and_grades(udata, hkdata, caldb):
     e, x, y, g = get_events_energy(udata, hkdata, caldb)
-    return np.lib.recfunctions.append_fields(udata, ["ENERGY", "GRADE"], [e, g], usemask=False)
+    return Urddata(np.lib.recfunctions.append_fields(udata.data, ["ENERGY", "GRADE"], [e, g], usemask=False), udata.urdn, udata.filters)
 
 def get_arf_energy_function(arf):
     ec = (arf[1].data["ENERG_LO"] + arf[1].data["ENERG_HI"])/2.

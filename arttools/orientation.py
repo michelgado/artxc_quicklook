@@ -5,6 +5,7 @@ from ._det_spatial import urd_to_vec, F, DL
 from .time import get_hdu_times, GTI, tGTI, emptyGTI
 from .vector import vec_to_pol, pol_to_vec, normalize
 from .caldb import T0, get_boresight_by_device, get_device_timeshift, relativistic_corrections_gti, MJDREF
+from .containers import Urddata
 from .mask import edges as medges
 from functools import reduce, lru_cache
 from scipy.optimize import minimize
@@ -291,20 +292,23 @@ class AttDATA(SlerpWithNaiveIndexing):
 
 
 cache_function = {np.ndarray: lambda x: x.tobytes(),
+                  Urddata: lambda x: (x.urdn, x.size, x.filters.hash()),
                   fits.FITS_rec: lambda x: x.tobytes(),
                   AttDATA: lambda x: (x.times.tobytes(), x.gti.arr.tobytes(), x.rotations.as_rotvec().tobytes())}
 
 def _urddata_lru_cache(function):
     cache = {}
     def newfunction(*args, **kwargs):
-        lhash = hash(tuple(cache_function.get(type(x), lambda x: x)(x) for x in args) + \
-                     tuple(cache_function.get(type(x), lambda x: x)(x) for x in kwargs.values()))
-        if len(cache) <= 21: #typical size of different urddata subsets used in a single data reduction
-            if not lhash in cache:
-                cache[lhash] = function(*args, **kwargs)
-            return cache.get(lhash)
-        else:
+        try:
+            lhash = hash(tuple(cache_function.get(type(x), lambda x: x)(x) for x in args) + \
+                        tuple(cache_function.get(type(x), lambda x: x)(x) for x in kwargs.values()))
+        except:
             return function(*args, **kwargs)
+        else:
+            if len(cache) <= 21: #typical size of different urddata subsets used in a single data reduction
+                if not lhash in cache:
+                    cache[lhash] = function(*args, **kwargs)
+                return cache.get(lhash)
     return newfunction
 
 
@@ -444,12 +448,12 @@ def get_raw_bokz(bokzhdu):
     jyear = get_hdu_times(bokzhdu).jyear[mask]
     return bokzdata["TIME"][mask], earth_precession_quat(jyear).inv()*qbokz
 
-@_urddata_lru_cache
+#@_urddata_lru_cache
 def get_events_quats(urddata, URDN, attdata):
     return attdata(urddata["TIME"])*get_boresight_by_device(URDN)
 
 
-@_urddata_lru_cache
+#@_urddata_lru_cache
 def make_align_quat(ax1, ax2, zeroax=np.array([-1, 0, 0]), north=np.array([0, 0, 1])):
     """
     this function provides with the quat which alignes inpute vector ax1 with zeroax
@@ -472,7 +476,7 @@ def make_align_quat(ax1, ax2, zeroax=np.array([-1, 0, 0]), north=np.array([0, 0,
     return q2*q1
 
 
-@_urddata_lru_cache
+#@_urddata_lru_cache
 def get_photons_vectors(urddata, URDN, attdata, subscale=1, randomize=False):
     """
     return cartesian vectros, defining direction to the sky, for the specific pixel, defined with urddata rawx, rawy coordinates
@@ -498,7 +502,7 @@ def add_ra_dec(urddata, urdn, attdata):
     return np.lib.recfunctions.append_fields(udata, ["RA", "DEC"], [ra, dec], usemask=False)
 
 
-@_urddata_lru_cache
+#@_urddata_lru_cache
 def get_photons_sky_coord(urddata, URDN, attdata, subscale=1, randomize=False):
     """
     converts eventlist event pixel information in to the ra and dec spherical coordinates of fk5 system
@@ -885,7 +889,7 @@ def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
     msimplecase = np.logical_and(maskoutofapp, ~maskallinsideapp) #maskoutofapp | ~maskallinsideapp
     cosa, cosb, rmod, rvec, a0 = [arr[msimplecase] for arr in (cosa, cosb, rmod, rvec, a0)]
     sinbsq = 1 - cosb**2
-    print("simple cases (all in or all out", msimplecase.size, msimplecase.sum())
+    #print("simple cases (all in or all out", msimplecase.size, msimplecase.sum())
 
     """
     iam interesting about the angles, between the sphere, described by the rotaion of offvec vector around rotvec
@@ -930,7 +934,7 @@ def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
     t3 = slerp.times[:-1][m2] + slerp.timedelta[m2]*np.minimum(phi1 + dphi, rmod)/rmod
     g1 = GTI(np.array([slerp.times[:-1][m2], t1]).T)
     g2 = GTI(np.array([t2, t3]).T)
-    print("gtis", g1.exposure, g2.exposure, gtiallin.exposure)
+    #print("gtis", g1.exposure, g2.exposure, gtiallin.exposure)
     gti = GTI(np.array([slerp.times[:-1][m2], t1]).T) | GTI(np.array([t2, t3]).T) | gtiallin
     gti.merge_joint()
 

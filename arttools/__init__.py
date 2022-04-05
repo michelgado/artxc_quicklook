@@ -4,7 +4,6 @@ from . import mask
 from . import expmap
 from . import process
 from . import aux
-from . import datafilters
 from . import filters
 from . import psf
 from . import sensitivity

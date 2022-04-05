@@ -12,7 +12,7 @@ from .vector import vec_to_pol
 from .lightcurve import make_overall_lc, weigt_time_intervals
 from .vignetting import load_raw_wignetting_function
 from .filters import IndependentFilters, RationalSet, get_shadowmask_filter, InversedRationalSet
-from .interval import Intervals
+from .filters import Intervals
 from astropy.io import fits
 from math import pi, cos, sin
 from multiprocessing import Pool, cpu_count, Queue, Process, Pipe

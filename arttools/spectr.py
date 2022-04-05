@@ -1,5 +1,5 @@
 from .caldb import get_crabspec, get_telescope_crabrates, get_crabspec_for_filters, get_arf, get_optical_axis_offset_by_device
-from .interval import Intervals
+from .filters import Intervals
 from .energy  import get_arf_energy_function
 from scipy.integrate import quad
 
@@ -55,6 +55,12 @@ def get_specweights(imgfilter, ebins=np.array([-np.inf, np.inf]), cspec=None):
         cspec = cspec.sum()
         np.add.at(w, np.searchsorted(ebins, ec) - 1, cspec)
     return w
+
+def get_spec_filters_ratios(cspec, imgfilter1, imgfilter2):
+    arf = get_arf_energy_function(get_arf())
+    rate1 = sum(quad(lambda e: arf(e)*cspec(e), elow, ehi)[0] for elow, ehi in imgfilter1.filter["ENERGY"].arr)
+    rate2 = sum(quad(lambda e: arf(e)*cspec(e), elow, ehi)[0] for elow, ehi in imgfilter2.filter["ENERGY"].arr)
+    return rate1/rate2
 
 def get_crabrate(imgfilters):
     grid, datacube = get_crabspec()

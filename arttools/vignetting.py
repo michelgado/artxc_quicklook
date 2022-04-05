@@ -6,7 +6,7 @@ from .energy  import get_arf_energy_function
 from ._det_spatial import offset_to_raw_xy, DL, F, raw_xy_to_offset, \
     offset_to_vec, vec_to_offset_pairs, vec_to_offset, rawxy_to_qcorr
 from .telescope import URDNS
-from .interval import Intervals
+from .filters import Intervals
 from .caldb import get_boresight_by_device, get_optical_axis_offset_by_device
 from .psf import xy_to_opaxoffset, unpack_inverse_psf_ayut
 from .spectr import get_specweights
@@ -76,7 +76,7 @@ def make_vignetting_for_urdn(urdn, imgfilter, cspec=None, app=None):
 
     x, y = np.mgrid[0:48:1, 0:48:1]
     #shmask = imgfilter.apply(np.column_stack([y.ravel(), x.ravel()]).ravel().view([("RAW_X", np.int), ("RAW_Y", np.int)])).reshape(x.shape)
-    shmask = imgfilter.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
+    shmask = imgfilter.filters.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
     x0, y0 = get_optical_axis_offset_by_device(urdn)
 
     x, y = np.mgrid[0:48:1, 0:48:1]
@@ -85,7 +85,7 @@ def make_vignetting_for_urdn(urdn, imgfilter, cspec=None, app=None):
 
 
     ee = np.array([4., 6., 8., 10., 12., 16., 20., 24., 30.])
-    w = get_specweights(imgfilter.filter, ee, cspec)
+    w = get_specweights(imgfilter.filters, ee, cspec)
 
 
     if app is None:
@@ -156,7 +156,7 @@ def make_overall_vignetting(imgfilters, subgrid=10, urdweights={}, **kwargs):
     vecs = offset_to_vec(np.ravel(x), np.ravel(y))
 
     for urdn in URDNS:
-        vmap = make_vignetting_for_urdn(urdn, imgfilters[urdn].filter, **kwargs)
+        vmap = make_vignetting_for_urdn(urdn, imgfilters[urdn].filters, **kwargs)
         quat = get_boresight_by_device(urdn)
         newvmap += vmap(vec_to_offset_pairs(quat.apply(vecs, inverse=True))).reshape(shape)*urdweights.get(urdn, 1.)
 
