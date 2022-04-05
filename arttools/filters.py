@@ -4,7 +4,6 @@ from astropy.io import fits
 from astropy.table import Table
 from .caldb import get_shadowmask_by_urd
 from .telescope import URDNS
-from .interval import Intervals
 
 
 """
@@ -113,6 +112,9 @@ class Intervals(object):
     @property
     def size(self):
         return self.arr.size
+
+    def hash(self):
+        return self.arr.tobytes()
 
 
     @property
@@ -370,6 +372,9 @@ class RationalSet(set):
     def get_empty(cls):
         return cls([])
 
+    def hash(self):
+        return np.asarray(self).tobytes()
+
 
 class InversedRationalSet(set):
     def apply(self, vals):
@@ -405,6 +410,9 @@ class InversedRationalSet(set):
     @property
     def size(self):
         return len(self.vol) - len(self) #its hard to define size for inversed rational set, by default it can be considered inf
+
+    def hash(self):
+        return np.asarray(self).tobytes()
 
 
 #======================================================================================================================
@@ -458,16 +466,16 @@ class InversedIndexMask(OrderedDict):
 
 
     def __or__(self, other):
-        print("ok")
+        #print("ok")
         if type(other) == type(self):
-            print("class ok")
+            #print("class ok")
             if self.mask.shape != other.mask.shape:
                 raise ValueError("incompatible masks")
             if not all([key in other for key in self]) or not all([key in self for key in other]):
                 raise ValueError("imcompatible fields")
             swaporder = [list(other.keys()).index(k) for k in self]
             mc = np.copy(other.mask)
-            print(swaporder)
+            #print(swaporder)
             for i in range(len(swaporder)):
                 if swaporder[i] == i:
                     continue
@@ -494,6 +502,10 @@ class InversedIndexMask(OrderedDict):
         h = {"FIELDS": " ".join(self)}
         fits.ImageHDU(data=mask.astype(np.unit8), header=h)
 
+    def hash(self):
+        return np.asarray(self.mask).tobytes()
+
+
 INDEXMAPS = {"INTMAP": strightindex}
 
 #======================================================================================================================
@@ -515,14 +527,16 @@ class IndependentFilters(dict):
         return the striktest possible filter, containing conditions from both independent filters set
         """
         allfields = set(list(self.keys()) + list(other.keys()))
-        return IndependentFilters({k: self[k] & other[k] if (k in self and k in other) else self.get(k, other[k]) for k in allfields})
+        #print(allfields, list(self.keys()), list(other.keys()))
+        #print("check keys", {k: (k in self and k in other) for k in allfields})
+        return IndependentFilters({k: self[k] & other[k] if (k in self and k in other) else self.get(k, other.get(k, None)) for k in allfields})
 
     def __or__(self, other):
         commonfields = set(self.keys()).intersection(set(other.keys()))
         return IndependentFilters({k: self[k] | other[k]  for k in commonfields})
 
     @property
-    def filter(self):
+    def filters(self):
         """
         the idea behind this method is to use urddata containers instead of the separate filters
         this approach protect against error, arising due to inconsistent data selection and produced products
@@ -587,6 +601,9 @@ class IndependentFilters(dict):
         TODO: decide and implement on the format to write and read filters in fits compatible format
         """
         return cls({})
+
+    def hash(self):
+        return tuple((key, f.hash()) for key, f in self.items())
 
 
 #======================================================================================================================

@@ -73,7 +73,7 @@ def make_expmap_for_wcs(wcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dtcor
     2) wcs is expected to be astropy.wcs.WCS class,
         crpix is expected to be exactly the central pixel of the image
     """
-    urdgtis = {urdn: f.filter["TIME"] for urdn, f in imgfilters.items()}
+    urdgtis = {urdn: f.filters["TIME"] for urdn, f in imgfilters.items()}
 
     if shape is None:
         ysize, xsize = int(wcs.wcs.crpix[0]*2 + 1), int(wcs.wcs.crpix[1]*2 + 1)
@@ -111,7 +111,7 @@ def make_expmap_for_wcs(wcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dtcor
         print("urd %d, exposure %.1f, progress:" % (urdn, gti.exposure))
         exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urdn), gti, \
                                                              timecorrection=dtcorr.get(urdn, lambda x: 1), wcs=wcs)
-        vmap = make_vignetting_for_urdn(urdn, imgfilters[urdn].filter, **kwargs)
+        vmap = make_vignetting_for_urdn(urdn, imgfilters[urdn].filters, **kwargs)
         sky.set_vmap(vmap)
         if kind == "direct":
             sky.direct_convolve(qval, exptime*urdweights.get(urdn, 1.))
@@ -124,7 +124,7 @@ def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNU
     """
     estimate exposure within timebins te, for specified directions
     """
-    urdgtis = {urdn: f.filter["TIME"] for urdn, f in urdfilters.items()}
+    urdgtis = {urdn: f.filters["TIME"] for urdn, f in urdfilters.items()}
 
     tec, mgaps, se, scalefunc, cumscalefunc = weigt_time_intervals(urdgtis)
     gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
@@ -145,7 +145,7 @@ def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNU
         tcc = (teu[1:] + teu[:-1])/2.
         tc = tcc[gaps]
         qlist = attdata(tc)*get_boresight_by_device(urdn)
-        vmap = make_vignetting_for_urdn(urdn, urdfilters[urdn].filter, **kwargs)
+        vmap = make_vignetting_for_urdn(urdn, urdfilters[urdn].filters, **kwargs)
         dtc = dtcorr.get(urdn, lambda x: 1.)(tc)
         vval = vmap(vec_to_offset_pairs(qlist.apply(direction, inverse=True)))*urdweights.get(urdn, 1.)*dtc
         idx = np.searchsorted(te, tc) - 1
@@ -155,7 +155,7 @@ def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNU
     return te, dtn
 
 def make_exposures_for_app(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNUM, dtcorr={}, app=None, illum_filters=None, **kwargs):
-    urdgtis = {urdn: f.filter["TIME"] for urdn, f in urdfilters.items()}
+    urdgtis = {urdn: f.filters["TIME"] for urdn, f in urdfilters.items()}
     tec, mgaps, se, scalefunc, cumscalefunc = weigt_time_intervals(urdgtis)
     ipsffun = get_ipsf_interpolation_func()
     gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
@@ -178,7 +178,7 @@ def make_exposures_for_app(direction, te, attdata, urdfilters, urdweights={}, mp
         tcc = (teu[1:] + teu[:-1])/2.
         tc = tcc[gaps]
         qlist = attdata(tc)*get_boresight_by_device(urdn)
-        vmap = make_vignetting_for_urdn(urdn, urdfilters[urdn].filter, app=app, **kwargs)
+        vmap = make_vignetting_for_urdn(urdn, urdfilters[urdn].filters, app=app, **kwargs)
         dtc = dtu*dtcorr.get(urdn, lambda x: 1.)(tc)*urdweights.get(urdn, 1.)
         vval = vmap(vec_to_offset_pairs(qlist.apply(direction, inverse=True)))*dtc
         idx = np.searchsorted(te, tc) - 1
@@ -186,8 +186,8 @@ def make_exposures_for_app(direction, te, attdata, urdfilters, urdweights={}, mp
         np.add.at(dtn, idx[mloc], vval[mloc])
         if not illum_filters is None:
             #pool = ThreadPool(mpnum)
-            ipsff = unpack_inverse_psf_specweighted_ayut(urdfilters[urdn].filter, **kwargs)
-            shmask = urdfilters[urdn].filter.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
+            ipsff = unpack_inverse_psf_specweighted_ayut(urdfilters[urdn].filters, **kwargs)
+            shmask = urdfilters[urdn].filters.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
             xloc, yloc = x[shmask], y[shmask]
             vec = raw_xy_to_vec(xloc, yloc)
             opax = raw_xy_to_vec(*np.array(get_optical_axis_offset_by_device(urdn)).reshape((2, 1)))[0]
