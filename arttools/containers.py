@@ -5,20 +5,14 @@ from functools import reduce
 from .filters import IndependentFilters, Intervals
 from .time import get_gti, make_hv_gti
 
-class Urddata(np.ndarray):
-    """
-    container for the urddata, which includes filter
-    """
-    def __new__(cls, inputarr, filters=IndependentFilters({}), urdn=None):
-        if urdn != None:
-            print("initialize as container")
-            obj = np.asarray(inputarr).view(cls)
-            obj.filters = filters
-            obj.urdn = urdn
-            return obj
-        else:
-            print("intialize as array")
-            return np.asarray(inputarr).view(np.ndarray)
+class Urddata(object):
+    def __init__(self, data, urdn, filters):
+        self.data = data
+        self.urdn = urdn
+        self.filters = filters
+
+    def __getitem__(self, args):
+        return self.data[args]
 
     @classmethod
     def read(cls, fitsfile):
@@ -26,26 +20,23 @@ class Urddata(np.ndarray):
         d = Table(fitsfile["EVENTS"].data).as_array()
         filters = IndependentFilters.from_fits(fitsfile)
         filters["TIME"] = get_gti(fitsfile, usehkgti=False, excludebki=True)
-        return cls(d, filters, urdn)
+        return cls(d, urdn, filters)
+
+    @property
+    def dtype(self):
+        return self.data.dtype
+
+    @property
+    def size(self):
+        return self.data.size
 
     def apply_filters(self, filters):
         """
         apply new filter to data
         """
         cfilter = self.filters & filters
-        return self.__class__(self[cfilter.apply(self)], cfilter, self.urdn)
+        return self.__class__(self[cfilter.apply(self)], self.urdn, cfilter)
 
-    """
-    def __add__(self, other):
-        if self.urdn != other.urdn:
-            raise ValueError("can't concatenate data from different urdns")
-        cfilter = self.filter & other.filter
-        if cfilter.volume > 0.:
-            raise ValueError("intersecting sets of data" + " ".join([":".join(str(k), str(f)) for k, f in cfilter.items() if f.size > 0]))
-
-        d = np.concatenate([self[cfilter.apply(self)], other[cfilter.apply(other)]])
-        return self.__class__(d, cfilter, self.urdn)
-    """
 
     @classmethod
     def concatenate(cls, urddlist):
@@ -55,18 +46,14 @@ class Urddata(np.ndarray):
         if cfilter.volume != sum([d.filters.volume for d in urddlist]):
             raise ValueError("inversecting data sets")
 
-        d = np.concatenate([d for d in urddlist])
-        return cls(d[np.argsort(d["TIME"])], cfilter, urddlist[0].urdn)
+        d = np.concatenate([d.data for d in urddlist])
+        return cls(d[np.argsort(d["TIME"])], urddlist[0].urdn, cfilter)
 
     def _to_hdulist(self):
         """
         provide method to produce hdulist here
         """
         pass
-
-    def __array_finalize__(self, obj):
-        if obj is None: return
-        self = self.view(np.ndarray)
 
 def read_urdfiles(urdflist, filterslist={}):
     urddata = {}
