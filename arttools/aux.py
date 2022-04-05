@@ -80,13 +80,14 @@ class DistributedObj(object):
 
     @staticmethod
     def for_each_process(method):
-        def mpmethod(self, *args, apply_to_main=False, **kwargs):
+        def mpmethod(self, *args, apply_to_main=False, join=False, **kwargs):
             if self._pool is None:
                 return method(self, *args, **kwargs)
             else:
                 if apply_to_main:
                     method(self, *args, **kwargs)
-                return self._pool.imap_unordered(self.perform_for_each_proccess, repeat((args, method.__name__, kwargs), self._pool._processes))
+                imap = self._pool.imap_unordered(self.perform_for_each_proccess, repeat((args, method.__name__, kwargs), self._pool._processes))
+                return imap if not join else [res for res in tqdm(imap, total=self._pool._processes)]
         return mpmethod
 
 
@@ -113,13 +114,19 @@ def for_each_process(method):
     def mpmethod(self, *args, runmain=False, **kwargs):
         if runmain:
             method(self, *args, **kwargs)
-        self._barrier.reset()
-        return self._pool.imap_unordered(perform_over_localcopy_barrier, repeat((args, method.__name__, kwargs), self._pool._processes))
+        if self._barrier:
+            self._barrier.reset()
+            return self._pool.imap_unordered(perform_over_localcopy_barrier, repeat((args, method.__name__, kwargs), self._pool._processes))
+        else:
+            return method(self, *args, **kwargs)
     return mpmethod
 
 def for_each_argument(method):
-    def mpmethod(self, itargs, **kwargs):
-        return self._pool.imap_unordered(perform_over_localcopy, zip(itargs, repeat(method.__name__), repeat(kwargs)))
+    def mpmethod(self, itargs, *args, **kwargs):
+        if self._barrier:
+            return self._pool.imap_unordered(perform_over_localcopy, zip(itargs, repeat(method.__name__), repeat(kwargs)))
+        else:
+            return method(self, itargs, *args, **kwargs)
     return mpmethod
 
 
@@ -131,8 +138,11 @@ class MPdistributed(type):
             mpnum = kwargs.pop("mpnum")
             th = Thread(target = clsinit, args=args, kwargs=kwargs)
             th.start()
-            args[0]._barrier = Barrier(mpnum)
-            args[0]._pool = Pool(mpnum, initializer=init_local_object, initargs=(localcls, args[0]._barrier, args[1:], kwargs))
+            if mpnum > 0:
+                args[0]._barrier = Barrier(mpnum)
+                args[0]._pool = Pool(mpnum, initializer=init_local_object, initargs=(localcls, args[0]._barrier, args[1:], kwargs))
+            else:
+                args[0]._barrier = False
             th.join()
         attributeddict["__init__"] = newinit
         for method in attributeddict["apply_for_each_process"]:
