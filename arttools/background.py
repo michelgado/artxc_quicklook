@@ -8,7 +8,7 @@ from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from ._det_spatial import DL, dxya, offset_to_vec, vec_to_offset, vec_to_offset_pairs, raw_xy_to_vec, vec_to_offset_pairs
 from .psf import get_pix_overall_countrate_constbkg_ayut, select_psf_grups, urddata_to_opaxoffset
 from .lightcurve import make_overall_lc, Bkgrate
-from .mosaic import SkyImage
+from .mosaic2 import SkyImage
 from .telescope import URDNS
 from functools import reduce
 from multiprocessing import cpu_count
@@ -21,11 +21,11 @@ from math import pi, sin, cos, sqrt
 
 MPNUM = cpu_count()
 
-def make_background_det_map_for_urdn(urdn, imgfilter):
+def make_background_det_map_for_urdn(urdn, imgfilter=None):
     """
     for specified urdn and eventfilter provides RegularGridInterpolator of backgroud profile
     """
-    bkgprofile = get_background_surface_brigtnress(urdn, imgfilter, normalize=True, fill_value=0.) #get_backprofile_by_urdn(urdn)
+    bkgprofile = np.ones((48, 48), np.double)/48.**2. if imgfilter is None else get_background_surface_brigtnress(urdn, imgfilter, normalize=True, fill_value=0.)
     bkgmap = RegularGridInterpolator(((np.arange(-24, 24) + 0.5)*DL,
                                       (np.arange(-24, 24) + 0.5)*DL),
                                         bkgprofile,
@@ -65,7 +65,7 @@ def make_overall_background_map(subgrid=10, useshadowmask=True):
     bkgmap = RegularGridInterpolator((x[:, 0], y[0]), newvmap, bounds_error=False, fill_value=0)
     return bkgmap
 
-def make_bkgmap_for_wcs(wcs, attdata, urdgtis, urdbkg, imgfilters, shape=None, illuminations=None, mpnum=MPNUM, time_corr={}, kind="stright"):
+def make_bkgmap_for_wcs(wcs, attdata, urdbkg, imgfilters, shape=None, illuminations=None, mpnum=MPNUM, time_corr={}, kind="direct"):
     """
     produce background map on the provided wcs area, with provided GTI and attitude data
 
@@ -80,39 +80,30 @@ def make_bkgmap_for_wcs(wcs, attdata, urdgtis, urdbkg, imgfilters, shape=None, i
     parameters:
         wcs - astropy.wcs.WCS
         attdata - attitude data container defined by arttools.orientation.AttDATA
-        urdgtis - a dict of the form {urdn: arttools.time.GTI ...}
+        urdgtis - a dict of the form {urdn: arttools.time.GTI ...} UPDATE urdgti is now a part of imgfilters, stored in TIME extention
         mpnum - num of the processort to use in multiprocessing computation
         time_corr - a dict containing functions {urdn: urdnbkgrate(time) ...}
         subscale - defined a number of subpixels (under detecto pixels) to interpolate bkgmap
     """
-
-    sky = SkyImage(wcs)
+    bkgmap = make_background_det_map_for_urdn(None)
+    sky = SkyImage(wcs, bkgmap, mpnum=mpnum)
     overall_gti = emptyGTI
-    #X, Y = np.mgrid[0:48:1, 0:48:1]
-    #vecs = raw_xy_to_vec(X.ravel(), Y.ravel())
-    #shape = shape if not shape is None else [(0, int(locwcs.wcs.crpix[1]*2 + 1)), (0, int(locwcs.wcs.crpix[0]*2 + 1))]
-    #imgpool = [np.zeros(shape) for i in range(mpnum)]
 
-    for urdn in urdgtis:
-        gti = urdgtis[urdn] & ~overall_gti
+    for urdn in imgfilters:
+        gti = imgfilters[urdn].filters["TIME"] & ~overall_gti
         if gti.size == 0:
             print("urd %d has no individual gti, continue" % urdn)
             continue
         print("urd %d progress:" % urdn)
-        tc, qval, exptime, ugti = make_wcs_steps_quats(wcs, attdata*get_boresight_by_device(urdn), gti, urdbkg[urdn])
-        #exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urdn), gti, urdbkg[urdn])
-        print("processed exposure", gti.exposure) #, exptime.sum())
+        #tc, qval, exptime, ugti = make_wcs_steps_quats(wcs, attdata*get_boresight_by_device(urdn), gti, urdbkg[urdn])
+        exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urdn), gti, wcs=wcs, timecorrection=urdbkg[urdn])
         bkgprofile = get_background_surface_brigtnress(urdn, imgfilters[urdn], fill_value=0., normalize=True)
-        #shmask = filters.apply(np.column_stack([x.ravel(), y.ravel()]).ravel().view([("RAW_X", np.int), ("RAW_Y", np.int)])).reshape(x.shape)
-        shmask = imgfilters[urdn].meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
         bkgmap = make_background_det_map_for_urdn(urdn, imgfilters[urdn])
-        sky._set_core(bkgmap.grid[0], bkgmap.grid[1], bkgmap.values)
-        #bkg = AttWCSHistmean.make_mp(bkgmap, exptime, qval, wcs, mpnum, subscale=subscale) + bkg
-        #bkg = AttInvHist.make_mp(wcs, bkgmap, exptime, qval,  mpnum) + bkg
+        sky.set_vmap(bkgmap)
         if kind == "direct":
-            sky.interpolate_mp(qval[:], exptime[:], mpnum)
+            sky.direct_convolve(qval, exptime)
         elif kind == "convolve":
-            sky.convolve(qval, exptime, mpnum)
+            sky.fft_convolve(qval, exptime)
         print("done!")
 
     if wcs.wcs.has_cd():
