@@ -61,7 +61,28 @@ def get_top_energy(eventlist, hkdata, caldb, randomize=True):
     maskt = np.logical_and(maskt, energt > topcal["THRESHOLD"][rawy])
     return energt, maskt, sigmat
 
-def get_events_energy(eventlist, hkdata, caldb, set_central_strip_triggered=True):
+
+def get_escale_corr(time, energy, caldb):
+    """
+    The energy scale of the detector evolves gradually over time,
+    the simpliest explonation would be likely a change of Fano factor or detector-asic overall capacity, thus,
+    producing overall linear change in the photon energy - output current ratio,
+    thus, based on the measurements ofb the energy lines positions we produce linear
+    coefficients, to correct energy grid.
+    """
+    emarkers = np.array([59.54, 26.34, 17.477, 13.927, 5.963])
+    elines = interp1d(caldb["TIME"], caldb["LINES"], axis=0, \
+                      bounds_error=False, fill_value=(caldb["LINES"][0], caldb["LINES"][-1]))(time)
+    se = np.sum(emarkers)
+    eds = np.sum(elines, axis=1)
+    edsq = np.sum(elines**2, axis=1)
+    eed = np.sum(elines*emarkers[np.newaxis, :], axis=1)
+    scale = (emarkers.size*eed - se*eds)/(emarkers.size*edsq - eds**2)
+    shift = (se - scale*eds)/emarkers.size
+    return energy*scale + shift
+
+
+def get_events_energy(eventlist, hkdata, caldb, escalecaldb=None, set_central_strip_triggered=True):
     """
     from the captured event, which described with 6 16bit int numbers (left,right,central; top and bot digital amplitudes),
     and 6 double values for voltages and temperatures, using calibration data one have to restore the energy of the photon,
@@ -127,11 +148,19 @@ def get_events_energy(eventlist, hkdata, caldb, set_central_strip_triggered=True
     xc = eventlist["RAW_X"]
     yc = eventlist["RAW_Y"]
     #emean = -0.2504 + 1.0082*emean - 6.10E-5*emean**2.
+    if not escalecaldb is None:
+        emean =get_escale_corr(eventlist["TIME"], emean, escalecaldb)
     return emean, xc, yc, bitmask_to_grade(bitmask)
 
-def add_energies_and_grades(udata, hkdata, caldb):
-    e, x, y, g = get_events_energy(udata, hkdata, caldb)
-    return Urddata(np.lib.recfunctions.append_fields(udata.data, ["ENERGY", "GRADE"], [e, g], usemask=False), udata.urdn, udata.filters)
+def add_energies_and_grades(udata, hkdata, caldb, escalecaldb=None, droppha=False):
+    e, x, y, g = get_events_energy(udata, hkdata, caldb, escalecaldb)
+    d = np.lib.recfunctions.append_fields(udata.data, ["ENERGY", "GRADE"], [e, g], usemask=False)
+    return droppha_data(Urddata(d, udata.urdn, udata.filters)) if droppha else Urddata(d, udata.urdn, udata.filters)
+
+def droppha_data(udata):
+    d = np.lib.recfunctions.drop_fields(d, ["PHA_BOT", "PHA_BOT_SUB1", "PHA_BOT_ADD1", "PHA_TOP", "PHA_TOP_ADD1", "PHA_TOP_SUB1","TIME_F","TIME_I"], usemask=False)
+    return Urddata(d, udata.urdn, udata.filters)
+
 
 def get_arf_energy_function(arf):
     ec = (arf[1].data["ENERG_LO"] + arf[1].data["ENERG_HI"])/2.
