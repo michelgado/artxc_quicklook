@@ -3,6 +3,7 @@ from tqdm import tqdm
 from multiprocessing import Pool, Barrier, current_process
 from threading import Thread
 from itertools import repeat
+import time
 
 def numpy_array_naive_hash(arr):
     return arr.__array_interface__['data'] + arr.strides + (arr.size,) + (arr.dtype,)
@@ -54,6 +55,7 @@ class DistributedObj(object):
             kwargs["barrier"] = self.barrier
             self._pool = Pool(mpnum, initializer=self.initizlie_local_obj, initargs=(kwargs,))
         else:
+            self.trace = {}
             self.barrier = barrier
             self._pool = None
 
@@ -73,14 +75,16 @@ class DistributedObj(object):
     def for_each_argument(method):
         def mpmethod(self, args, *largs, runmain=False, **kwargs):
             if self._pool is None or runmain:
-                return method(self, args, *largs, **kwargs)
+                tstart = time.time()
+                res = method(self, args, *largs, **kwargs)
+                self.trace[method.__name__] = [self.trace.get(method.__name__, [0, 0])[0] + 1, self.trace.get(method.__name__, [0, 0])[1] + time.time() - tstart]
             else:
                 return self._pool.imap_unordered(self.perform_for_each_argument, zip(args, repeat(method.__name__), repeat(kwargs)))
         return mpmethod
 
     @staticmethod
     def for_each_process(method):
-        def mpmethod(self, *args, apply_to_main=False, join=False, **kwargs):
+        def mpmethod(self, *args, apply_to_main=False, join=True, **kwargs):
             if self._pool is None:
                 return method(self, *args, **kwargs)
             else:
@@ -89,7 +93,6 @@ class DistributedObj(object):
                 imap = self._pool.imap_unordered(self.perform_for_each_proccess, repeat((args, method.__name__, kwargs), self._pool._processes))
                 return imap if not join else [res for res in tqdm(imap, total=self._pool._processes)]
         return mpmethod
-
 
 
 def init_local_object(cls, barrier, args, kwargs):
@@ -128,7 +131,6 @@ def for_each_argument(method):
         else:
             return method(self, itargs, *args, **kwargs)
     return mpmethod
-
 
 class MPdistributed(type):
     def __new__(cls, clsname, superclasses, attributeddict):
