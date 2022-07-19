@@ -30,8 +30,6 @@ def cache_single_result_np(function):
         return result
     return newfunc
 
-
-
 class DistributedObj(object):
     """
     this method is intended to be a superclass of any cluss, which has to repeat of specific method on the local copy of
@@ -53,6 +51,7 @@ class DistributedObj(object):
         if barrier is None and mpnum > 0:
             self.barrier = Barrier(mpnum)
             kwargs["barrier"] = self.barrier
+            kwargs["mpnum"] = 0
             self._pool = Pool(mpnum, initializer=self.initizlie_local_obj, initargs=(kwargs,))
         else:
             self.trace = {}
@@ -73,13 +72,14 @@ class DistributedObj(object):
 
     @staticmethod
     def for_each_argument(method):
-        def mpmethod(self, args, *largs, runmain=False, **kwargs):
+        def mpmethod(self, args, *largs, runmain=False, ordered=False, **kwargs):
             if self._pool is None or runmain:
-                tstart = time.time()
-                res = method(self, args, *largs, **kwargs)
-                self.trace[method.__name__] = [self.trace.get(method.__name__, [0, 0])[0] + 1, self.trace.get(method.__name__, [0, 0])[1] + time.time() - tstart]
+                return method(self, args, *largs, **kwargs)
             else:
-                return self._pool.imap_unordered(self.perform_for_each_argument, zip(args, repeat(method.__name__), repeat(kwargs)))
+                if ordered:
+                    return self._pool.imap(self.perform_for_each_argument, zip(args, repeat(method.__name__), repeat(kwargs)))
+                else:
+                    return self._pool.imap_unordered(self.perform_for_each_argument, zip(args, repeat(method.__name__), repeat(kwargs)))
         return mpmethod
 
     @staticmethod
@@ -91,7 +91,7 @@ class DistributedObj(object):
                 if apply_to_main:
                     method(self, *args, **kwargs)
                 imap = self._pool.imap_unordered(self.perform_for_each_proccess, repeat((args, method.__name__, kwargs), self._pool._processes))
-                return imap if not join else [res for res in tqdm(imap, total=self._pool._processes)]
+                return imap if not join else list(imap)
         return mpmethod
 
 
