@@ -1,7 +1,8 @@
 from scipy.spatial.transform import Rotation, Slerp
 import numpy as np
 from math import pi, cos, sin, sqrt
-from ._det_spatial import urd_to_vec, F, DL
+from ._det_spatial import urd_to_vec, F, DL, raw_xy_to_vec
+from .sphere import ConvexHullonSphere, get_vec_triangle_area
 from .time import get_hdu_times, GTI, tGTI, emptyGTI
 from .vector import vec_to_pol, pol_to_vec, normalize
 from .caldb import T0, get_boresight_by_device, get_device_timeshift, relativistic_corrections_gti, MJDREF
@@ -110,7 +111,7 @@ class AttDATA(SlerpWithNaiveIndexing):
     """
     prec = 10./3600*pi/180.
 
-    def __init__(self, *args, gti=None, hide_bad_interpolations=True, **kwargs):
+    def __init__(self, *args, gti=None, hide_bad_interpolations=True, check_interpolation=True, **kwargs):
         super().__init__(*args, **kwargs)
         self.bt = np.array([])
         self.bq = np.array([])
@@ -118,21 +119,24 @@ class AttDATA(SlerpWithNaiveIndexing):
             self.gti = GTI(gti)
         except Exception:
             self.gti = GTI(self.times[[0, -1]])
-        if hide_bad_interpolations:
-            # _chekc_interpolation_quality will find outliers
-            bti = self._check_interpolation_quality()
-            mask = (self.gti & ~bti).mask_external(self.times, True)
-            # lets store outliers in a separate array
-            self.bt, self.bq = self.times[~mask], self(self.times[~mask])
-            #times, gaps = (self.gti & ~bti).make_tedges(self.times)
-            times = self.times[mask]
-            super().__init__(times, self(times))
-            # check interpolation one more time to see wether new neighbouring
-            # points provied good interpolation if no, exclude them from GTI
-            bti.remove_short_intervals(3.)
-            self.gti = self.gti & ~bti #self._check_interpolation_quality()
+        if check_interpolation:
+            if hide_bad_interpolations:
+                # _chekc_interpolation_quality will find outliers
+                bti = self._check_interpolation_quality()
+                mask = (self.gti & ~bti).mask_external(self.times, True)
+                # lets store outliers in a separate array
+                self.bt, self.bq = self.times[~mask], self(self.times[~mask])
+                #times, gaps = (self.gti & ~bti).make_tedges(self.times)
+                times = self.times[mask]
+                super().__init__(times, self(times))
+                # check interpolation one more time to see wether new neighbouring
+                # points provied good interpolation if no, exclude them from GTI
+                bti.remove_short_intervals(3.)
+                self.gti = self.gti & ~bti #self._check_interpolation_quality()
+            else:
+                self.gti = self.gti & ~self._check_interpolation_quality()
         else:
-            self.gti = self.gti & ~self._check_interpolation_quality()
+            self.bti = emptyGTI
 
     def _check_interpolation_quality(self):
         if self.gti.exposure == 0. or self.times.size == 2:
@@ -198,12 +202,12 @@ class AttDATA(SlerpWithNaiveIndexing):
         quats = self(self.times[mask])
         return self.__class__(self.times[mask], quats, self.gti)
 
-    def apply_gti(self, gti):
+    def apply_gti(self, gti, **kwargs):
         gti = GTI(gti)
         gti = gti & self.gti
         ts, mgaps = gti.make_tedges(self.times)
         quats = self(ts)
-        return self.__class__(ts, quats, gti=gti)
+        return self.__class__(ts, quats, gti=gti, **kwargs)
         """
         print(gti.exposure)
         if gti.exposure == 0.:
@@ -365,7 +369,7 @@ def make_gyro_relativistic_correction(attdata):
     sunfk5j2000 = pol_to_vec(*np.deg2rad(np.array([281.28189297, -23.03376005]).reshape((2, -1))))[0]
     enpfk5j2000 = pol_to_vec(*np.deg2rad(np.array([270.0142976, 66.56177014]).reshape((2, -1))))[0]
     secperyear = 31557600.0
-    ebeta = 9.93529142270535e-05
+    ebeta = 9.93529142270535e-05 #earth absolute movement speed in c unit
     tshift = (Time(MJDREF, format="mjd") - Time(datetime(2000, 1, 1, 12))).sec
     #attdata times provided in seconds since J2000 + 0.624 seconds
     speed = Rotation.from_rotvec(enpfk5j2000*(tshift + attdata.times)[:,np.newaxis]/secperyear*2.*pi).apply(normalize(np.cross(enpfk5j2000, sunfk5j2000)))
@@ -373,7 +377,6 @@ def make_gyro_relativistic_correction(attdata):
     return AttDATA(attdata.times, qcorr*attdata(attdata.times), gti=attdata.gti)
 
 #-===========================================================================================
-
 
 
 def read_gyro_fits(gyrohdu):
@@ -426,6 +429,14 @@ def read_bokz_fits(bokzhdu):
             get_boresight_by_device("BOKZ")
     ts, uidx = np.unique(bokzdata["TIME"][mask], return_index=True)
     return AttDATA(ts, qbokz[uidx])
+
+
+def read_sed_fits(sedhdu):
+    q0 = Rotation([0.1830127, 0.6830127, -0.1830127, 0.6830127])
+    d = np.unique(np.copy(sedhdu.data))
+    d = d[np.unique(d["TIME"], return_index=True)[1]]
+    q = Rotation(np.array([d["QRVE%d" % i] for i in [0, 1,2 ,3]]).T)
+    return AttDATA(d["TIME"], q*q0)
 
 def get_raw_bokz(bokzhdu):
     """
@@ -987,6 +998,9 @@ def get_attdata(fname, **kwargs):
     elif "bokz" in fname:
         attdata = read_bokz_fits(ffile["ORIENTATION"])
         tshift = get_device_timeshift("bokz")
+    elif "sed1" in fname:
+        attdata = read_sed_fits(ffile["ORIENTATION"])
+        tshift = 0.
     elif "RA" in ffile[1].data.dtype.names:
         tshift = get_device_timeshift("gyro")
         d = ffile[1].data
@@ -1001,3 +1015,195 @@ def get_attdata(fname, **kwargs):
 
 def attdata_for_urd(att, urdn):
     return att*get_boresight_by_device(urdn)
+
+def get_slews_gti(attdata):
+    #slew is usually performed at 240"/sec speed, we naively check the times when optical axis movement speed reaches over 100"/sec
+    slews = attdata.get_axis_movement_speed_gti(lambda x: x > pi/180.*100./3600.)
+    #the 100"/sec speed is reached after 30 sec of acceleration
+    slews.remove_short_intervals(30.)
+    slews = slews + [-30, 30]
+    return slews
+
+def get_observations_gti(attdata, join=True):
+    slews = get_slews_gti(attdata)
+    v = raw_xy_to_vec(np.array([0, 0, 48, 48]), np.array([0, 48, 48, 0]))
+    chulls = []
+    for i, arr in enumerate((~slews & attdata.gti).arr):
+        attl = attdata.apply_gti(GTI(arr))
+        chull = ConvexHullonSphere(np.concatenate([attl.rotations.apply(v1) for v1 in v]))
+        chulls.append(chull)
+
+    clusters = np.arange(len(chulls))
+
+    if join:
+        clusters = np.arange(len(chulls))
+        for i in range(len(chulls) - 1):
+            ch1 = chulls[i]
+            for j in range(i + 1,len(chulls)):
+                ch2 = chulls[j]
+                if np.any(ch1.check_inside_polygon(ch2.vertices)) or np.any(ch2.check_inside_polygon(ch1.vertices)):
+                    clusters[(clusters == clusters[i]) | (clusters == clusters[j])] = min(clusters[i], clusters[j])
+
+        gtis = [attdata.gti & GTI((~slews & attdata.gti).arr[clusters == cluster]) for cluster in np.unique(clusters)]
+        chulls = [ConvexHullonSphere(np.concatenate([ch.vertices for ch, cl in zip(chulls, clusters) if cl == cluster], axis=0)) for cluster in np.unique(clusters)]
+    else:
+        gtis = [attdata.gti & GTI(arr) for arr in (~slews).arr]
+    return gtis, [ch.area for ch in chulls], [np.rad2deg(vec_to_pol(ch.get_center_of_mass())) for ch in chulls], chulls
+
+"""
+lets cover sphere with four equal triangles
+for that one should find
+[1, 0, 0]
+[cos(alpha), sin(alpha), 0]
+[cos(alpha), sin(alpha) cos(2pi/3), sin(alpha)*sin(2pi/3)]
+cos(alpha) =  cos^2a + sin^2a *cos(2pi/3)
+cos a = cos^2a - 1/2 (1 - cos^2a)
+cos a = 3/2cos^2a - 1/2
+3 cos^2a - 2cos a - 1 = 0
+cos^2a - 2 1/3cos a + 1/9 = 1/3 + 1/9
+(cos a - 1/3)^2 = 4/9
+cos a = +- 2/3 + 1/3
+"""
+CVERTICES = [[1, 0, 0],
+             [-1/3., 0., 2.*sqrt(2.)/3.],
+             [-1/3., sqrt(2/3.), -sqrt(2.)/3.],
+             [-1/3., -sqrt(2/3.), -sqrt(2.)/3.,]]
+
+class ObsClusters(object):
+
+    SPLIT_SEGMENTS = [ConvexHullonSphere(np.roll(CVERTICES, -i, axis=0)[:3]) for i in range(4)]
+
+    def __init__(self, join=True, contour=None):
+        self.clusters = []
+        self.segments = []
+        self.chulls = []
+        self.gtis = []
+        self._join = join
+        self.counter = -1
+        if contour is None:
+            self._contour = raw_xy_to_vec(np.array([-6, -6, 53, 53]), np.array([-3, 51, 51, -3]))
+        else:
+            if not (type(contour) is np.array) or (contour.ndim > 2) or (contour.shape[-1] != 3):
+                raise ValueError("contour is a set of vectors at the edges of convex hull, which incapsulates convolution core")
+            self._contour = np.copy(contour)
+
+    @property
+    def totgti(self):
+        return emptyGTI if len(self.gtis) == 0 else reduce(lambda a, b: a | b, self.gtis)
+
+
+    def collapse(self, clist):
+        print("collapse clist", clist)
+        clist = sorted(clist)
+        gnew = reduce(lambda a, b: a | b, [self.gtis[i] for i in clist])
+        cnew = ConvexHullonSphere(np.concatenate([self.chulls[i].vertices for i in clist]))
+        clidx = reduce(lambda a, b: a | b, [self.clusters[i] for i in clist])
+        for idx in clist[::-1][:-1]:
+            print("pop", idx, self.clusters[idx], self.gtis[idx])
+            self.clusters.pop(idx)
+            self.chulls.pop(idx)
+            self.gtis.pop(idx)
+            self.segments.pop(idx)
+        print("replace", cnew, gnew, clidx)
+        self.chulls[clist[0]] = cnew
+        self.gtis[clist[0]] = gnew
+        self.clusters[clist[0]] = clidx
+
+    def append(self, chull, gti, idx, segment):
+        self.chulls.append(chull)
+        self.gtis.append(gti)
+        self.clusters.append({idx,})
+        self.segments.append(segment)
+
+    def add(self, attdata, key=None):
+        self.counter += 1
+        attloc = attdata.apply_gti(~self.totgti)
+        slews = get_slews_gti(attloc)
+
+        if self._join:
+            for i, arr in enumerate((~slews & attloc.gti).arr):
+                gti = GTI(arr)
+                m = gti.mask_external(attloc.times[:-1])
+                chull = ConvexHullonSphere(np.concatenate([attloc.rotations[m].apply(v1) for v1 in self._contour] + [attloc(arr[0]).apply(self._contour),] + [attloc(arr[-1]).apply(self._contour),]))
+                for k, segment in enumerate(self.SPLIT_SEGMENTS):
+                    cloc = chull & segment
+                    if not cloc is None:
+                        self.add_chulls(chull, gti, k)
+
+
+    def add_chulls(self, chull, gti, segment):
+        clist = []
+        for k, (ch, snum) in enumerate(zip(self.chulls, self.segments)):
+            if snum == segment and ch.intersect(chull):
+                clist.append(k)
+        clist.append(len(self.chulls))
+        self.append(chull, gti, self.counter, segment)
+        if len(clist) > 1:
+            self.collapse(clist)
+
+
+"""
+def perpetuate(tdur=10.*24.*3600., csize=4.*24.*3600):
+    delchulls = []
+    clusters, gtis, chulls = [], []
+    counter = 0
+    obs = ObsClusters()
+    while True:
+        attloc, key = yield delchulls
+        g, _, _, c = get_observations_gti(attloc)
+        tstart = np.min([gl.arr[0, 0] for gl in g])
+        gcheck = GTI([tstart - tdur, np.inf])
+        gcum = [gl for gl in gtis if (gcheck & gl).exposure > 0]
+
+        gtis += g
+        chulls += c
+        clusters += [key, ]*len(g)
+
+def perpetuate(attdata, key):
+    sendlist = []
+    attdata, key = yield sendlist
+    slews = get_slews_gti(attloc)
+"""
+
+
+
+def split_in_two(vectors, times, att, precision=pi/180.*10./3600):
+    dcalpha = np.sum(vectors*Slerp(times[[0, -1]], att(times[[0, -1]]))(times).apply([1, 0, 0]), axis=-1)
+    return np.any(dcalpha < cos(precision))
+
+def linear_segments(vectors, times, att, idx0=0, idx=None, precision=pi/180.*10./3600.):
+    if idx is None:
+        idx = [0, vectors.shape[0]]
+    if times.size > 2 and split_in_two(vectors, times, att, precision):
+        s = times.size//2
+        idx.append(s + idx0)
+        linear_segments(vectors[:s+1], times[:s+1], att, idx0, idx, precision)
+        linear_segments(vectors[s:], times[s:], att, idx0 + s, idx, precision)
+    return sorted(idx)
+
+def add_new_compressed_att(att, times, names, fname):
+    print(fname)
+    if fname.rstrip() in names:
+        return att, times, names
+    try:
+        atl = arttools.orientation.get_attdata(fname.rstrip()) #.apply_gti(arttools.time.tGTI if att is None else ~(att.gti + [-3, 3]))
+    except:
+        print("can't read", fname)
+    else:
+        if not att is None:
+            print("gti crosssecion", atl.gti & att.gti, atl.times[0] - att.times[-1])
+        print(fname)
+        if att is None:
+            att = pack_attdata(atl, pi/180.*5./3600.)
+        else:
+            try:
+                if (arttools.time.GTI(att.gti.arr[[0, -1],[0, 1]]) & atl.gti).exposure > 0.:
+                    atl = arttools.orientation.AttDATA.concatenate([atl, att.apply_gti(arttools.time.GTI(atl.gti.arr[[0, -1],[0, 1]]), check_interpolation=False)])
+                att = arttools.orientation.AttDATA.concatenate([att.apply_gti(~atl.gti, check_interpolation=False), pack_attdata(atl,pi/180.*5./3600.)], check_interpolation=False)
+            except Exception:
+                print("fail to concat with %s" % fname)
+            else:
+                print(type(times), len(times))
+                times.append(atl.gti.arr[:,0])
+                names = names + [fname.rstrip()]*atl.gti.arr.shape[0]
+    return att, times, names
