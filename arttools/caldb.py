@@ -8,8 +8,7 @@ from functools import lru_cache
 import datetime
 from astropy import time as atime
 import numpy as np
-from .telescope import URDTOTEL
-#from .time import GTI, get_gti
+from .telescope import URDTOTEL, ANYTHINGTOTELESCOPE, ANYTHINGTOURD
 from scipy.spatial.transform import Rotation
 from math import sin, cos, pi
 #from .energy import get_events_energy
@@ -17,7 +16,7 @@ import pickle
 
 
 """ ART-XC mjd ref used to compute onboard seconds"""
-MJDREF = 51543.875
+MJDREF = 51543.875  # board time MJDREF
 T0 = 617228538.1056 #first day of ART-XC work
 
 relativistic_corrections_gti = np.array([
@@ -28,16 +27,17 @@ relativistic_corrections_gti = np.array([
                   [6.28720417e+08, 6.30954255e+08]])
 
 ARTCALDBPATH = os.environ["ARTCALDB"]
-indexfname = "artxc_index.fits"
-
-TELTOURD = {v:k for k, v in URDTOTEL.items()}
+indexfname = "artxc_calib/caldb.indx"
 
 idxtabl = Table(fits.getdata(os.path.join(ARTCALDBPATH, indexfname), 1))
-idxtabl["CAL_DATE"] = idxtabl["CAL_DATE"][:, 0]
 idxtabl = idxtabl.to_pandas()
-idxtabl["CAL_DATE_ISO"] = (Time(idxtabl.REF_TIME.values, format="mjd") + \
-                            TimeDelta(idxtabl.CAL_DATE.values, format="sec")).to_datetime()
-idxtabl.set_index("CAL_DATE_ISO", inplace=True)
+
+idxtabl["CAL_VSB"] = [(Time(a + "T" + b) - Time(MJDREF, format="mjd")).sec for a, b in idxtabl[["CAL_VSD", "CAL_VST"]].values]
+idxtabl.sort_values(["CAL_DATE", "CAL_VSB"], ascending=[False, True], inplace=True)
+idxtabl["CAL_CNAM"] = idxtabl.CAL_CNAM.str.rstrip()
+idxtabl["INSTRUME"] = idxtabl.INSTRUME.str.rstrip()
+idxtabl = idxtabl.groupby("INSTRUME").apply(lambda x: x[x.CAL_VSB.values == x.CAL_VSB.cummax().values])
+
 
 CUTAPP = None
 FLATVIGN = False
@@ -47,10 +47,15 @@ bkggti = None
 
 qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])*Rotation([ 1.07307728e-05,  2.94924883e-07, -3.05587484e-05, -9.99999999e-01])
 qgyro0 = Rotation([0., 0., 0., 1.])
+_INST_QUAT = {
+    'GYRO': [ 0.               ,  0.               ,  0.               , 1.               ],
+    'BOKZ': [ 2.91961004e-05   ,  0.707106989      , -1.40204960e-05   , -0.707106572     ],
+    'SED1': [ 0.183012701892219,  0.683012701892219, -0.183012701892219, 0.683012701892219],
+    'SED2': [-0.183012701892219,  0.683012701892219,  0.183012701892219, 0.683012701892219]}
+
+
 OPAX = np.array([1, 0, 0])
 
-#ARTQUATS = {row[0]:Rotation(row[1:]) for row in fits.getdata(os.path.join("/srg/a1/work/andrey/ART-XC/Quats_V5", "ART_QUATS_V5_rotin.fits"), 1)}
-#ARTQUATS.update({TELTOURD[row[0]]:Rotation(row[1:]) for row in fits.getdata(os.path.join("/srg/a1/work/andrey/ART-XC/Quats_V5", "ART_QUATS_V5_rotin.fits"), 1) if row[0] in TELTOURD})
 
 """
 some magical numbers, generally define mean count rate of the background of each detector relative to the mean over all seven
@@ -98,22 +103,24 @@ def get_illumination_mask():
     return wcstempalte, np.copy(mfile[1].data), np.copy(mfile[2].data)
 
 
-"""
-def get_caldata(urdn, ctype, gti=GTI([(atime.Time(datetime.datetime.now()) - atime.Time(MJDREF, format="mjd")).sec,]*2,)):
-    given the urd as a unique key for calibration data
-    caldata = idxtabl.query("INSTRUME=='%s' and CAL_CNAME=='%s'" % (TELTOURD[urdn], ctype)).sort_index()
-    timestamps = (atime.Time(caldata.index.values) - atime.Time(MJDREF)).sec
-    caldata["tstart"] = timestamps
-    caldata["tstop"] = np.roll(timestamps, -1)
-    caldata.iloc[-1].tstop = np.inf
-    idxloc = np.maximum(np.unique(timestamps.searchsorted(gti.arr)) - 1, 0)
-    caldata = caldata.iloc[idxloc].groupby(["CAL_DIR", "CAL_FILE"])
-    return {g: GTI(caldata.iloc[idx][["tstart", "tstop"]].values) for g, idx in caldata.groups.items()}
+def get_caldata(ctype, dev, gti=None):
     """
+    given the urd as a unique key for calibration data
+    """
+    caldata = idxtabl.query("INSTRUME=='%s' and CAL_CNAM=='%s'" % (dev, ctype)).sort_index()
+    if gti is None:
+        te, gaps = np.array([caldata.iloc[0].CAL_VSB, np.inf]), np.ones(1, bool)
+    else:
+        te, gaps = git.make_tedges(caldata.CAL_VSB.vaues)
+    ti = np.array([te[:-1], te[1:]]).T[gaps]
+    idx = np.searchsorted(caldata.CAL_VSB.values, ti.mean(axis=1)) - 1
+    u, ui = np.unique(idx, return_inverse=True)
+    return [(os.path.join(ARTCALDBPATH, caldata.iloc[i].CAL_DIR.rstrip(), caldata.iloc[i].CAL_FILE.rstrip()), ti[ui == i]) for i in u]
 
 
+"""
 def get_cif(cal_cname, instrume):
-    return idxtabl.query("INSTRUME=='%s' and CAL_CNAME=='%s'" % (instrume, cal_cname))
+    return idxtabl.query("INSTRUME=='%s' and CAL_CNAM=='%s'" % (instrume, cal_cname))
 
 def get_relevat_file(cal_cname, instrume, date=datetime.datetime(2030, 10, 10)):
     caltable = get_cif(cal_cname, instrume)
@@ -121,8 +128,9 @@ def get_relevat_file(cal_cname, instrume, date=datetime.datetime(2030, 10, 10)):
     row = caltable.iloc[didx]
     fpath = os.path.join(ARTCALDBPATH, row["CAL_DIR"].rstrip(), row["CAL_FILE"].rstrip())
     return fpath
+"""
 
-OPAXOFFSET = {TELTOURD[tel]: [x, y] for tel, x, y in fits.getdata(get_relevat_file("OPT_AXIS", "NONE"))}
+#OPAXOFFSET = {TELTOURD[tel]: [x, y] for tel, x, y in fits.getdata(get_relevat_file("OPT_AXIS", "NONE"))}
 OPAXOFFSET = {28:[21.28, 22.86],
               22:[18.15, 21.02],
               23:[20.65, 20.27],
@@ -138,7 +146,7 @@ def get_optical_axis_offset_by_device(dev):
 
 @lru_cache(maxsize=7)
 def get_boresight_by_device(dev):
-    return Rotation(fits.getdata(get_relevat_file("BORESIGHT", URDTOTEL.get(dev, dev)), 1)[0])
+    return Rotation(fits.getdata(get_caldata("BORESIGH", ANYTHINGTOTELESCOPE.get(dev, dev))[0][0], 1)[0])
 
 
 @lru_cache(maxsize=7)
@@ -148,15 +156,24 @@ def get_vigneting_by_urd(urdn):
     """
     return fits.open(os.path.join(ARTCALDBPATH, "art-xc_vignea_q200_191210.fits"))
 
+def get_highres_vign_model():
+    return fits.open(os.path.join(ARTCALDBPATH, "art-xc_vignea_q200_191210.fits"))
+
+
 @lru_cache()
 def get_shadowmask_by_urd(urdn):
     global CUTAPP
     #temporal patch
-    print(CUTAPP)
+    """
     urdtobit = {28:2, 22:4, 23:8, 24:10, 25:20, 26:40, 30:80}
     fpath = os.path.join(ARTCALDBPATH, "artxc_detmask_%s_20200414_v001.fits" % URDTOTEL[urdn])
     #mask = np.logical_not(fits.getdata(fpath, 1).astype(np.bool))
+    """
+    #print("urdn", urdn, ANYTHINGTOTELESCOPE[urdn])
+    fpath = get_caldata("DETMASK", ANYTHINGTOTELESCOPE.get(urdn, urdn))[0][0]
+    #print("fpath!!!", fpath)
     mask = np.copy(fits.getdata(fpath, 1)).astype(np.bool)
+    #mask = np.ones((48, 48), bool)
     if not CUTAPP is None:
         x, y = np.mgrid[0:48:1, 0:48:1] + 0.5
         maskapp = (OPAXOFFSET[urdn][0] - x)**2. + (OPAXOFFSET[urdn][1] - y)**2. < CUTAPP**2.
@@ -168,22 +185,15 @@ def get_shadowmask(urdfile):
 
 @lru_cache(maxsize=7)
 def get_energycal_by_urd(urdn):
-    fpath = get_relevat_file('TCOEF', URDTOTEL[urdn])
+    fpath = get_caldata('THRESHOL', ANYTHINGTOTELESCOPE.get(urdn, urdn))[0][0]
     return fits.open(fpath)
 
 def get_energycal(urdfile):
     return get_energycal_by_urd(urdfile["EVENTS"].header["URDN"])
 
-@lru_cache(maxsize=7)
-def get_backprofile_by_urdn(urdn):
-    global FLATBKG
-    bkg = fits.getdata(get_relevat_file("BKG", URDTOTEL[urdn]), 0)
-    if FLATBKG:
-        bkg = np.ones(bkg.shape)
-    return bkg
-
-def get_backprofile(urdfile):
-    return get_backprofile_by_urdn(urdfile["EVENTS"].header["URDN"])
+def get_escale_by_urd(urdn):
+    fpath = get_caldata('ESCALE', ANYTHINGTOTELESCOPE.get(urdn, urdn))[0][0]
+    return fits.getdata(fpath)
 
 def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=indexfname):
     indexfile_path = os.path.join(CALDB_path, indexfile)
@@ -265,23 +275,6 @@ def default_useful_events_filter(energy=None, grade=None):
 def default_background_events_filter(energy=None, grade=None):
     return ((energy > 40.) & (energy < 100.)), ((grade > -1) & (grade < 10.))
 
-@lru_cache(maxsize=7)
-def get_inverse_psf():
-    return fits.open(os.path.join(ARTCALDBPATH, "inverse_psf.fits"))
-
-@lru_cache(maxsize=1)
-def get_inverse_psf_data():
-    ipsf = pickle.load(open(os.path.join(ARTCALDBPATH, "invert_psf_v9_53pix.pickle"), "rb"))
-    return ipsf
-
-def get_inversed_psf_data_packed():
-    ipsf = fits.open(os.path.join(ARTCALDBPATH, "iPSF.fits"))
-    return ipsf
-
-@lru_cache(maxsize=1)
-def get_inverse_psf_datacube_packed():
-    ipsf = np.copy(get_inversed_psf_data_packed()["iPSF"].data)
-    return ipsf
 
 def get_ayut_inversed_psf_data_packed():
     ipsf = fits.open(os.path.join(ARTCALDBPATH, "iPSF_ayut.fits"))
@@ -289,7 +282,7 @@ def get_ayut_inversed_psf_data_packed():
 
 @lru_cache(maxsize=1)
 def get_ayut_inverse_psf_datacube_packed():
-    ipsf = np.copy(get_ayut_inversed_psf_data_packed()[1].data)
+    ipsf = np.copy(get_ayut_inversed_psf_data_packed()[2].data)
     #ipsf = pickle.load(open("/srg/a1/work/srg/ARTCALDB/caldb_files/iPSF_marshall.pkl", "rb"))
     return ipsf
 
