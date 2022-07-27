@@ -112,7 +112,7 @@ class ConvexHullonSphere(object):
     """
     class to define convex hull on the sphere surface
     """
-    def __init__(self, vecs):
+    def __init__(self, vecs, parent=None):
         """
         init class with a series of vectors, which defines directions,
         all vectors will be reset to have 1 length
@@ -153,16 +153,19 @@ class ConvexHullonSphere(object):
 
 
         self.vertices = np.array(ovecs) #self.corners)
-        """
-        v1 = normalize(np.cross(cvec, self.vertices[0]))
-        vt = normalize(self.vertices - cvec[np.newaxis, :]*np.sum(cvec*self.vertices, axis=1)[:, np.newaxis])
-        idx = np.argsort(np.arctan2(np.sum(v1*vt, axis=1), np.sum(vt[0]*vt, axis=1)))
-        self.vertices = self.vertices[idx]
-        """
+        self.childs = [self,]
+        if parent is None:
+            self.parent = self
+        else:
+            self.parent = parent
 
-        #self.idx = np.array(self.idx)
-        #self.orts = normalize(np.cross(self.vertices, np.roll(self.vertices, -1, axis=0)))
-
+    def all_hairs(self, res=[]):
+        if len(self.childs) == 1:
+            res.append(self)
+        else:
+            for ch in self.childs:
+                ch.all_hairs(res)
+        return res
 
     @property
     def orts(self):
@@ -210,37 +213,12 @@ class ConvexHullonSphere(object):
         """
         vproj = normalize(self.vertices + np.roll(self.vertices, -1, axis=0))
         neworts = self.orts*cos(dtheta) - vproj*sin(dtheta)
-        #newcorners = normalize(np.cross(neworts, np.roll(neworts, 1, axis=0)))
 
         if dtheta >0.:
-            #return ConvexHullonSphere(newcorners)
             return ConvexHullonSphere(newcorners[np.sum(newcorners*self.get_center_of_mass(), axis=1) > 0])
 
-        """
-        cm = self.get_center_of_mass()
-        idx = np.argmin(np.sum(self.vertices*np.roll(self.vertices, 1, axis=0), axis=1))
-        neworts = np.roll(neworts, -idx + 1, 0)
-        newcorners = np.roll(newcorners, -idx + 1, 0)
-
-
-        vlist = [neworts[0],]
-        for i in range(1, neworts.shape[0]):
-            v1 = normalize(np.cross(vlist[-1], neworts[i]))
-            v2 = normalize(np.cross(neworts[i], neworts[i+1 if (i + 1 != neworts.shape[0]) else 0]))
-            orien = np.sum(cm*np.cross(v1, v2))
-            print(orien)
-            if orien < 0:
-                print(i)
-                vlist.append(neworts[i])
-
-        vlist = np.array(vlist)
-        newcorners = normalize(np.cross(vlist, np.roll(vlist, 1, axis=0)))
-        return ConvexHullonSphere(newcorners)
-        """
         while True:
             mask = np.sum(np.cross(np.roll(neworts, -1, axis=0), np.roll(neworts, 1, axis=0))*neworts, axis=1) < 0
-            #if np.all(mask):
-            #    break
             neworts = neworts[mask]
             break
         newcorners = normalize(np.cross(neworts, np.roll(neworts, 1, axis=0)))
@@ -263,20 +241,10 @@ class ConvexHullonSphere(object):
         vrot = normalize(np.cross(vax, vm))
         vr = normalize(self.vertices - vrot*np.sum(self.vertices*vrot, axis=1)[:, np.newaxis])
         vp = normalize(self.vertices - vax*np.sum(self.vertices*vax, axis=1)[:, np.newaxis])
-        """
-        plt.scatter(vr[:, 1], vr[:, 2], marker="<", c="g")
-        plt.scatter(vp[:, 1], vp[:, 2], marker="<", c="g")
-        """
         v1 = vr[np.argmax(np.sum(np.cross(vm,vr)*vrot, axis=1))]
         v2 = vr[np.argmax(np.sum(np.cross(vr,vm)*vrot, axis=1))]
         v3 = vp[np.argmax(np.sum(np.cross(vm,vp)*vax, axis=1))]
         v4 = vp[np.argmax(np.sum(np.cross(vp,vm)*vax, axis=1))]
-        """
-        plt.scatter(v1[1], v1[2], marker="*", c="m")
-        plt.scatter(v2[1], v2[2], marker="*", c="b")
-        plt.scatter(v3[1], v3[2], marker="*", c="r")
-        plt.scatter(v4[1], v4[2], marker="*", c="k")
-        """
         v1 = Rotation.from_rotvec(-vrot*pi/2.).apply(v1)
         v2 = Rotation.from_rotvec(vrot*pi/2.).apply(v2)
         v3 = Rotation.from_rotvec(-vax*pi/2.).apply(v3)
@@ -298,13 +266,25 @@ class ConvexHullonSphere(object):
         ra, dec = vec_to_pol(self.__class__(corners).get_center_of_mass())
         return make_tan_wcs(ra, dec, sizex//2 + (sizex//2)%2 - 1, sizey//2 + (sizey//2)%2 - 1, delta, alpha)
 
-
     def triangulate(self, sarea):
         cm = self.get_center_of_mass()
         triangles = []
         for v1, v2 in zip(self.vertices, np.roll(self.vertices, 1, axis=0)):
             split_uptoarea([cm, v1, v2], sarea, triangles)
         return triangles
+
+    def split_in_pices(self, sarea):
+        if self.area > 2.*sarea:
+            if len(self.childs) > 1:
+                for ch in self.childs:
+                    ch.split_in_pices(sarea)
+            else:
+                if self.vertices.shape[0] == 3:
+                    split_triangle_chull(self)
+                else:
+
+
+
 
     def remove_short_sights(self, dalpha):
         cm = self.get_center_of_mass()
@@ -322,9 +302,7 @@ class ConvexHullonSphere(object):
         idx = np.argmax(v)
         mask = np.ones(self.vertices.shape[0], bool)
         mask[idx] = False
-        #mask = np.roll(mask, -1)
         return self.__class__(normalize(np.cross(self.orts[mask], np.roll(self.orts[mask], 1, axis=0))))
-
 
     def intersect(self, other):
         m1 = self.check_inside_polygon(other.vertices)
@@ -335,7 +313,6 @@ class ConvexHullonSphere(object):
             return True
         ccov = self & other
         return False if ccov is None else True
-
 
     def __and__(self, other):
         m1 = self.check_inside_polygon(other.vertices)
@@ -358,6 +335,52 @@ class ConvexHullonSphere(object):
         vlist = np.concatenate(vlist, axis=0)
         return None if vlist.shape[0] < 3 else ConvexHullonSphere(vlist)
 
+    def __getitem__(self, idx):
+        return self.childs[idx]
+
+    def __iter__(self):
+        return iter(self.childs)
+
+
+    def merge(self, vertices=None):
+        vertices = self.vertices if vertices is None
+        if self.parent != self:
+            for k, ch in enumerate(self.parent.childs):
+                if np.sum(1 - np.sum(vertices[:, np.newaxis,:]*ch.vertices[np.newaxis, :, :], axis=2).max(axis=1) < 1e-15) != 2:
+                    continue
+                chnew = ConvexHullonSphere(np.concatenate([ch.vertices, self.vertices]), self.parent)
+                if abs(ch.area + self.area - chnew.area) > 1e-15:
+                    continue
+                chnew.childs = self.childs + ch.childs
+                idx = ch.parent.childs.idnex(self)
+                ch.parent.childs[idx] = chnew
+                ch.parent.childs.pop(k)
+                return self.parent
+
+
+    def stick_childs(self, sarea):
+        for i in range(len(self.childs)):
+            if i == len(self.childs):
+                break
+            if self.childs[i].area > sarea:
+                continue
+            ict = [k for k in range(len(self.childs)) if k != i and np.sum(1 - np.sum(self.childs[i].vertices[:, np.newaxis,:]*self.childs[k].vertices[np.newaxis, :, :], axis=2).max(axis=1) < 1e-15) == 2]
+            if len(ict) == 0:
+                chp = self.childs[i].merge(self.childs[i].vertices)
+                if not chp is None:
+                    chp.stick_childs(sarea)
+                continue
+            k = ict[np.argmin([self.childs[k].area for k in ict])]
+            chnew = ConvexHullonSphere(np.concatenate([chulls[k].vertices, self.childs[i].vertices]), self)
+            if k < i:
+                self.childs[k] = chnew
+                self.childs.pop(i)
+                i -= 1
+            else:
+                self.childs[i] = chnew
+                self.childs.pop(k)
+
+
 
 def split_triangle(v):
     da = np.sum(v*np.roll(v, 1, axis=0))
@@ -365,12 +388,18 @@ def split_triangle(v):
     vnew = normalize(v[idx] + np.roll(v, 1, axis=0)[idx])
     return [[vnew,] + list(np.roll(v, idx, axis=0)[:2]), list(np.roll(v, idx + 2, axis=0)[:2]) + [vnew,]]
 
-def split_uptoarea(v, area, vlist=[]):
-    if get_vec_triangle_area(*np.array(v).reshape((3, 1, 3))) > area:
-        for vnew in split_triangle(v):
-            split_uptoarea(vnew, area, vlist)
-    else:
-        vlist.append(v)
+def split_triangle_chull(ch):
+    v = ch.vertices
+    vnew = split_triangle(v)
+    chnew = [ConvexHullonSphere(v, ch) for v in vnew]
+    ch.childs = chnew
+    return ch.childs
+
+
+def split_uptoarea(ch, area):
+    if ch.area > area*1.5:
+        for chnew in split_triangle_chull(chnew):
+            split_uptoarea(chnew, area)
 
 
 def stick_chulls(chulls, sarea):
