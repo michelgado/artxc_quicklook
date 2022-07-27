@@ -54,7 +54,6 @@ class DistributedObj(object):
             kwargs["mpnum"] = 0
             self._pool = Pool(mpnum, initializer=self.initizlie_local_obj, initargs=(kwargs,))
         else:
-            self.trace = {}
             self.barrier = barrier
             self._pool = None
 
