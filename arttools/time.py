@@ -86,7 +86,7 @@ class GTI(Intervals):
 tGTI = GTI([-np.inf, np.inf])
 emptyGTI = GTI(np.empty((0, 2)))
 
-def get_gti(ffile, gtiextname="GTI", excludebki=True, merge_interval_dt=None, usehkgti=True):
+def get_gti(ffile, gtiextname=None, excludebki=True, merge_interval_dt=None, usehkgti=True):
     if not gtiextname is None:
         try:
             gti = GTI(np.array([ffile[gtiextname].data["START"], ffile[gtiextname].data["STOP"]]).T)
@@ -102,7 +102,9 @@ def get_gti(ffile, gtiextname="GTI", excludebki=True, merge_interval_dt=None, us
         gti.merge_close_intervals(0.5)
     else:
         gaps = gti.arr.ravel()[1:-1].reshape((-1, 2)) # get bounds of the gaps between gti
+        #print("min diff", np.min(gti.arr[:, 1] - gti.arr[:, 0]))
         crate = -np.subtract.reduce(np.searchsorted(ffile["EVENTS"].data["TIME"], gti.arr), axis=1)/(gti.arr[:,1] - gti.arr[:,0])
+        crate[crate == 0] = np.median(crate)
         garr = np.copy(gti.arr)
         garr[1:, 0] -= 7./crate[1:]
         garr[:-1, 1] += 7./crate[:-1]
@@ -280,3 +282,4 @@ def make_ingti_times(time, ggti, stick_frac=0.5):
     maskgaps = np.ones(max(tnew.size - 1, 0), np.bool)
     maskgaps[cidx[1:-1] - 1] = False
     return tnew, maskgaps
+
