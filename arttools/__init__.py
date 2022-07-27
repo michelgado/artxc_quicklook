@@ -11,6 +11,7 @@ from . import spectr
 from . import illumination
 from . import point_source
 from . import containers
+from . import arf
 
 __version__ = "0.3.1"
 
