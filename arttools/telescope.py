@@ -15,6 +15,15 @@ URDTOTEL = {28: "T1",
             26: "T6",
             30: "T7"}
 
+ANYTHINGTOURD = {"T1": 28, "T2": 22, "T3": 23, "T4": 24, "T5": 25, "T6": 26, "T7": 30,
+                 "28": 28, "22": 22, "23": 23, "24": 24, "25": 25, "26": 26, "30": 30,
+                 "02": 28, "04": 22, "08": 23, "10": 24, "20": 25, "40": 26, "80": 30,
+                 2: 28, 4: 22, 8: 23, 10: 24, 20: 25, 40: 26, 80: 30,
+                 28: 28, 22: 22, 23: 23, 24: 24, 25: 25, 26: 26, 30: 30}
+
+ANYTHINGTOTELESCOPE = {key: URDTOTEL[val] for key, val in ANYTHINGTOURD.items()}
+
+
 TELTOURD = {v:k for k, v in URDTOTEL.items()}
 
 def ordered_map(function, *tdicts, **kwargs):
