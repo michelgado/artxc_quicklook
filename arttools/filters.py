@@ -121,6 +121,10 @@ class Intervals(object):
     def length(self):
         return np.sum(self.arr[:, 1] - self.arr[:, 0])
 
+    @property
+    def volume(self):
+        return self.length
+
     def __repr__(self):
         return self.arr.__repr__()
 
@@ -291,6 +295,7 @@ class Intervals(object):
         idxgaps = newts.searchsorted((gtloc.arr[:-1, 1] + gtloc.arr[1:, 0])/2.)
         maskgaps = np.ones(newts.size - 1 if newts.size else 0, np.bool)
         maskgaps[idxgaps - 1] = False
+        print(newts[-1])
         #print(ts[:3] - ts[0], ts[-3:] - ts[0])
         #print(newts[:3] - ts[0], ts[-3:] - ts[0])
         #print(newts.size)
@@ -361,6 +366,10 @@ class RationalSet(set):
     def size(self):
         return len(self)
 
+    @property
+    def volume(self):
+        return self.size
+
     def __invert__(self):
         return InversedRationalSet(self)
 
@@ -411,6 +420,10 @@ class InversedRationalSet(set):
     def size(self):
         return len(self.vol) - len(self) #its hard to define size for inversed rational set, by default it can be considered inf
 
+    @property
+    def volume(self):
+        return self.size
+
     def hash(self):
         return np.asarray(self).tobytes()
 
@@ -426,7 +439,7 @@ def strightindex(x):
 
 
 class InversedIndexMask(OrderedDict):
-    def __init__(self, indexfunctions, mask):
+    def __init__(self, indexfunctions={}, mask=np.empty(0, bool)):
         """
         indexfunction a zip of ordered according to mask axis order set of indexing functions
         attention!!!
@@ -440,6 +453,20 @@ class InversedIndexMask(OrderedDict):
         else:
             self.shifts = np.concatenate([np.cumprod(self.mask.shape[-2::-1])[::-1], [1,]])
 
+
+    def __getstate__(self):
+        print("call getstate")
+        return {"indexfunctions": OrderedDict(self), "mask": self.mask}
+
+    def __setstate__(self, state):
+        print("state", state)
+        self.__init__(state["indexfunctions"], state["mask"])
+
+    def __reduce__(self):
+        return (self.__class__, (list(self.items()), self.mask))
+
+
+
     def apply(self, fields):
         if not all([k in fields.dtype.names for k in self]):
             raise ValueError("not all of the fields are present in query")
@@ -448,6 +475,11 @@ class InversedIndexMask(OrderedDict):
     @property
     def size(self):
         return self.mask.sum()
+
+    @property
+    def volume(self):
+        return self.mask.sum()
+
 
     def __and__(self, other):
         if type(other) == type(self):
@@ -545,7 +577,7 @@ class IndependentFilters(dict):
 
     @property
     def volume(self):
-        return np.prod([f.size for f in self.values()])
+        return np.prod([f.volume for f in self.values()])
 
     def apply(self, valsset):
         mask = np.ones(valsset.size, np.bool)
