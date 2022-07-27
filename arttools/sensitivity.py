@@ -12,8 +12,7 @@ from .energy  import get_arf_energy_function
 from .caldb import  get_optical_axis_offset_by_device, get_arf, get_crabspec
 from .planwcs import ConvexHullonSphere, convexhull_to_wcs
 from .psf import xy_to_opaxoffset, unpack_inverse_psf_ayut, unpack_inverse_psf_ayut, unpack_inverse_psf_with_weights, get_ipsf_interpolation_func
-from .mosaic2 import SkyImage as SkyImage2
-from .mosaic import SkyImage
+from .mosaic2 import SkyImage
 from .spectr import get_filtered_crab_spectrum, Spec
 from .vignetting import get_blank_vignetting_interpolation_func
 from .illumination import DataDistributer
@@ -297,7 +296,7 @@ def estimate_theta_mean_val(wcs, attdata, urdgtis, imgfilters, srcrates, urdbkg,
             #print(dtq.sum(), qlist, vmap.values)
             yield qlist, dtq, vmap.values
 
-    sky = SkyImage2(wcs, get_blank_vignetting_interpolation_func(), mpnum=mpnum)
+    sky = SkyImage(wcs, get_blank_vignetting_interpolation_func(), mpnum=mpnum)
 
     bkgprofile = [get_background_surface_brigtnress(urdn, imgfilters[urdn]) for urdn in urdgtis if urdgtis[urdn].exposure > 0.]
     bkgprofile = np.mean([np.median(b[~np.isnan(b)])/np.sum(b[~np.isnan(b)]) for b in bkgprofile])
@@ -332,33 +331,33 @@ def estimate_theta_mean_val(wcs, attdata, urdgtis, imgfilters, srcrates, urdbkg,
     for k, srcrate in enumerate(srcrates):
         res = [srcrate, ]
         sky.set_core(get_blank_vignetting_interpolation_func())
-        sky.clean_img()
+        sky.clean_image(join=True)
         sky.img[:, :] = 0.
-        sky.fft_convolve(prepare_task(srcrate, 1,**kwargs), size=len(imgfilters))
+        sky.fft_convolve_multiple(prepare_task(srcrate, 1,**kwargs), total=len(imgfilters))
         sky.accumulate_img()
         res.append(np.copy(sky.img))
         #res1.append(np.copy(sky.img))
-        sky.clean_img()
+        sky.clean_image(join=True)
         sky.img[:, :] = 0.
-        sky.fft_convolve(prepare_task(srcrate, 2,**kwargs), size=len(imgfilters))
+        sky.fft_convolve_multiple(prepare_task(srcrate, 2,**kwargs), total=len(imgfilters))
         sky.accumulate_img()
         #res2.append(np.copy(sky.img))
         res.append(np.copy(sky.img))
         if not illum_filters is None:
             sky.set_core(get_ipsf_interpolation_func())
-            sky.clean_img()
+            sky.clean_image(join=True)
             sky.img[:, :] = 0.
             idata.ipsffuncs = [unpack_inverse_psf_with_weights(make_detstat_psf_weigthtfun(srcrate/7., mbrate*bkgprofile, imgfilter, powi=1, **kwargs)),]
-            sky.fft_convolve(idata, size=idata.get_size())
+            sky.fft_convolve_multiple(idata, total=idata.get_size())
             sky.accumulate_img()
             #res3.append(np.copy(sky.img))
             res.append(np.copy(sky.img))
-            sky.clean_img()
+            sky.clean_image(join=True)
             sky.img[:, :] = 0.
             idata.ipsffuncs = [unpack_inverse_psf_with_weights(make_detstat_psf_weigthtfun(srcrate/7., mbrate*bkgprofile, imgfilter, powi=2, **kwargs)),]
-            sky.fft_convolve(idata, size=idata.get_size())
+            sky.fft_convolve_multiple(idata, totatl=idata.get_size())
             sky.accumulate_img()
             #res4.append(np.copy(sky.img))
             res.append(np.copy(sky.img))
-        pickle.dump(res, open("/srg/a1/work/andrey/ART-XC/GC/sensitivity/%02d.pkl" % k, "wb"))
+        pickle.dump(res, open("sensitivity/%02d.pkl" % k, "wb"))
     return res1, res2, res3, res4
