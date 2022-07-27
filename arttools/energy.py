@@ -37,7 +37,7 @@ def bitmask_to_grade(bitmask):
     return GRADESI[maskint].astype(np.int)
 
 
-def get_bot_energy(eventlist, hkdata, caldb, randomize=True):
+def get_bot_energy(eventlist, hkdata, caldb, randomize=True, set_central_strip_triggered=True):
     T = interp1d(hkdata["TIME"], hkdata["TD1"],
             bounds_error=False, kind="linear",
             fill_value=(hkdata["TD1"][0], hkdata["TD1"][-1]))(eventlist["TIME"])
@@ -47,9 +47,10 @@ def get_bot_energy(eventlist, hkdata, caldb, randomize=True):
     PHAB = np.array([eventlist["PHA_BOT_SUB1"], eventlist["PHA_BOT"], eventlist["PHA_BOT_ADD1"]])
     energb = random_uniform(PHAB, rawx, T, botcal) if randomize else PHA_to_PI(PHAB, rawx, T, botcal)
     maskb = np.logical_and(maskb, energb > botcal["THRESHOLD"][rawx])
+    maskb[1] = maskb[1] | set_central_strip_triggered
     return energb, maskb, sigmab
 
-def get_top_energy(eventlist, hkdata, caldb, randomize=True):
+def get_top_energy(eventlist, hkdata, caldb, randomize=True, set_central_strip_triggered=True):
     T = interp1d(hkdata["TIME"], hkdata["TD1"],
             bounds_error=False, kind="linear",
             fill_value=(hkdata["TD1"][0], hkdata["TD1"][-1]))(eventlist["TIME"])
@@ -59,6 +60,7 @@ def get_top_energy(eventlist, hkdata, caldb, randomize=True):
     PHAT = np.array([eventlist["PHA_TOP_SUB1"], eventlist["PHA_TOP"], eventlist["PHA_TOP_ADD1"]])
     energt = random_uniform(PHAT, rawy, T, topcal) if randomize else  PHA_to_PI(PHAT, rawy, T, topcal)
     maskt = np.logical_and(maskt, energt > topcal["THRESHOLD"][rawy])
+    maskt[1] = maskt[1] | set_central_strip_triggered
     return energt, maskt, sigmat
 
 
@@ -70,15 +72,11 @@ def get_escale_corr(time, energy, caldb):
     thus, based on the measurements ofb the energy lines positions we produce linear
     coefficients, to correct energy grid.
     """
-    emarkers = np.array([59.54, 26.34, 17.477, 13.927, 5.963])
-    elines = interp1d(caldb["TIME"], caldb["LINES"], axis=0, \
-                      bounds_error=False, fill_value=(caldb["LINES"][0], caldb["LINES"][-1]))(time)
-    se = np.sum(emarkers)
-    eds = np.sum(elines, axis=1)
-    edsq = np.sum(elines**2, axis=1)
-    eed = np.sum(elines*emarkers[np.newaxis, :], axis=1)
-    scale = (emarkers.size*eed - se*eds)/(emarkers.size*edsq - eds**2)
-    shift = (se - scale*eds)/emarkers.size
+    C0 = interp1d(caldb["OBT"], caldb["C0"], bounds_error=False, fill_value=tuple(caldb["C0"][[0, -1]]))
+    C1 = interp1d(caldb["OBT"], caldb["C1"], bounds_error=False, fill_value=tuple(caldb["C1"][[0, -1]]))
+
+    scale = C0(time)
+    shift = C1(time)
     return energy*scale + shift
 
 
@@ -116,21 +114,11 @@ def get_events_energy(eventlist, hkdata, caldb, escalecaldb=None, set_central_st
     botcal = caldb["BOT"].data
     topcal = caldb["TOP"].data
 
-    rawx, maskb = mkeventindex(eventlist["RAW_X"])
-    sigmab = botcal["fwhm_1"][rawx]*T + botcal["fwhm_0"][rawx]
-    PHAB = np.array([eventlist["PHA_BOT_SUB1"], eventlist["PHA_BOT"], eventlist["PHA_BOT_ADD1"]])
-    energb = random_uniform(PHAB, rawx, T, botcal)
-    maskb = np.logical_and(maskb, energb > botcal["THRESHOLD"][rawx])
-    maskb[1] = maskb[1] | set_central_strip_triggered
+    energb, maskb, sigmab = get_bot_energy(eventlist, hkdata, caldb, set_central_strip_triggered=set_central_strip_triggered)
     bitmask[5:8, :] = maskb
     print("bot dist", np.unique(maskb.sum(axis=0), return_counts=True))
 
-    rawy, maskt = mkeventindex(eventlist["RAW_Y"])
-    sigmat = topcal["fwhm_1"][rawy]*T + topcal["fwhm_0"][rawy]
-    PHAT = np.array([eventlist["PHA_TOP_SUB1"], eventlist["PHA_TOP"], eventlist["PHA_TOP_ADD1"]])
-    energt = random_uniform(PHAT, rawy, T, topcal) #PHA_to_PI(PHAT, rawy, T, topcal)
-    maskt = np.logical_and(maskt, energt > topcal["THRESHOLD"][rawy])
-    maskt[1] = maskt[1] | set_central_strip_triggered
+    energt, maskt, sigmat = get_top_energy(eventlist, hkdata, caldb, set_central_strip_triggered=set_central_strip_triggered)
     bitmask[2:5, :] = maskt
     print("top dist", np.unique(maskt.sum(axis=0), return_counts=True))
 
