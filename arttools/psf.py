@@ -1,5 +1,4 @@
-from .caldb import get_optical_axis_offset_by_device, get_inverse_psf_data, \
-        get_inversed_psf_data_packed, get_inverse_psf_datacube_packed, get_ayut_inverse_psf_datacube_packed
+from .caldb import get_optical_axis_offset_by_device, get_ayut_inverse_psf_datacube_packed, get_ayut_inversed_psf_data_packed
 from .spectr import get_filtered_crab_spectrum, Spec, get_specweights
 from ._det_spatial import offset_to_vec
 from .sphere import get_vec_triangle_area
@@ -56,24 +55,6 @@ def unpack_pix_index(i, j):
     k = (ia + 1)*ia//2 + ja
     return k
 
-
-def unpack_inverse_psf(i, j):
-    """
-    symmetries
-    i < 0 : inverse y
-    j < 0 : inverse x
-    i < j : transpose
-    """
-    k = unpack_pix_index(i, j)
-    data = get_inverse_psf_datacube_packed()[k]
-    if abs(j) > abs(i):
-        data = np.transpose(data)
-    if i < 0:
-        data = np.flip(data, axis=0)
-    if j < 0:
-        data = np.flip(data, axis=1)
-    return data
-
 ayutee = np.array([4., 6., 8., 10., 12., 16., 20., 24., 30.])
 
 def unpack_inverse_psf_ayut(i, j, e=None):
@@ -114,39 +95,6 @@ def unpack_inverse_psf_with_weights(weightfunc):
         data = unpack_inverse_psf_ayut(i, j)
         return weightfunc(data)
     return newfunc
-
-def unpack_inverse_psf_ayut(i, j, e=None):
-    """
-    inverse psf is an integral of the product of psf and vignetting over ART-XC detectors pixels
-    since this characteristics is a result of integral we cannot use differential approximation to extract
-    PSF - (for psf we can use only one parameter - offset from optical axis)
-    But! we can account for pixel symmetries and store only 1/8 of the data since rest can be restored with
-    the help of square pixel symmetries - transposition and two mirror mappings
-
-    k = i*(i - 1)/2 + j
-
-
-    i = int(sqrt(k + 1/4) + 1/2)
-    j = k - i*(i-1)
-
-    symmetries
-    i < 0 : inverse y
-    j < 0 : inverse x
-    i < j : transpose
-    """
-    k = unpack_pix_index(i, j)
-    data = get_ayut_inverse_psf_datacube_packed()
-    data = data[k]
-    if abs(j) > abs(i):
-        data = np.transpose(data, axes=(0, 2, 1))
-    if i < 0:
-        data = np.flip(data, axis=1)
-    if j < 0:
-        data = np.flip(data, axis=2)
-    if not e is None:
-        return data[np.searchsorted(ayutee, e) - 1]
-    else:
-        return data
 
 
 def unpack_inverse_psf_specweighted_ayut(imgfilter, cspec=None, app=None):
@@ -192,7 +140,7 @@ def get_pix_overall_countrate_constbkg_ayut(imgfilter, cspec=None, app=None):
     return newfunc
 
 def get_ipsf_interpolation_func(app=6.*60):
-    ipsf = get_inversed_psf_data_packed()
+    ipsf = get_ayut_inversed_psf_data_packed()
     xo = ipsf["offset"].data["x_offset"] #*0.9874317205607761 #*1.0127289656 #*1.0211676541662125
     yo = ipsf["offset"].data["y_offset"] #*0.9874317205607761 #*1.0127289656 #1.0211676541662125
     #xo = xo[(xo > - app) & (xo < app)]
