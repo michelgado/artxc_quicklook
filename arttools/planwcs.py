@@ -1,10 +1,12 @@
 from astropy.wcs import WCS
 from .time import tGTI, GTI
 from .mask import edges as medges
-from ._det_spatial import offset_to_vec, DL
+from ._det_spatial import offset_to_vec, DL, raw_xy_to_vec
 from .vector import pol_to_vec, vec_to_pol, normalize
-from .orientation import get_elongation_plane_norm, align_with_z_quat, minimize_norm_to_survey, make_align_quat
+from .orientation import get_elongation_plane_norm, align_with_z_quat, minimize_norm_to_survey, make_align_quat, get_slews_gti, get_photons_vectors, ObsClusters
 from .sphere import ConvexHullonSphere, get_vecs_convex, get_convex_center, get_angle_betwee_three_vectors
+from .containers import Urddata
+from .filters import IndependentFilters
 import numpy as np
 from math import cos, sin, pi, sqrt, asin, acos
 from scipy.optimize import minimize
@@ -12,7 +14,7 @@ from scipy.spatial.transform import Rotation, Slerp
 import matplotlib.pyplot as plt
 
 
-def make_tan_wcs(rac, decc, sizex=1, sizey=1, pixsize=10./3600., alpha=0.):
+def make_tan_wcs(rac, decc, sizex=1, sizey=1, pixsize=10./3600., alpha=0., lonpole=None, latpole=None):
     locwcs = WCS(naxis=2)
     locwcs.wcs.crpix = [sizex, sizey]
     locwcs.wcs.crval = [rac*180./pi, decc*180./pi]
@@ -21,6 +23,10 @@ def make_tan_wcs(rac, decc, sizex=1, sizey=1, pixsize=10./3600., alpha=0.):
     locwcs.wcs.pc = cdmat
     locwcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
     locwcs.wcs.radesys = "FK5"
+    if not lonpole is None:
+        locwcs.wcs.lonpole = lonpole
+    if not latpole is None:
+        locwcs.wcs.latpole = latpole
     return locwcs
 
 def convexhull_to_wcs(chull, alpha=None, cax=None, pixsize=10./3600., maxsize=False, landscape=False):
@@ -40,13 +46,13 @@ def convexhull_to_wcs(chull, alpha=None, cax=None, pixsize=10./3600., maxsize=Fa
         locwcs = make_tan_wcs(ra, dec, locwcs.wcs.crpix[1], locwcs.wcs.crpix[0], pixsize, alpha + pi/2.)
     return locwcs
 
-def minarea_ver2(vecs, pixsize=20./3600.):
-    corners = ConvexHullonSphere(vecs)
-    vm = get_convex_center(corners)
+def minarea_ver2(vecs, pixsize=20./3600., lonpole=None, latpole=None):
+    chull = ConvexHullonSphere(vecs)
+    vm = chull.get_center_of_mass()
     rac, decc = vec_to_pol(vm)
-    vfidx = np.argmin(np.sum(vm*corners.vertices, axis=-1))
-    alpha = get_angle_betwee_three_vectors(vm, corners.vertices[vfidx], [0, 0, 1])
-    size = int(np.arccos(np.sum(vm*corners.vertices[vfidx]))*180./pi/pixsize) + 2
+    vfidx = np.argmin(np.sum(vm*chull.vertices, axis=-1))
+    alpha = 0. #get_angle_betwee_three_vectors(vm, chull.vertices[vfidx], [0, 0, 1])
+    size = int(np.arccos(np.sum(vm*chull.vertices[vfidx]))*180./pi/pixsize) + 2
 
     locwcs = WCS(naxis=2)
     locwcs.wcs.crpix = [size, size]
@@ -56,7 +62,12 @@ def minarea_ver2(vecs, pixsize=20./3600.):
     locwcs.wcs.pc = cdmat
     locwcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
     locwcs.wcs.radesys = "FK5"
-    ra, dec = vec_to_pol(corners.vertices)
+    if not lonpole is None:
+        locwcs.wcs.lonpole = lonpole
+    if not latpole is None:
+        locwcs.wcs.latpole = latpole
+
+    ra, dec = vec_to_pol(chull.vertices)
     x, y = locwcs.all_world2pix(np.array([ra, dec]).T*180./pi, 1).T
     sizex, sizey = int(x.max() - x.min()), int(y.max() - y.min())
     rac, decc = locwcs.all_pix2world([[(x.max() + x.min())/2., (y.max() + y.min())/2.],], 1)[0]
@@ -67,11 +78,19 @@ def minarea_ver2(vecs, pixsize=20./3600.):
         cdmat = np.array([[cos(alpha), -sin(alpha)], [sin(alpha), cos(alpha)]])
         locwcs.wcs.pc = cdmat
         x, y = locwcs.all_world2pix(np.array([ra, dec]).T*180./pi, 1).T
-        return (x.max() - x.min())**2.*(y.max() - y.min())
+        return (x.max() - x.min())*(y.max() - y.min())
     alpha = minimize(minarea, [alpha,], method="Nelder-Mead").x[0]
+
     cdmat = np.array([[cos(alpha), -sin(alpha)], [sin(alpha), cos(alpha)]])
     locwcs.wcs.pc = cdmat
     x, y = locwcs.all_world2pix(np.array([ra, dec]).T*180./pi, 1).T
+    if (x.max() - x.min()) < (y.max() - y.min()):
+        alpha = alpha + pi/2. if abs(alpha + pi/2.) < abs(alpha - pi/2.) else alpha - pi/2.
+
+    cdmat = np.array([[cos(alpha), -sin(alpha)], [sin(alpha), cos(alpha)]])
+    locwcs.wcs.pc = cdmat
+    x, y = locwcs.all_world2pix(np.array([ra, dec]).T*180./pi, 1).T
+
     sizex = max(int(x.max() - locwcs.wcs.crpix[0]), int(locwcs.wcs.crpix[0] - x.min())) #int((x.max() - x.min())//2)
     sizey = max(int(y.max() - locwcs.wcs.crpix[1]), int(locwcs.wcs.crpix[1] - y.min())) #int((y.max() - y.min())//2)
     locwcs.wcs.crpix = [sizex + 1 - sizex%2, sizey + 1 - sizey%2]
@@ -327,3 +346,112 @@ def make_quat_for_wcs(wcs, x, y, roll):
     q0 = Rotation.from_rotvec(rvec*alpha)
     beta = get_wcs_roll_for_qval(wcs, q0)[0]
     return Rotation.from_rotvec(vec*(roll - beta))*q0
+
+def get_programms_gtis_and_wcss(attdata, join=True):
+    slews = get_slews_gti(attdata)
+    if join:
+        v = raw_xy_to_vec(np.array([0, 0, 48, 48]), np.array([0, 48, 48, 0]))
+        for i, arr in enumerate((~slews).arr):
+            attl = attdata.apply_gti(arttools.time.GTI(arr))
+            chull = ConvexHullonSphere(np.concatenate([attl.rotations.apply(v1) for v1 in v]))
+            chulls.append(chull)
+
+        clusters = np.arange(len(chulls))
+        for i in range(len(chulls) - 1):
+            ch1 = chulls[i]
+            for j in range(i + 1,len(chulls)):
+                ch2 = chulls[j]
+                if np.any(ch1.check_inside_polygon(ch2.vertices)) or np.any(ch2.check_inside_polygon(ch1.vertices)):
+                    clusters[(clusters == clusters[i]) | (clusters == clusters[j])] = min(clusters[i], clusters[j])
+
+        gtis = [attdata.gti & GTI((~slews).arr[clusters == cluster]) for cluster in np.unique(clusters)]
+    else:
+        gtis = [attdata.gti & GTI(arr) for arr in (~slews).arr]
+
+
+def estimate_optimal_wcs_grid(wcs):
+    shape = [(0, int(wcs.wcs.crpix[1]*2 + 1)), (0, int(wcs.wcs.crpix[0]*2 + 1))]
+    area = np.prod(np.diff(shape, axis=1).ravel()*wcs.wcs.cdelt)*(pi/180.)**2.
+    print("area", area)
+    vseg = 4.*(pi/180.)**2.  #characteristic fignetting function size
+    n = area/vseg
+    print("n", n)
+    ratio = np.diff(shape, axis=1).ravel()*wcs.wcs.cdelt
+    ratio = ratio[1]/ratio[0]
+    snum = max(int(sqrt(n/ratio)), 1)
+    bnum = max(int(n/snum), 1)
+    print("ration snum bnum", ratio, snum, bnum)
+    return shape, snum, bnum
+
+def split_by_wcs(wcs, snum=None, shape=None):
+    if shape is None:
+        shape = [(0, int(wcs.wcs.crpix[1]*2 + 1)), (0, int(wcs.wcs.crpix[0]*2 + 1))]
+    if snum is None:
+        area = np.prod(np.diff(shape, axis=1).ravel()*wcs.wcs.cdelt)*(pi/180.)**2.
+        print("area", area)
+        vseg = 4.*(pi/180.)**2.  #characteristic vignetting function size
+        n = area/vseg
+        print("n", n)
+    ratio = np.diff(shape, axis=1).ravel()*wcs.wcs.cdelt
+    ratio = ratio[1]/ratio[0]
+    snum = max(int(sqrt(n/ratio)), 1)
+    bnum = max(int(n/snum), 1)
+    print("ration", ratio, snum, bnum)
+    x, y = np.linspace(shape[0][0], shape[0][1], snum + 1).astype(int), np.linspace(shape[1][0], shape[1][1], bnum + 1).astype(int)
+    return [(x[i%snum:i%snum+2], y[i//snum:i//snum+2]) for i in range(snum*bnum)]
+
+
+def cut_data_by_wcs(wcs, attdata, urdevt, shape=None, vreach = pi/180.*2/3., ereach=8./60.*pi/180.):
+    if shape is None:
+        shape = [(0, int(wcs.wcs.crpix[1]*2 + 1)), (0, int(wcs.wcs.crpix[0]*2 + 1))]
+    v = wcs.all_pix2world(np.array(np.meshgrid(*shape)).T.reshape((-1, 2))[:,::-1], 0)
+    ch = ConvexHullonSphere(pol_to_vec(*np.deg2rad(v).T))
+    attloc = attdata.apply_gti(attdata.chull_gti(ch.expand(vreach)))
+    ch = ch.expand(ereach)
+    urdevt = {urdn: Urddata(d[ch.check_inside_polygon(get_photons_vectors(d, urdn, attdata))], urdn, d.filters & IndependentFilters({"TIME": attloc.gti})) for urdn, d in urdevt.items()}
+    return attloc, urdevt
+
+class WCSDataDistributer(object):
+    def __init__(self, wcs, grid=None, shape=None):
+        self.wcs = wcs
+        self.grid = grid
+        if grid is None:
+            shape, snum, bnum = estimate_optimal_wcs_grid(wcs)
+            self.grid = (np.linspace(shape[0][0], shape[0][1], snum + 1).astype(int), np.linspace(shape[1][0], shape[1][1], bnum + 1).astype(int))
+        self.shapes =  [(tuple(self.grid[0][i%snum:i%snum+2]), tuple(self.grid[1][i//snum:i//snum+2])) for i in range(snum*bnum)]
+        self.chulls = []
+        for shape in self.shapes:
+            vertices = wcs.all_pix2world([(y - 0.5, x - 0.5) for x in shape[0] for y in shape[1]], 0)
+            self.chulls.append(ConvexHullonSphere(pol_to_vec(*np.deg2rad(vertices.T))))
+
+        self.segments = {}
+        self.key_cuts = {}
+
+    def add(self, attdata, key):
+        obs = ObsClusters()
+        obs.add(attdata)
+
+        for chull in obs.chulls:
+            carea = 0.
+            for shape, ch in zip(self.shapes, self.chulls):
+                chi = ch & chull
+                if not chi is None:
+                    carea += chi.area
+                    gti = attdata.chull_gti(ch.expand(pi/180.*30./60.))
+                    self.segments[shape] = self.segments.get(shape, emptyGTI) | gti
+                    self.key_cuts[key] = {*(list(self.key_cut.get(key, {})) + [shape,])}
+                if abs(carea - chull.area) < 0.01:
+                    break
+
+    def get_shapes_gti(self):
+        return self.segments
+
+
+
+def make_wcs_cutouts(wcs, grid, vreach = pi/180.*2/3., ereach=8./60.*pi/180.):
+    while True:
+        attdata, key = yield
+
+
+if __name__ == "__main__":
+    pass
