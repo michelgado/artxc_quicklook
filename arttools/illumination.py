@@ -6,8 +6,9 @@ from ._det_spatial import offset_to_vec, raw_xy_to_vec, rawxy_to_qcorr
 from .orientation import vec_to_pol, pol_to_vec, get_photons_vectors, make_align_quat
 from .filters import Intervals
 from .time import emptyGTI, GTI
+from .aux import DistributedObj
 from .telescope import URDNS
-from .psf import get_ipsf_interpolation_func, unpack_inverse_psf_specweighted_ayut, rawxy_to_opaxoffset, unpack_inverse_psf_with_weights
+from .psf import get_ipsf_interpolation_func, unpack_inverse_psf_specweighted_ayut, rawxy_to_opaxoffset, unpack_inverse_psf_with_weights, get_pix_overall_countrate_constbkg_ayut
 from .mosaic2 import SkyImage
 from .atthist import make_small_steps_quats, make_wcs_steps_quats, hist_orientation_for_attdata
 from copy import copy
@@ -22,7 +23,7 @@ import time
 from scipy.spatial.transform import Rotation
 
 
-MPNUM = cpu_count()//4
+MPNUM = cpu_count()//4 + 1
 #OFFSETS = ???
 
 
@@ -124,7 +125,7 @@ class IlluminationSource(object):
         self.sidx = np.argsort(angles)
         #self.cedges = np.maximum(np.searchsorted(angles[self.sidx], offedges) - 1, 0)
         self.cedges = np.searchsorted(angles[self.sidx], offedges)
-        print("setup done", self.sourcevector)
+        #print("setup done", self.sourcevector)
 
     @staticmethod
     def setup_initializer(illum_source, qinitrot):
@@ -162,17 +163,17 @@ class IlluminationSource(object):
         return np.array(res)
 
     def mask_vecs_with_setup2(self, pvecs, qinitrot=None, mpnum=MPNUM, opax=None):
-        pool = ThreadPool(mpnum)
+        pool = ThreadPool(mpnum) if mpnum > 1 else type.__new__(type, "MockPool", (), {"map": map})
         qvecrot = self.qalign if qinitrot is None else self.qalign*qinitrot
         mask = np.zeros((pvecs.shape[0], len(qvecrot)), np.bool)
         qloc = qvecrot[self.sidx]
-        for i, crval in enumerate(self.offsets["CRVAL"]):
+        for i, crval in tqdm.tqdm(enumerate(self.offsets["CRVAL"]), total=self.offsets.shape[0]):
             s, e = self.cedges[i]
             if s == e:
                 continue
             self.wcs.wcs.crval[1] = crval/3600.
             w1 = WCS(self.wcs.to_header())
-            pvecsis = np.array(pool.map(qloc[s:e + 1].apply, pvecs)).reshape((-1, 3))
+            pvecsis = np.array(pool.map(qloc[s:e].apply, pvecs)).reshape((-1, 3))
             xyl = (w1.all_world2pix(np.rad2deg(vec_to_pol(pvecsis)).T, 1) - 0.5).astype(int)
             imask = np.copy(self.imask[i])
             y0, x0 = (w1.all_world2pix(np.array([[180., 0.],]), 1) - 0.5).astype(int)[0]
@@ -189,6 +190,60 @@ class IlluminationSource(object):
             attloc = attdata.apply_gti(gti)*get_boresight_by_device(urdn)
             mask[mask] = self.get_vectors_in_illumination_mask(attloc(urddata["TIME"][mask]), pvecs, opax, mpnum)
         return mask
+
+    """
+    def get_vectors_in_illumination_mask(self, pvecs, urdn, attdata, mpnum=1):
+        opax = raw_xy_to_vec(*np.array(get_optical_axis_offset_by_device(urdn)).reshape((2, 1)))[0]
+        gti = attdata.circ_gti(self.sourcevector, self.offsets["OPAXOFFH"][-1], get_boresight_by_device(urdn).apply(opax))
+        mask = gti.mask_external(urddata["TIME"])
+        if np.any(mask):
+            pvecs = pvecs[mask]
+            attloc = attdata.apply_gti(gti)*get_boresight_by_device(urdn)
+            mask[mask] = self.get_vectors_in_illumination_mask(attloc(urddata["TIME"][mask]), pvecs, opax, mpnum)
+        return mask
+    """
+
+class MosaicForEachPix(DistributedObj):
+
+    def __init__(self, locwcs, qvals, dtq, shape=None, mpnum=4, barrier=None):
+        kwargs = locals()
+        kwargs.pop("self")
+        kwargs.pop("__class__")
+        initpool = Thread(target=super().__init__, kwargs=kwargs) #don't wait for pool initialization since it takes approximately the same time
+        initpool.start()
+        #super().__init__(**kwargs)
+
+        self.locwcs = locwcs
+        self.shape = shape if not shape is None else [(0, int(locwcs.wcs.crpix[1]*2 + 1)), (0, int(locwcs.wcs.crpix[0]*2 + 1))]
+        self.img = np.zeros(np.diff(self.shape, axis=1).ravel(), float)
+        self.qvals = qvals
+        self.dtq = dtq
+
+    @DistributedObj.for_each_argument
+    def spread_events(self, x, y, weight, mask, randomize=True):
+        v = raw_xy_to_vec(np.ones(mask.sum())*x, np.ones(mask.sum())*y, randomize=randomize)
+        xy = self.locwcs.all_world2pix(np.rad2deg(vec_to_pol(self.qval[mask].apply(v))).T, 0).astype(int) + [self.shape[1][0], self.shape[0][0]]
+        np.add.at(self.img, (xy[:, 1], xy[:, 0]), self.dtq[mask]*weight)
+
+    @DistributedObj.for_each_process
+    def get_img(self):
+        return self.img
+
+    def get_clean(self):
+        self.img[:, :] = 0.
+
+    @DistributedObj.for_each_process
+    def set_qval_and_dtq(self, qval, dtq):
+        self.qval = qval
+        self.dtq = dtq
+
+    """
+    def __iter__(self):
+        ones = np.ones(len(self.qlist))
+        for x, y, w, m in zip(self.x, self.y, self.weights, self.mask):
+            vecs = qlist[mask].apply(raw_xy_to_vec(ones[mask]*x, ones[mask]*y, randomize=True))
+            return vecs, w*self.dtq[mask]
+    """
 
 
 class DataDistributer(object):
@@ -259,26 +314,65 @@ class DataDistributer(object):
 
 
 class IlluminationSources(object):
-    def __init__(self, ra, dec, mpnum=MPNUM):
+    def __init__(self, ra, dec, mpnum=MPNUM, clustered=False):
         wcs, offsets, imask = get_illumination_mask()
         self.wcs = wcs
         self.offsets = offsets
         self.imask = imask
+        self.ra = ra
+        self.dec = dec
         self.sources = [IlluminationSource(r, d, self.wcs, self.offsets, self.imask) for r, d in zip(np.asarray(ra).reshape(-1), np.asarray(dec).reshape(-1))]
         self.x, self.y = np.mgrid[0:48:1, 0:48:1]
         self.mpnum = mpnum
+        self.clustered = clustered
+
+        maxoffset = offsets[-1][2]
+        m = self.imask[-1].astype(bool)
+        self.wcs.wcs.crval[1] = maxoffset/3600.
+        w1 = WCS(self.wcs.to_header())
+        """
+        source position vector for wcs is placed at 180 0
+        have to provide it from caldb
+        """
+        svec = pol_to_vec(np.array([pi,]), np.array([0.,]))[0]
+        x, y = np.mgrid[0:m.shape[0]:1, 0:m.shape[1]:1]
+        r, d = w1.all_pix2world(np.array([y[m], x[m]]).T, 0).T
+        v = pol_to_vec(np.deg2rad(r), np.deg2rad(d))
+        amax = np.arccos(np.min(np.sum(v*svec, axis=1)))
+
+        if not self.clustered:
+            clusters = np.arange(len(self.sources))
+            for i in range(len(self.sources) - 1):
+                tvec = self.sources[i].sourcevector
+                for j in range(i + 1,len(self.sources)):
+                    gvec = self.sources[j].sourcevector
+                    if np.arccos(np.sum(tvec*gvec)) < 2.*amax:
+                        clusters[(clusters == clusters[i]) | (clusters == clusters[j])] = min(clusters[i], clusters[j])
+
+            self.clusters = clusters
+        else:
+            self.clusters = [0,]
+
+    def get_clusters(self):
+        return [self.__class__(self.ra[self.clusters == c], self.dec[self.clusters == c], self.mpnum, clustered=True) for c in np.unique(self.clusters)]
+
 
     def get_illumination_bti(self, attdata, urdns=URDNS):
-        bti = emptyGTI
+        bti = []
         for urdn in list(urdns):
             attloc = attdata*get_boresight_by_device(urdn)
             opax = raw_xy_to_vec(*np.array(get_optical_axis_offset_by_device(urdn)).reshape((2, 1)))[0]
             for isource in self.sources:
-                bti = bti | attloc.circ_gti(isource.sourcevector, self.offsets["OPAXOFFH"][-1], opax)
+                bti.append(attdata.circ_gti(isource.sourcevector, self.offsets["OPAXOFFH"][-1], opax))
+
         return bti
 
     def get_events_in_illumination_mask(self, urddata, urdn, attdata, mpnum=1):
         mask = np.any([source.get_events_in_illumination_mask(urddata, urdn, attdata, mpnum) for source in self.sources], axis=0)
+        return mask
+
+    def get_vectors_in_illumination_mask(self, vecs, urdn, attdata, mpnum=1):
+        mask = np.any([source.get_vectors_in_illumination_mask(vecs, urdn, attdata, mpnum) for source in self.sources], axis=0)
         return mask
 
     def get_vectors_in_illumination_mask(self, quats, pvecs, opax, qalignlist=False):
@@ -300,7 +394,8 @@ class IlluminationSources(object):
                 ipsffunc = unpack_inverse_psf_with_weights(psfweightfunc)
             gti = imgfilters[urdn].filters["TIME"]
             opax = raw_xy_to_vec(*np.array(get_optical_axis_offset_by_device(urdn)).reshape((2, 1)))[0]
-            bti = self.get_illumination_bti(attdata, [urdn,])
+            btis = self.get_illumination_bti(attdata, [urdn,])
+            bti = reduce(lambda a, b: a | b, btis)
             lgti = gti & bti
 
             print("nonfiltered and filtered exposures", gti.exposure, lgti.exposure)
@@ -308,12 +403,17 @@ class IlluminationSources(object):
                 continue
             if histattdata:
                 dtq, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urdn), lgti, wcs=wcs, timecorrection=dtcorr.get(urdn, lambda x: np.ones(x.size)))
+                msrcs = [np.ones(dtq.size, bool) for _ in range(len(self.sources))]
             else:
                 ts, qval, dtq, locgti = make_wcs_steps_quats(wcs, attdata*get_boresight_by_device(urdn), gti=lgti, timecorrection=dtcorr.get(urdn, lambda x: np.ones(x.size)))
+                print("ts.size", ts.size, len(qval))
+                msrcs = [b.mask_external(ts) for b in btis]
+
             dtq = dtq*urdweights.get(urdn, 1./7.)
-            for source in self.sources:
-                print("computing illumination masks over pixels")
-                source.setup_for_quats(qval, opax)
+
+            for ms, source in zip(msrcs, self.sources):
+                #print("computing illumination masks over pixels", ms.size, ms.sum())
+                source.setup_for_quats(qval[ms], opax)
 
             shmask = imgfilters[urdn].meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
             xloc, yloc = self.x[shmask], self.y[shmask]
@@ -321,7 +421,13 @@ class IlluminationSources(object):
             vecs = raw_xy_to_vec(xloc, yloc)
             i, j = rawxy_to_opaxoffset(xloc, yloc, urdn)
 
-            mask = np.any([source.mask_vecs_with_setup(vecs, qval, mpnum=mpnum) for source in self.sources], axis=0)
+            mask = np.zeros((vecs.shape[0], len(qval)), bool)
+            for ms, source in zip(msrcs, self.sources):
+                #mres = source.mask_vecs_with_setup(vecs, qval[ms], mpnum=mpnum)
+                mres = source.mask_vecs_with_setup(vecs, qval[ms], mpnum=mpnum)
+                mask[:, ms] = np.logical_or(mask[:, ms], mres)
+
+            #mask = np.any([source.mask_vecs_with_setup(vecs, qval, mpnum=mpnum) for source in self.sources], axis=0)
             data.add(i, j, mask, dtq, qval, qcorr, ipsffunc)
         return data
 
@@ -329,9 +435,17 @@ class IlluminationSources(object):
         """
         note: deadtime correction is likely mandatory in the vicinity of illumination sources
         """
+
+        """
+        if not self.clustered:
+            isrcs = self.get_clusters()
+            return sum(s.get_illumination_expmap(wcs, attdata, imgfilters, urdweights, dtcorr, psfweightfunc, mpnum, kind, **kwargs) for s in isrcs)
+        """
+
         vmap = get_ipsf_interpolation_func()
         sky = SkyImage(wcs, vmap, mpnum=mpnum)
         list(sky.clean_image())
+
 
         print("put illuminated pixels on sky")
         if kind == "direct":
@@ -353,6 +467,41 @@ class IlluminationSources(object):
             if data.get_size() > 0:
                 sky.fft_convolve_multiple(data, total=data.get_size())
         return sky.img
+
+    def make_pixmap_projection(self, wcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dtcorr={}, urdweights={}, **kwargs):
+        x, y = np.mgrid[0:48:1, 0:48:1]
+
+        #sky = SkyImage(wcs, None, shape, mpnum=mpnum)
+        sky = MosaicForEachPix(wcs, None, None, shape, mpnum)
+        print("sky done")
+
+        for urdn in imgfilters:
+            opix = get_pix_overall_countrate_constbkg_ayut(imgfilters[urdn], **kwargs)
+            shmask = imgfilters[urdn].meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
+            x0, y0 = get_optical_axis_offset_by_device(urdn)
+            opax = raw_xy_to_vec(*np.array([x0 - 0.5, y0 - 0.5]).reshape((2, -1)))[0]
+            i, j = np.round(x + 0.5 - x0).astype(int)[shmask], np.round(y + 0.5 - y0).astype(int)[shmask]
+            xl, yl = x[shmask], y[shmask]
+            vecs = raw_xy_to_vec(xl, yl)
+
+            weights = opix(i, j)
+            ts, qval, dtq, locgti = make_small_steps_quats(attdata, gti=imgfilters[urdn]["TIME"], timecorrection=dtcorr.get(urdn, lambda x: np.ones(x.size)))
+            list(sky.set_qval_and_dtq(qval, dtq))
+
+            for source in self.sources:
+                source.setup_for_quats(qval, opax)
+            print("source setup done")
+
+            mask = np.zeros((vecs.shape[0], len(qval)), bool)
+            for source in self.sources:
+                mres = source.mask_vecs_with_setup(vecs, qval, mpnum=mpnum)
+                mask[:,:] = np.logical_or(mask[:, :], mres)
+            print("mask estimation done")
+
+            for _ in tqdm.tqdm(sky.spread_events(zip(xl, yl, weights, ~mask)), total=xl.size):
+                pass
+        return sum(sky.get_img())
+
 
 def get_illumination_gtis(att, brightsourcevec, urdgti=None):
     offsetmasks = get_illumination_mask()
