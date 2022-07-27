@@ -1,3 +1,4 @@
+#!/opt/soft/psoft/python_venv/bin/python3
 from arttools.plot import make_mosaic_for_urdset_by_gti, get_attdata, make_sky_image, make_energies_flags_and_grades
 from arttools.orientation import read_bokz_fits, AttDATA
 from arttools.planwcs import make_wcs_for_attdata, split_survey_mode
@@ -24,11 +25,14 @@ from astropy.wcs import WCS
 import matplotlib.pyplot as plt
 from scipy.stats import poisson
 from scipy.special import gamma, gammainc
+from scipy.ndimage import gaussian_filter
 import time
 import pymc3
-from astropy.table import Table
+from astropy.table import Table, QTable
+from astropy import units as au
 import pandas
 from astropy.time import Time, TimeDelta
+import datetime
 
 
 vmap = None
@@ -39,6 +43,17 @@ tstart, fnames, atts = None, None, None
 urdcrates = arttools.caldb.get_telescope_crabrates()
 cr = np.sum([v for v in urdcrates.values()])
 urdcrates = {urdn: d/cr for urdn, d in urdcrates.items()}
+
+imgfilters = {urdn: arttools.filters.IndependentFilters({"ENERGY": arttools.filters.Intervals([4., 30.]),
+                                                        "GRADE": arttools.filters.RationalSet(range(10)),
+                                                        ("RAW_X", "RAW_Y"): arttools.filters.get_shadowmask_filter(urdn)}) for urdn in arttools.telescope.URDNS}
+
+bkgfilters = arttools.filters.IndependentFilters({"ENERGY": arttools.filters.Intervals([40., 100.]),
+                                                "RAW_X": arttools.filters.InversedRationalSet([0, 47]),
+                                                "RAW_Y": arttools.filters.InversedRationalSet([0, 47]),
+                                                "GRADE": arttools.filters.InversedRationalSet([])})
+
+
 
 def pfunc(x, e):
     g = gammainc(x[0], e*x[1])
@@ -98,6 +113,13 @@ def update_att(flist, tstart, fnames, atts):
     pickle.dump([tstart, fnames, atts], open("/srg/a1/work/andrey/ART-XC/all_sky_survey/surveyatt.pkl", "wb"))
     return tstart, fnames, atts
 
+def mprob_quantiles(sample, val=None, quantiles=[0.9,]):
+    if val is None:
+        val = np.median(np.random.choice(sample, 10))
+    idx = np.argsort(np.abs(val - sample))
+    ss = sample[idx]
+    return [(ss[:int(q*ss.size)].min(), ss[:int(q*ss.size)].max()) for q in list(quantiles)]
+
 
 def init_ipsf_weight_pool():
     global vmap
@@ -109,18 +131,7 @@ def get_ipsf_weight(args):
     return vmap(arttools._det_spatial.vec_to_offset(q.apply(ax, inverse=True)))
 
 
-def make_spec(ra, dec, survey=None):
-
-
-    imgfilters = {urdn: arttools.filters.IndependentFilters({"ENERGY": arttools.interval.Intervals([4., 30.]),
-                                                            "GRADE": arttools.filters.RationalSet(range(10)),
-                                                            "RAWXY": arttools.filters.get_shadowmask_filter(urdn)}) for urdn in arttools.telescope.URDNS}
-
-    bkgfilters = arttools.filters.IndependentFilters({"ENERGY": arttools.interval.Intervals([40., 100.]),
-                                                    "RAW_X": arttools.filters.InversedRationalSet([0, 47]),
-                                                    "RAW_Y": arttools.filters.InversedRationalSet([0, 47]),
-                                                    "GRADE": arttools.filters.InversedRationalSet([])})
-
+def make_spec(ra, dec, survey=None, flist=None, usergti=tGTI):
 
     ra, dec = float(ra), float(dec)
     print("processing spec for (ra, dec, survey):", ra, dec, survey)
@@ -151,25 +162,25 @@ def make_spec(ra, dec, survey=None):
             t1 = Time(arttools.caldb.MJDREF, format="mjd") + TimeDelta(tt, format="sec")
             report.write("%s %s\n" % (t1[0].iso, t1[1].iso))
 
-
-
-        if os.path.exists("%s_evt.pkl" % fname):
-            att, urdgti, bkgtimes, urdevtt, bkggti = pickle.load(open("%s_evt.pkl" % fname, "rb"))
+        if not flist is None:
+            allfiles = [l.rstrip() for l in open(flist)]
+            attfiles = [l for l in allfiles if "gyro.fits" in l]
+            urdfiles = [l for l in allfiles if "urd.fits" == l[-8:]]
         else:
             dirs = [survfnames[i] for i in np.unique(np.searchsorted(survtstart, gloc.arr.ravel())) - 1]
-
-            print(dirs)
-
             attfiles = []
             urdfiles = []
             for d in dirs:
                 attfiles += [os.path.join(d, "L0", l) for l in os.listdir(os.path.join(d, "L0")) if "gyro.fits" in l]
                 urdfiles += [os.path.join(d, "L1b", l) for l in os.listdir(os.path.join(d, "L1b")) if "urd.fits" == l[-8:]]
 
+        if os.path.exists("%s_evt.pkl" % fname):
+            att, urdgti, bkgtimes, urdevtt, bkggti = pickle.load(open("%s_evt.pkl" % fname, "rb"))
+        else:
+
             att = None
             att = arttools.orientation.AttDATA.concatenate([arttools.orientation.get_attdata(l) for l in attfiles])
             gti = att.circ_gti(ax, 25*60.) & gloc
-            print("located files", dirs)
             print("used gti", gti)
 
             bdata = []
@@ -177,7 +188,7 @@ def make_spec(ra, dec, survey=None):
             urdevt = {}
 
             for urdn in imgfilters:
-                imgfilters[urdn]["ENERGY"] = arttools.interval.Intervals([4., 30.])
+                imgfilters[urdn]["ENERGY"] = arttools.filters.Intervals([4., 30.])
 
             for fname in urdfiles:
                 print(fname)
@@ -216,7 +227,7 @@ def make_spec(ra, dec, survey=None):
         else:
             imgfilters4_12 = {urdn: copy(f) for urdn, f in imgfilters.items()}
             for urdn in imgfilters4_12:
-                imgfilters4_12[urdn]["ENERGY"] = arttools.interval.Intervals([4., 12.])
+                imgfilters4_12[urdn]["ENERGY"] = arttools.filters.Intervals([4., 12.])
 
             urdevt = {urdn: urdevtt[urdn][imgfilters4_12[urdn].apply(urdevtt[urdn])] for urdn in urdevtt}
             print("4-12 events", {urdn: d.size for urdn, d in urdevt.items()})
@@ -241,7 +252,7 @@ def make_spec(ra, dec, survey=None):
             bkgrates = {urdn: arttools.background.get_local_bkgrates(urdn, urdbkg[urdn], imgfilters4_12[urdn], urdevt[urdn]) for urdn in arttools.telescope.URDNS}
             bkgrates = arttools.telescope.concat_data_in_order(bkgrates)
 
-            photprob = arttools.background.get_photon_vs_particle_prob(imgfilters4_12, urdevt, urdweights=urdcrates)
+            photprob = arttools.background.get_photon_vs_particle_prob(urdevt, urdweights=urdcrates)
             photprob = arttools.telescope.concat_data_in_order(photprob)
 
             vmapl = arttools.psf.get_ipsf_interpolation_func()
@@ -250,31 +261,38 @@ def make_spec(ra, dec, survey=None):
 
             ije, sidx, ss, sc = arttools.psf.select_psf_grups(i, j, eenergy)
 
-            sky = arttools.mosaic2.SkyImage(locwcs, vmapl, mpnum=30)
+            sky = arttools.mosaic2.SkyImage(locwcs, vmapl, mpnum=20)
             emap = arttools.expmap.make_expmap_for_wcs(locwcs, att, urdgti, imgfilters4_12, urdweights=urdcrates) #, urdweights=urdcrates) #emin=4., emax=12., phot_index=1.9)
             tasks = [(qlist[sidx[s:s+c]], pkoef[sidx[s:s+c]], np.copy(arttools.psf.unpack_inverse_psf_ayut(ic, jc)[eidx])) for (ic, jc, eidx), s, c in zip(ije.T, ss, sc)]
 
             mask = emap > 1.
             sky.set_mask(mask)
-            ctot = np.ones(mask.shape, np.double)
 
+            ctot = np.maximum(gaussian_filter(img1.astype(float), 3.)*2.*pi*9., 1.)
             sky.set_action(arttools.mosaic2.get_source_photon_probability)
-            sky.set_rmap(ctot/np.maximum(emap, 1.))
-            for _ in range(21):
-                sky.clean_img()
-                sky.rmap_convolve_multicore(tasks)
+            rmap = np.maximum(ctot, 1.)/np.maximum(emap, 1.)
+            sky.set_rmap(np.maximum(ctot, 1.)/np.maximum(emap, 1.))
+
+            for _ in range(61):
+                sky.clean_image()
+                ctasks = [(q, s, c) if np.all(m) else (q[m], s[m], c) for (q, s, c), m in zip(ctasks, sky.rmap_convolve_multicore(ctasks, ordered=True, total=len(ctasks))) if np.any(m)]
                 sky.accumulate_img()
-                mask = ctot < 0.5
-                print("zero photons cts: ", mask.sum(), "conv hist", np.histogram(np.abs(ctot[~mask] - sky.img[~mask])/ctot[~mask], [0., 1e-3, 1e-2, 5e-2, 0.1, 0.5, 1., 2., 10.]))
-                sky.set_rmap(sky.img/np.maximum(emap, 1.))
-                ctot = np.copy(sky.img)
+                mold = np.copy(sky.mask)
+                sky.set_mask(np.all([sky.mask, ~((sky.img < ctot) & (sky.img < 0.5)), np.abs(sky.img - ctot) > np.maximum(ctot, 2)*5e-3], axis=0))
+                print("img mask", sky.mask.size, sky.mask.sum(), "total events", np.sum([t[1].size for t in ctasks]))
+                print("zero photons cts: ", sky.mask.sum(), "conv hist", np.histogram(np.abs(ctot[sky.mask] - sky.img[sky.mask])/ctot[sky.mask], [0., 1e-3, 1e-2, 5e-2, 0.1, 0.5, 1., 10000.]))
+                ctot[mold] = np.copy(sky.img[mold])
+                sky.set_rmap(ctot/np.maximum(emap, 1.))
                 sky.img[:, :] = 0.
-            sky.clean_img()
+                if not np.any(sky.mask):
+                    break
+            sky.clean_image()
             sky.set_action(arttools.mosaic2.get_zerosource_photstat)
             sky.set_rmap(ctot/np.maximum(emap, 1.))
+            sky.set_mask(np.ones(sky.mask.shape, bool))
             sky.img[:, :] = 0.
-            sky.rmap_convolve_multicore(tasks)
-            sky.accumulate_img()
+            sky.rmap_convolve_multicore(tasks, total=len(tasks))
+
             pmap = -ctot - sky.img
             fits.ImageHDU(data =pmap/log(10.), header=locwcs.to_header()).writeto("%s.fits.gz" % fname, overwrite=True)
             report.write("image stored in %s\n" % ("%s.fits.gz" % fname))
@@ -307,7 +325,7 @@ def make_spec(ra, dec, survey=None):
             urdevt = {}
 
             for urdn in imgfilters:
-                imgfilters[urdn]["ENERGY"] = arttools.interval.Intervals([el, eh])
+                imgfilters[urdn]["ENERGY"] = arttools.filters.Intervals([el, eh])
                 urdgti[urdn] = urdgti[urdn] & att.get_axis_movement_speed_gti(lambda x: x > 70.*pi/180./3600.)
                 imgfilters[urdn]["TIME"] = urdgti[urdn]
                 urdevt[urdn] = urdevtt[urdn][imgfilters[urdn].apply(urdevtt[urdn])]
@@ -332,11 +350,11 @@ def make_spec(ra, dec, survey=None):
                 bkgrates = {urdn: arttools.background.get_local_bkgrates(urdn, urdbkg[urdn], imgfilters[urdn], urdevt[urdn]) for urdn in arttools.telescope.URDNS}
                 bkgrates = arttools.telescope.concat_data_in_order(bkgrates)
 
-                photprob = arttools.background.get_photon_vs_particle_prob(imgfilters, urdevt, urdweights=urdcrates)
+                photprob = arttools.background.get_photon_vs_particle_prob(urdevt, urdweights=urdcrates)
                 photprob = arttools.telescope.concat_data_in_order(photprob)
 
                 for urdn in imgfilters:
-                    imgfilters[urdn]["ENERGY"] = arttools.interval.Intervals([el, eh])
+                    imgfilters[urdn]["ENERGY"] = arttools.filters.Intervals([el, eh])
 
                 lgti = tgti
                 te, gaps = lgti.arange(1e6)
@@ -441,7 +459,6 @@ def make_spec(ra, dec, survey=None):
         pfile.writeto("%s.rsp" % fname, overwrite=True)
         report.write("spectr stored in %s\n" % ("%s.pha" % fname))
 
-
 def poltovec(ra, dec):
     shape = np.asarray(ra).shape
     vec = np.empty(shape + (3,), np.double)
@@ -518,114 +535,481 @@ def analyze_survey(fpath, pastday=None):
                                       "emap%02d_%s.fits.gz" % (k, date),
                                       usedtcorr=False)
 
+def make_img(flist, outputname, usergti=tGTI, emin=4., emax=12., make_detmap=False, ra=None, dec=None):
+    allfiles = [l.rstrip() for l in open(flist)]
+    attfiles = [l for l in allfiles if "gyro.fits" in l]
+    urdfiles = [l for l in allfiles if "urd.fits" == l[-8:]]
 
+    attdata = arttools.orientation.AttDATA.concatenate([arttools.orientation.get_attdata(gf) for gf in attfiles])
+    attdata = attdata.apply_gti(usergti + [-3, 3])
+
+    attgti = arttools.time.tGTI
+    if not ra is None and not dec is None:
+        attgti = attdata.circ_gti(arttools.vector.pol_to_vec(*np.deg2rad([ra, dec]).reshape((2, -1)))[0], 25.*60)
+
+
+    for urdn in imgfilters:
+        imgfilters[urdn]["TIME"] = attdata.gti & usergti & attgti
+        imgfilters[urdn]["ENERGY"] = arttools.filters.Intervals([float(emin), float(emax)])
+
+    print("check attdata", attdata.gti.exposure)
+
+    urddata, urdhk = arttools.containers.read_urdfiles(urdfiles, {urdn: arttools.filters.IndependentFilters({"TIME": attdata.gti}) for urdn in arttools.telescope.URDNS}) #[f.replace("L0", "L1b") for f in urdfiles])
+    for urdn in urddata:
+        if not "ENERGY" in urddata[urdn]:
+            urddata[urdn] = arttools.energy.add_energies_and_grades(urddata[urdn], urdhk[urdn], arttools.caldb.get_energycal_by_urd(urdn), arttools.caldb.get_escale_by_urd(urdn))
+    bkgdata = {urdn: d.apply_filters(bkgfilters) for urdn, d in urddata.items()}
+    bkgtimes = np.sort(np.concatenate([d["TIME"] for d in bkgdata.values()]))
+    urdbkg = arttools.background.get_background_lightcurve(bkgtimes, bkgdata, 1000., imgfilters)
+    urddtc = {urdn: arttools.time.deadtime_correction(hk) for urdn, hk in urdhk.items()}
+
+    urdevt = {urdn: d.apply_filters(imgfilters[urdn]) for urdn, d in urddata.items()}
+    imgf = {urdn: d.filters for urdn, d in urdevt.items()}
+
+    tgti = reduce(lambda a, b: a | b, [d.filters["TIME"] for d in urdevt.values()])
+
+    pixsize = 10./3600.
+    lwcs = arttools.planwcs.make_wcs_for_attdata(attdata, gti=tgti, pixsize=pixsize)
+    print("initialized lwcs", lwcs)
+
+    bmap = arttools.background.make_bkgmap_for_wcs(lwcs, attdata, urdbkg, imgf, mpnum=30, kind="convolve") #time_corr=urddtc) #, illuminations=illum_filters)
+
+    radec = np.concatenate([np.rad2deg(arttools.orientation.vec_to_pol(arttools.orientation.get_photons_vectors(d, urdn, attdata, randomize=True))).T for urdn, d in urdevt.items() if d.size > 0])
+    xy = (lwcs.all_world2pix(radec, 1) - 0.5).astype(int)
+    xy = xy[np.all([xy[:, 0] > 0, xy[:, 1] > 0, xy[:, 0] <  bmap.shape[1], xy[:, 1] < bmap.shape[0]], axis=0)]
+    u, uc = np.unique(xy, axis=0, return_counts=True)
+    img1 = np.zeros(bmap.shape, int)
+    img1[u[:, 1], u[:, 0]] = uc
+
+    femap = arttools.expmap.make_expmap_for_wcs(lwcs, attdata, imgf, urdweights=urdcrates, kind="convolve")#, dtcorr=urddtc) #, urdweights=urdcrates) #emin=4., emax=12., phot_index=1.9)
+    if make_detmap:
+        emap = femap
+        bkgrates = {urdn: arttools.background.get_local_bkgrates(urdevt[urdn], urdbkg[urdn]) for urdn in arttools.telescope.URDNS}
+        bkgrates = arttools.telescope.concat_data_in_order(bkgrates)
+
+        urdns = arttools.telescope.URDNS
+        qlist = [Rotation(np.empty((0, 4), np.double)) if urdevt[urdn].size == 0 else arttools.orientation.get_events_quats(urdevt[urdn], urdn, attdata)*arttools._det_spatial.get_qcorr_for_urddata(urdevt[urdn]) for urdn in arttools.telescope.URDNS if urdn in urdevt]
+        qlist = Rotation.from_quat(np.concatenate([q.as_quat() for q in qlist], axis=0))
+
+        i, j = zip(*[arttools.psf.urddata_to_opaxoffset(urdevt[urdn], urdn) for urdn in arttools.telescope.URDNS if urdn in urdevt])
+        i, j = np.concatenate(i), np.concatenate(j)
+
+        eenergy = arttools.telescope.concat_data_in_order({urdn: d["ENERGY"] for urdn, d in urdevt.items()})
+
+        photprob = arttools.background.get_photon_vs_particle_prob(urdevt, urdweights=urdcrates)
+        photprob = arttools.telescope.concat_data_in_order(photprob)
+
+        vmap = arttools.psf.get_ipsf_interpolation_func()
+        pkoef = photprob/bkgrates
+
+        ije, sidx, ss, sc = arttools.psf.select_psf_grups(i, j, eenergy)
+        tasks = [(qlist[sidx[s:s+c]], pkoef[sidx[s:s+c]], np.copy(arttools.psf.unpack_inverse_psf_ayut(ic, jc)[eidx])) for (ic, jc, eidx), s, c in zip(ije.T, ss, sc)]
+
+        mask = emap > 1.
+        sky = arttools.mosaic2.SkyImage(lwcs, vmap, mpnum=10)
+        sky.set_mask(mask, join=True)
+        ctot = gaussian_filter(img1.astype(float), 3.)*2.*pi*9.
+        sky.set_action(arttools.mosaic2.get_source_photon_probability, join=True)
+        for _ in range(25):
+            sky.set_rmap(np.maximum(ctot, 1.)/np.maximum(emap, 1.), join=True)
+            sky.rmap_convolve_multicore(tasks, total=len(tasks))
+            mask = ctot < 0.5
+            print("zero photons cts: ", mask.sum(), "conv hist", np.histogram(np.abs(ctot[~mask] - sky.img[~mask])/ctot[~mask], [0., 1e-3, 1e-2, 5e-2, 0.1, 0.5, 1., 2., 10.]))
+            ctot = np.copy(sky.img)
+            sky.img[:, :] = 0.
+
+        sky.set_action(arttools.mosaic2.get_zerosource_photstat, join=True)
+        sky.set_rmap(ctot/np.maximum(emap, 1.), join=True)
+        sky.img[:, :] = 0.
+        sky.rmap_convolve_multicore(tasks, total=len(tasks))
+
+        prob = (-sky.img - ctot)/log(10.)
+        fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(img1, header=lwcs.to_header(), name='PHOT'),
+                                                fits.ImageHDU(ctot/emap, header=lwcs.to_header(), name="rate"),
+                                                fits.ImageHDU(prob, header=lwcs.to_header(), name="prob"),
+                                                fits.ImageHDU(bmap, header=lwcs.to_header(), name="bmap"),
+                                                fits.ImageHDU(femap, header=lwcs.to_header(), name="emap")]).writeto(outputname + ".fits.gz")
+    else:
+        fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(img1, header=lwcs.to_header(), name='PHOT'),
+                                        fits.ImageHDU(bmap, header=lwcs.to_header(), name="bmap"),
+                                        fits.ImageHDU(femap, header=lwcs.to_header(), name="emap")]).writeto(outputname + ".fits.gz")
+
+
+
+def make_lightcurve(flist, outputname, ra, dec, dt, usergti=tGTI, emin=4., emax=12., app=120., spec=None, join_sep=0.):
+    allfiles = [l.rstrip() for l in open(flist)]
+    attfiles = [l for l in allfiles if "gyro.fits" in l]
+    urdfiles = [l for l in allfiles if "urd.fits" == l[-8:]]
+
+    srcvec = arttools.vector.pol_to_vec(*np.deg2rad([float(ra), float(dec)]).reshape((2, -1)))[0]
+
+    attdata = arttools.orientation.AttDATA.concatenate([arttools.orientation.get_attdata(gf) for gf in attfiles])
+    gti = attdata.circ_gti(srcvec, 22*60.)
+    attdata = attdata.apply_gti((gti & usergti) + [-3, 3])
+
+
+    for urdn in imgfilters:
+        imgfilters[urdn]["TIME"] = attdata.gti & usergti
+        imgfilters[urdn]["ENERGY"] = arttools.filters.Intervals([float(emin), float(emax)])
+
+    print("check attdata", attdata.gti.exposure)
+
+    urddata, urdhk = arttools.containers.read_urdfiles(urdfiles, filterslist={urdn:arttools.filters.IndependentFilters({"TIME": gti}) for urdn in URDNS}) #[f.replace("L0", "L1b") for f in urdfiles])
+    for urdn in urddata:
+        if not "ENERGY" in urddata[urdn].data.dtype.names:
+            urddata[urdn] = arttools.energy.add_energies_and_grades(urddata[urdn], urdhk[urdn], arttools.caldb.get_energycal_by_urd(urdn), arttools.caldb.get_escale_by_urd(urdn))
+
+    bkgevts = {urdn: d.apply_filters(bkgfilters) for urdn, d in urddata.items()}
+    urdbkg = arttools.background.get_background_lightcurve(np.sort(np.concatenate([b['TIME'] for b in bkgevts.values()])),
+                                                           bkgevts, 1000., imgfilters)
+    urddtc = {urdn: arttools.time.deadtime_correction(hk) for urdn, hk in urdhk.items()}
+
+    urdevt = {urdn: d.apply_filters(imgfilters[urdn]) for urdn, d in urddata.items()}
+    imgf = {urdn: d.filters for urdn, d in urdevt.items()}
+
+    tgti = reduce(lambda a, b: a | b, [d.filters["TIME"] for d in urdevt.values()])
+    te, gaps = tgti.arange(float(dt))
+
+    if spec is None:
+        te, dtn = arttools.expmap.make_exposures(srcvec, te, attdata, imgf, app=app, dtcorr=urddtc, urdweights=urdcrates)
+    else:
+        spec = interp1d(*np.loadtxt(spec).T, bounds_error=False, fill_value=0.)
+        te, dtn = arttools.expmap.make_exposures(srcvec, te, attdata, imgf, app=app, dtcorr=urddtc, urdweights=urdcrates)
+    gaps = gaps & (dtn > 0.)
+    cs = np.diff(np.searchsorted(np.sort(np.concatenate([d["TIME"][np.sum(srcvec*arttools.orientation.get_photons_vectors(d, urdn, attdata), axis=1) > cos(app*pi/180./3600.)] for d in urdevt.values()])), te))[gaps]
+    tc = (te[1:] + te[:-1])[gaps]/2.
+    dta = np.diff(te)[gaps]
+    lcs = arttools.background.get_bkg_lightcurve_for_app(urdbkg, imgf, attdata, srcvec, app, te, dtcorr=urddtc)[gaps] #{}, illum_filters=None)
+
+
+
+
+    idx = arttools.mask.edges(dtn > 0.)
+    tstart = te[idx[:, 0]]
+    tstop = te[idx[:, 1]]
+    print(tstart, tstop)
+    tsobs = (Time(arttools.caldb.MJDREF, format="mjd") + TimeDelta(tgti.arr[0, 0], format="sec")).to_datetime()
+    teobs = (Time(arttools.caldb.MJDREF, format="mjd") + TimeDelta(tgti.arr[-1, 1], format="sec")).to_datetime()
+
+    dtn = dtn[gaps]
+
+    idx0 = 0
+    ts = te[:-1][gaps]
+    tee = te[1:][gaps]
+    csn = []
+    lcsn = []
+    ten = []
+    dtnn = []
+    tsn = []
+    ten = []
+    while idx0 < lcs.size:
+        idx = np.searchsorted(ts, tee[idx0]+join_sep)
+        csn.append(np.sum(cs[idx0:idx]))
+        dtnn.append(np.sum(dtn[idx0:idx]))
+        lcsn.append(np.sum(lcs[idx0:idx]))
+        tsn.append(ts[idx0])
+        ten.append(tee[idx-1])
+        idx0 = idx
+
+    cs = np.array(csn)
+    dtn = np.array(dtnn)
+    lcs = np.array(lcsn)
+    ten = np.array(ten)
+    tsn = np.array(tsn)
+
+    dt = np.max(ten - tsn)
+    tc = (ten + tsn)/2.
+
+    #d = Table.from_pandas(pandas.DataFrame({"TIME": tc, "TIMEDEL":dt, "COUNTS": cs, "BACKV": lcs, "FRACEXP": dtn[gaps]/dt, "RATE": np.maximum(cs - lcs, 0.)/dtn[gaps]}))
+
+    d = QTable([tc*au.second, (ten - tsn)*au.second, cs*au.count, lcs*au.count, dtn/float(dt), np.maximum(cs - lcs, 0.)/dtn*au.count/au.second, np.sqrt(cs)*au.count/dtn/au.second],
+                 names = ["TIME", "TIMEDEL", "COUNT", "BACKV", "FRACEXP", "RATE", "ERROR"])
+    phdu = fits.PrimaryHDU(header=fits.Header({"CONTENT":"LIGHT CURVE", "TELESCOP":"ART-XC", "INSTRIME":"T1-7", "TIMEVERS":"OGIP/93-003", "ORIGIN":"IKI", "DATE":datetime.datetime.today().strftime("%y/%m/%d"),
+                                               "RA": ra, "DEC": dec,
+                                               "HDUCLASS": "OGIP", "HDUCLAS1":"LIGHTCURVE", "HDUCLAS2":"TOTAL", "HDUCLASS3": "RATE", "TIMEDER": "GEOCENTER",
+                                                "DATE-OBS": tsobs.strftime("%y/%m/%d"), "TIME-OBS":tsobs.strftime("%H:%M:%S"),
+                                                "DATE-END": teobs.strftime("%y/%m/%d"), "TIME-END":teobs.strftime("%H:%M:%S"),
+                                               }))
+
+    header = fits.Header({"TELESCOP": "ART-XC", "OBS-DATE": "DONTFORGETTOADDDATE", "RA": ra, "DEC": dec, "MJDREFI": int(arttools.caldb.MJDREF), "MJDREFF": arttools.caldb.MJDREF%1,
+                          "TUNIT1": "s", "TUNIT2":"s", "TUNIT3":"COUNTS", "TUNIT4":"COUNTS", "TUNIT5":"", "TUNIT6":"COUNTS/s", "TUNIT7": "COUNTS/s",
+                          "TIMEUNIT": "s", "TIMEZERO": 0., "TIMEDEL": dt,
+                            "HDUCLASS": "OGIP", "HDUCLAS1":"LIGHTCURVE", "HDUCLAS2":"TOTAL", "HDUCLASS3": "RATE", "TIMEDER": "GEOCENTER",
+                          "DATE-OBS": tsobs.strftime("%y/%m/%d"), "TIME-OBS":tsobs.strftime("%H:%M:%S"),
+                           "DATE-END": teobs.strftime("%y/%m/%d"), "TIME-END":teobs.strftime("%H:%M:%S"),
+                          "DATE": datetime.datetime.today().strftime("%y/%m/%d"),
+                          "AUTHOR": "", "OBJECT": "",
+                          "ORIGIN":"IKI"})
+
+
+    dhdu = fits.BinTableHDU(header=header, data=d, name="RATE")
+    ghdu = fits.BinTableHDU(header=fits.Header({"MJDREFI": int(arttools.caldb.MJDREF), "MJDREFF": arttools.caldb.MJDREF%1, "TIMEZERO":0.}), data=QTable([tstart*au.second, tstop*au.second], names=["START", "STOP"]), name="GTI")
+    fits.HDUList([phdu, dhdu, ghdu]).writeto(outputname + ".fits.gz", overwrite=True)
+
+
+
+def make_spec_and_arf(flist, outname, ra, dec, usergti=None):
+    allfiles = [l.rstrip() for l in open(flist)]
+    attfiles = [l for l in allfiles if "gyro.fits" in l]
+    urdfiles = [l for l in allfiles if "urd.fits" == l[-8:]]
+
+    srcvec = arttools.vector.pol_to_vec(*np.deg2rad([float(ra), float(dec)]).reshape((2, -1)))[0]
+
+    attdata = arttools.orientation.AttDATA.concatenate([arttools.orientation.get_attdata(gf) for gf in attfiles])
+    gti = attdata.circ_gti(srcvec, 20*60.)
+    attdata = attdata.apply_gti((gti & usergti) + [-3, 3])
+
+    for urdn in imgfilters:
+        imgfilters[urdn]["TIME"] = attdata.gti & usergti
+        imgfilters[urdn]["ENERGY"] = arttools.filters.Intervals([4., 65.])
+
+    urddata, urdhk = arttools.containers.read_urdfiles(urdfiles, {urdn: arttools.filters.IndependentFilters({"TIME": attdata.gti}) for urdn in arttools.telescope.URDNS}) #[f.replace("L0", "L1b") for f in urdfiles])
+
+    urddtc = {urdn: arttools.time.deadtime_correction(hk) for urdn, hk in urdhk.items()}
+
+    bkgtimes = np.sort(np.concatenate([d.apply_filters(bkgfilters)["TIME"] for d in urddata.values()]))
+    urdbkg = arttools.background.get_background_lightcurve(bkgtimes, {urdn: imgfilters[urdn]["TIME"] for urdn in imgfilters}, bkgfilters, 1000., imgfilters, dtcorr=urddtc)
+
+    tgti = reduce(lambda a, b: a|b, [f["TIME"] for f in imgfilters.values()])
+
+
+
+    arf = arttools.arf.make_correcrted_arf(attdata, srcvec, imgfilters, urddtc)
+    arf.writeto(outname + ".arf")
+
+
+    eeo = np.concatenate([arf[1].data["ENERG_LO"], arf[1].data["ENERG_HI"][-1:]])
+    bspec = arttools.background.get_bkg_spec(urdbkg, imgfilters, attdata, srcvec, 120.) #, urddtc)
+    bspec = interp1d(bspec[0], np.concatenate([[0.,], bspec[2]]).cumsum(), bounds_error=False, fill_value=(0., bspec[2].sum()))
+    bspec = np.diff(bspec(eeo))
+
+
+    spec = np.zeros(eeo.size - 1, int)
+    for urdn in urddata:
+        d = urddata[urdn].apply_filters(imgfilters[urdn])
+        vecs = arttools.orientation.get_photons_vectors(data, urdn, attdata)
+        spec += np.histogram(d["ENERGY"][np.sum(vecs*srcvec, axis=1) > cos(120.*pi/180./3600)], eeo)
+
+    pickle.dump([bspec, spec], open("%s_specdata.pkl" % outname, "wb"))
+
+    """
+    hdu.header["INSTRUM"] = "TEL [1-7]"
+    hdu.header["TELESCOP"] = "ART-XC"
+    hdu.header["HDUCLAS3"] = "COUNT"
+    hdu.header["TUNIT1"] = ""
+    hdu.header["TUNIT2"] = "count"
+    hdu.header["TUNIT2"] = "count"
+    hdu.header["RA-OBJ"] = ra
+    hdu.header["DEC-OBJ"] = dec
+    hdu.header["OBJECT"] = srcname
+    hdu.header["POISSERR"] = True
+    hdu.header["ARFFILE"] = arf.filename()
+    hdu.header["RESPFILE"] = "artxc_rmf_v000.fits"
+    hdu.header["EXPOSURE"] = tgti.exposure
+    fits.HDUList([pfile[0], hdu, fits.BinTableHDU(data=Table.from_pandas(pandas.DataFrame({"TSTART": gloc.arr[:, 0], "TSTOP":gloc.arr[:, 1]})), name="GTI")]).writeto("%s.pha" % outname, overwrite=True)
+    """
+
+
+def estimate_rate(flist, outname, ra, dec, usergti=None, emin=4., emax=12., app=120.):
+    allfiles = [l.rstrip() for l in open(flist)]
+    attfiles = [l for l in allfiles if "gyro.fits" in l]
+    urdfiles = [l for l in allfiles if "urd.fits" == l[-8:]]
+
+    srcvec = arttools.vector.pol_to_vec(*np.deg2rad([float(ra), float(dec)]).reshape((2, -1)))[0]
+
+    attdata = arttools.orientation.AttDATA.concatenate([arttools.orientation.get_attdata(gf) for gf in attfiles])
+    gti = attdata.circ_gti(srcvec, 22*60.)
+    attdata = attdata.apply_gti((gti & usergti) + [-3, 3])
+
+    report = "ra, dec: %.6f %.6f" % (ra, dec)
+    report += "\n" + "files:" + "\n".join(urdfiles)
+    report += "\n" + "GTI:" + "\n".join(["%f, %f" % (s, e) for s, e in attdata.gti])
+
+
+    for urdn in imgfilters:
+        imgfilters[urdn]["TIME"] = attdata.gti & usergti
+        imgfilters[urdn]["ENERGY"] = arttools.filters.Intervals([float(emin), float(emax)])
+
+    print("check attdata", attdata.gti.exposure)
+
+    urddata, urdhk = arttools.containers.read_urdfiles(urdfiles, filterslist={urdn:arttools.filters.IndependentFilters({"TIME": gti}) for urdn in URDNS}) #[f.replace("L0", "L1b") for f in urdfiles])
+    for urdn in urddata:
+        if not "ENERGY" in urddata[urdn].data.dtype.names:
+            urddata[urdn] = arttools.energy.add_energies_and_grades(urddata[urdn], urdhk[urdn], arttools.caldb.get_energycal_by_urd(urdn), arttools.caldb.get_escale_by_urd(urdn))
+
+    bkgtimes = np.sort(np.concatenate([d["TIME"][bkgfilters.apply(d)] for d in urddata.values()]))
+    urdbkg = arttools.background.get_background_lightcurve(bkgtimes, {urdn: d.filters["TIME"] for urdn, d in urddata.items()}, bkgfilters, 1000., imgfilters)
+    urddtc = {urdn: arttools.time.deadtime_correction(hk) for urdn, hk in urdhk.items()}
+
+    urdevt = {urdn: d.apply_filters(imgfilters[urdn]) for urdn, d in urddata.items()}
+    imgf = {urdn: d.filters for urdn, d in urdevt.items()}
+
+    tgti = reduce(lambda a, b: a | b, [d.filters["TIME"] for d in urdevt.values()])
+    te, gaps = tgti.arange(0.1)
+
+    te, dtn = arttools.expmap.make_exposures(srcvec, te, attdata, imgf, app=app, dtcorr=urddtc, urdweights=urdcrates)
+    gaps = gaps & (dtn > 0.)
+    dtn = dtn[gaps]
+    urde = {urdn: d.data[np.sum(srcvec*arttools.orientation.get_photons_vectors(d, urdn, attdata), axis=1) > cos(app*pi/180./3600.)] for urdn, d in urdevt.items()}
+    cs = np.diff(np.searchsorted(np.sort(np.concatenate([d["TIME"] for d in urde.values()])), te))[gaps]
+    tc = (te[1:] + te[:-1])[gaps]/2.
+    dta = np.diff(te)[gaps]
+    lcs = arttools.background.get_bkg_lightcurve_for_app(urdbkg, imgf, attdata, srcvec, app, te, dtcorr=urddtc)[gaps] #{}, illum_filters=None)
+
+    report += "\n totevents: %d, exp: %.3f, vexp: %.3f exp bkg: %.3f" % (cs.sum(), dta.sum(), dtn.sum(), lcs.sum())
+
+    mrate = minimize(lambda rate: -poisson.logpmf(cs, rate*dtn + lcs).sum(), [max(cs.sum() - lcs.sum(), 1)/dtn.sum(),], method="Nelder-Mead")
+
+    with pymc3.Model() as mo:
+        rate = pymc3.Uniform("rate", lower=0., upper=1000) #min(abs(mrate.x[0])*4.5, 30))
+        obs = pymc3.Poisson("obs", mu=rate*dtn + lcs, observed=cs)
+        tracelc = pymc3.sample(4096)
+
+
+
+    cl, ch = mprob_quantiles(tracelc["rate"], mrate.x[0])[0]
+    report += "\nrate estimation from lcs:\n %.2e (%.2e, %.2e)" % (mrate.x[0]*4.21e-11, cl*4.21e-11, ch*4.21e-11)
+
+    if np.sum(cs) > 0:
+
+        qlist = [arttools.orientation.get_events_quats(urde[urdn], urdn, attdata)*arttools._det_spatial.get_qcorr_for_urddata(urde[urdn]) for urdn in arttools.telescope.URDNS if urdn in urde and urde[urdn].size > 0]
+        qlist = Rotation.from_quat(np.concatenate([q.as_quat() for q in qlist], axis=0))
+
+        i, j = zip(*[arttools.psf.urddata_to_opaxoffset(urde[urdn], urdn) for urdn in arttools.telescope.URDNS if urdn in urde])
+        i, j = np.concatenate(i), np.concatenate(j)
+
+        imgdata = arttools.telescope.concat_data_in_order(urde)
+        eenergy = arttools.telescope.concat_data_in_order({urdn: d["ENERGY"] for urdn, d in urde.items()})
+
+        bkgrates = {urdn: arttools.background.get_local_bkgrates(urdn, urdbkg[urdn], imgfilters[urdn], urde[urdn]) for urdn in arttools.telescope.URDNS}
+        bkgrates = arttools.telescope.concat_data_in_order(bkgrates)
+
+        photprob = arttools.background.get_photon_vs_particle_prob(urde, urdweights=urdcrates)
+        photprob = arttools.telescope.concat_data_in_order(photprob)
+
+        pool = Pool(processes=10, initializer=init_ipsf_weight_pool)
+        w = pool.map(get_ipsf_weight, zip(i, j, eenergy, repeat(srcvec), qlist))
+        pool.close()
+    else:
+        i, j, w, photprob, bkgrates = np.empty((5, 0), float)
+
+    slr = np.ones(i.size + 1, np.double)
+    blr = np.ones(i.size + 1, np.double)
+    blr[0] = lcs.sum()
+    slr[0] = dtn.sum()
+    slr[1:] = w*photprob
+    blr[1:] = bkgrates
+    mrate = minimize(lambda rate: slr[0]*rate + np.sum(np.log(blr[1:]/(slr[1:]*rate + blr[1:]))), [max(i.size - lcs.sum(), 1)/slr[0],], method="Nelder-Mead")
+
+    with pymc3.Model() as mo:
+        rate = pymc3.Uniform("rate", lower=0., upper=1000) #min(abs(mrate.x[0])*4.5, 30))
+        o = np.ones(slr.size, np.int)
+        o[0] = 0
+        o, blr, slr = o[slr > 0], blr[slr > 0], slr[slr > 0]
+        obs = pymc3.Poisson("obs", mu=blr + slr*rate, observed=o)
+        traceph = pymc3.sample(4096)
+
+    cl, ch = mprob_quantiles(traceph["rate"], mrate.x[0])[0]
+    report += "\nrate estimation from psf:\n %.2e (%.2e, %.2e)" % (mrate.x[0]*4.21e-11, cl*4.21e-11, ch*4.21e-11)
+    open(outname, "w").write(report)
+
+
+def get_all_orig_data(output, ra, dec):
+    att, times, names = pickle.load(open("/srg/work/andrey/ART-XC/att_compressed/allgyro_arch.pkl", "rb"))
+    srcvec = arttools.vector.pol_to_vec(*np.deg2rad([float(ra), float(dec)]).reshape((2, -1)))[0]
+    gti = att.circ_gti(srcvec, 22.*60) + [-30, 30]
+    te, gaps = gti.make_tedges(times)
+    idx = np.unique(np.searchsorted(times, (te[1:] + te[:-1])[gaps]/2.)) - 1
+    allflist = []
+    with open(output, "w") as f:
+        for uname in np.unique([names[i] for i in idx]):
+            dpath = os.path.dirname(uname)
+            f.write("\n".join([os.path.join(dpath, name) for name in os.listdir(dpath)]))
+
+
+process_help = \
 """
+help:
+    arttools/processes is a set of simple tools, which can be started through the command line
+    this tools are gathered in a single collection due to the similarity of accepted arguments, mainly
+    input=file or @flist
+    gti=usergtifile
+    output=output filename
 
-def run(fpath):
-    os.chdir(fpath)
-    abspath = os.path.abspath(".")
-    neighbours = get_neighbours(abspath)
-    print(neighbours)
+    folllowing actions are woring now:
 
-    allfiles = os.listdir("L0")
-    bokzfiles = [os.path.join(abspath, "L0", l) for l in allfiles if "bokz.fits" in l]
-    gyrofiles = [os.path.join(abspath, "L0", l) for l in allfiles if "gyro.fits" in l]
-    urdfiles = [os.path.join(abspath, "L0", l) for l in allfiles if "urd.fits" in l]
+    =====================================================================================
+        obsgtis: check which nonintersection observation are present in the provided att files
+            att files are provided as a list of files in the single text files, entered in input starting with @, or a single att file
+            mandatory arguments: ----
+            possible arguments: gti
 
-    attgti = reduce(lambda a, b: a | b, [get_gti(fits.open(urdfile)) for urdfile in urdfiles])
-    attdata = AttDATA.concatenate([get_attdata(fname) for fname in set(gyrofiles)])
-    locwcs = make_wcs_for_attdata(attdata, attgti)
+            this action returns a ascii file, containing centers and areas of separate observations and corresponding gti intervals in the form of pair of start and stop times in onboard time in seconds
 
-    gyrofiles = []
-    urdfiles = []
-    print("current locations", os.path.abspath("."))
-    for neighbour in neighbours:
-        abspath = os.path.abspath(os.path.join("../", neighbour, "L0"))
-        print("search in cell", abspath)
-        if not os.path.exists(abspath):
-            print("not filled yes, skip")
-            continue
-        allfiles = os.listdir(abspath)
-        gyrofiles += [os.path.join(abspath, fname) for fname in allfiles if "gyro" in fname]
-        urdfiles += [os.path.join(abspath, fname) for fname in allfiles if "urd" in fname]
+    =====================================================================================
+        image: produce an image for the provided set of data files
+            mandatory arguments: ----
+            possible arguments: emin, emax, gti
 
-    try:
-        os.mkdir("L3")
-    except OSError as exc:
-        pass
-    os.chdir("L3")
+            this action produces a single fits file containg three image extention - pure photon map, consisting of events arived in the specified energy range (having grades 0-10),
+            exposure map for this energy  band and expected instrumental background estimated based on the caldb background spectrum
 
-    attdata = AttDATA.concatenate([get_attdata(fname) for fname in set(gyrofiles)])
-    print(attdata.gti)
+    =====================================================================================
+        lightcurve: produces lightcurve from the data for the specified position on sky
+            mandatory arguments: ra, dec
+            possible arguments: rapp, emin, emax, gti, dt
 
-    xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
-    imgdata = np.zeros((ysize, xsize), np.double)
-    urdgti = {URDN:emptyGTI for URDN in URDNS}
-    urdhk = {}
-    urdbkg = {}
-    urdbkge = {}
-
-    for urdfname in urdfiles:
-        urdfile = fits.open(urdfname)
-        urdn = urdfile["EVENTS"].header["URDN"]
-        print("processing:", urdfname)
-        print("overall urd exposure", get_gti(urdfile).exposure)
-        locgti = get_gti(urdfile) & attdata.gti & -urdgti.get(urdn, emptyGTI)
-        locgti.merge_joint()
-        print("exposure in GTI:", locgti.exposure)
-        if locgti.exposure == 0.:
-            continue
-        urdgti[urdn] = urdgti.get(urdn, emptyGTI) | locgti
-
-        urddata = np.copy(urdfile["EVENTS"].data) #hint: do not apply bool mask to a fitsrec - it's a stright way to the memory leak :)
-        urddata = urddata[locgti.mask_outofgti_times(urddata["TIME"])]
-
-        hkdata = np.copy(urdfile["HK"].data)
-        hkdata = hkdata[(locgti + [-30, 30]).mask_outofgti_times(hkdata["TIME"])]
-        urdhk[urdn] = urdhk.get(urdn, []) + [hkdata,]
-
-        energy, grade, flag = make_energies_flags_and_grades(urddata, hkdata, urdn)
-        pickimg = np.all([energy > 4., energy < 11.2, grade > -1, grade < 10, flag == 0], axis=0)
-        timg = make_sky_image(urddata[pickimg], urdn, attdata, locwcs, 1)
-        imgdata += timg
-
-        pickbkg = np.all([energy > 40., energy < 100., grade > -1, grade < 10, flag < 3], axis=0)
-        bkgevts = urddata["TIME"][pickbkg]
-        urdbkge[urdn] = urdbkge.get(urdn, []) + [bkgevts,]
-
-    for urdn in urdgti:
-        print(urdn, urdgti[urdn].exposure)
-
-    img = fits.PrimaryHDU(header=locwcs.to_header(), data=imgdata)
-    img.writeto("cmap.fits.gz", overwrite=True)
-
-    urdhk = {urdn:np.unique(np.concatenate(hklist)) for urdn, hklist in urdhk.items()}
-    urddtc = {urdn: deadtime_correction(hk) for urdn, hk in urdhk.items()}
-    tgti = reduce(lambda a, b: a & b, urdgti.values())
-    te = np.concatenate([np.linspace(s, e, int((e-s)//100.) + 2) for s, e in tgti.arr])
-    mgaps = np.ones(te.size - 1, np.bool)
-    if tgti.arr.size > 2:
-        mgaps[np.cumsum([(int((e-s)//100.) + 2) for s, e in tgti.arr[:-1]]) - 1] = False
-        mgaps[te[1:] - te[:-1] < 10] = False
-
-    tevts = np.sort(np.concatenate([np.concatenate(e) for e in urdbkge.values()]))
-    rate = tevts.searchsorted(te)
-    rate = (rate[1:] - rate[:-1])[mgaps]/(te[1:] - te[:-1])[mgaps]
-    tc = (te[1:] + te[:-1])[mgaps]/2.
-    tm = np.sum(tgti.mask_outofgti_times(tevts))/tgti.exposure
-
-    urdbkg = {urdn: interp1d(tc, rate*urdbkgsc[urdn]/7.61, bounds_error=False, fill_value=tm*urdbkgsc[urdn]/7.62) for urdn in urdbkgsc}
-
-    emap = make_expmap_for_wcs(locwcs, attdata, urdgti, dtcorr=urddtc)
-    emap = fits.PrimaryHDU(data=emap, header=locwcs.to_header())
-    emap.writeto("emap.fits.gz", overwrite=True)
-    bmap = make_bkgmap_for_wcs(locwcs, attdata, urdgti, time_corr=urdbkg)
-    bmap = fits.PrimaryHDU(data=bmap, header=locwcs.to_header())
-    bmap.writeto("bmap.fits.gz", overwrite=True)
-
+            this procedure produces fits file, containing lightcurve in the OGIP format.
 """
 
 if __name__ == "__main__":
-    print("how to use: \n spec ra dec [survey]  # will produce spectrum of the source in the curreny directory")
-    if sys.argv[1] == "spec":
-        make_spec(*sys.argv[2:])
+    import argparse
+    parser = argparse.ArgumentParser(description=process_help, formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument("action", help="what u wanna do???? oprions: make_spec make_imgs obsgtis", choices=["spec", "obsgtis", "image", "lightcurve", "spec_std", "estimate_rate", "get_dfiles"])
+    parser.add_argument("input", help="name of the input file or file containing list of input files, starting with @")
+    parser.add_argument("output", help="root of the output file name, if several output files produced they all will have root in their names")
+    parser.add_argument("--ra", help="ra coordinate for the ananlysis purposes", default=None, required=False, type=float)
+    parser.add_argument("--dec", help="dec coordinate for the ananlysis purposes", default=None, required=False, type=float)
+    parser.add_argument("--gti", help="custom gti for the analysis", default=None, required=False)
+    parser.add_argument("--emin", help="lower edge of the working energy band for the product", default=4., required=False)
+    parser.add_argument("--emax", help="upper edge of the working energy band for the product", default=12., required=False)
+    parser.add_argument("--rapp", help="aperture size for analyzis in arcsec", default=120., required=False)
+    parser.add_argument("--dt", help="timebin size for analyzis in seconds", default=1., required=False)
+    parser.add_argument("--make_detmap", help="do you need to compute detection probability map", default=False, required=False)
+    parser.add_argument("--spec", help="compute vignetting for specific spectral shape", default=None, required=False)
+    parser.add_argument("--join_sep", help="if producing lightcurves with gaps, defined the longest time bin in binning separated observations", default=0., required=False, type=float)
+    parser.add_argument("--survey", help="performa analysis over survey data for specified surveys (syntax 1 - first survey, 2,3 - second and third survey e.t.c)", default="1,2,3,4", required=False)
+
+    parsed = parser.parse_args(sys.argv[1:])
+    gti = tGTI if parsed.gti is None else GTI(np.copy(np.loadtxt(parsed.gti).reshape((-1, 2))))
+
+    if parsed.action == "spec":
+        make_spec(parsed.ra, parsed.dec, survey=parsed.survey)
+    if parsed.action == "obsgtis":
+        fname = parsed.input
+        if "@" == fname[0]:
+            flist = [l.rstrip() for l in open(fname[1:])]
+        else:
+            flist = [fname,]
+        attdata = arttools.orientation.AttDATA.concatenate([arttools.orientation.get_attdata(fname) for fname in flist if "gyro.fits" in fname])
+        gtis, areas, centers = arttools.orientation.get_observations_gti(attdata)
+        with open(parsed.output, 'w') as f:
+            for g, a, c in zip(gtis, areas, centers):
+                f.write("center: %.6f %.6f" % tuple(c) + " area %.2f \n" % a)
+                for arr in g.arr:
+                    f.write("\t%f %f\n" % tuple(arr))
+    if parsed.action == "image":
+        make_img(parsed.input[1:], parsed.output, gti, emin=parsed.emin, emax=parsed.emax, make_detmap=parsed.make_detmap, ra=parsed.ra, dec=parsed.dec)
+
+    if parsed.action == "lightcurve":
+        make_lightcurve(parsed.input[1:], parsed.output, ra=parsed.ra, dec=parsed.dec, usergti= gti, emin=parsed.emin, emax=parsed.emax, app=parsed.rapp, dt=parsed.dt, spec=parsed.spec, join_sep=parsed.join_sep)
+
+    if parsed.action == "spec_std":
+        make_spec_and_arf(parsed.input[1:], parsed.output, ra=parsed.ra, dec=parsed.dec, usergti=gti)
+
+    if parsed.action == "estimate_rate":
+        estimate_rate(parsed.input[1:], parsed.output, ra=parsed.ra, dec=parsed.dec, usergti=gti, emin=parsed.emin, emax=parsed.emax, app=parsed.rapp)
+
+    if parsed.action == "get_dfiles":
+        get_all_orig_data(parsed.output, ra=parsed.ra, dec=parsed.dec)
+
