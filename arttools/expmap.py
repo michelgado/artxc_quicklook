@@ -2,15 +2,20 @@ from .caldb import get_boresight_by_device, get_optical_axis_offset_by_device
 from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttInvHist, make_small_steps_quats
 from .mosaic2 import SkyImage
 from .vignetting import make_vignetting_for_urdn, make_overall_vignetting
-from .psf import get_ipsf_interpolation_func, unpack_inverse_psf_specweighted_ayut, rawxy_to_opaxoffset
+from .psf import get_ipsf_interpolation_func, unpack_inverse_psf_specweighted_ayut, rawxy_to_opaxoffset, get_pix_overall_countrate_constbkg_ayut
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
+from .vector import vec_to_pol, pol_to_vec
+from .mask import edges
 from .lightcurve import weigt_time_intervals
+from itertools import repeat
 from ._det_spatial import vec_to_offset_pairs, raw_xy_to_vec, rawxy_to_qcorr
 from .telescope import URDNS
 from functools import reduce
-from multiprocessing import cpu_count, Pool, Process, Queue, RawArray
+from multiprocessing import cpu_count, Pool, Process, Queue, RawArray, Barrier
 from threading import Thread, Lock
+from scipy.spatial.transform import Rotation
 import numpy as np
+import tqdm
 from math import cos, pi
 
 MPNUM = cpu_count()
@@ -86,22 +91,38 @@ def make_expmap_for_wcs(wcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dtcor
     print("sky image initilization")
     sky = SkyImage(wcs, shape=shape, mpnum=mpnum)
 
+
+    overall_gti = emptyGTI
+
+    dtcc = {urdn: 1. for urdn in URDNS}
     if dtcorr:
-        overall_gti = emptyGTI
+        print('check dtcorr', list(urdgtis.keys()))
+        if all([urdn in urdgtis for urdn in URDNS]):
+            overall_gti = reduce(lambda a, b: a & b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
+            print('overall exposure before dtm tolerance', overall_gti.exposure)
+            for urdn in URDNS:
+                dtm = np.median(dtcorr[urdn].y)
+                mdtc = np.abs(dtcorr[urdn].y - dtm)/dtm < 0.01 # dt corr tollerance let it be 1%
+                eloc = edges(mdtc) + [0, -1]
+                eloc = eloc[eloc[:, 0] != eloc[:, 1]]
+                overall_gti = overall_gti & GTI(dtcorr[urdn].x[eloc])
+                print('overall gti after %d' % urdn, overall_gti.exposure)
+                dtcc[urdn] = dtm
     else:
         overall_gti = reduce(lambda a, b: a & b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
-        print("overal exposure", overall_gti.exposure)
 
-        if overall_gti.exposure > 0:
-            exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti, wcs=wcs)
-            vmap = make_overall_vignetting(imgfilters, urdweights=urdweights, **kwargs)
-            sky.set_vmap(vmap)
-            print("exptime sum", exptime.sum())
-            print("produce overall urds expmap")
-            if kind == "direct":
-                sky.direct_convolve(qval, exptime)
-            elif kind == "convolve":
-                sky.fft_convolve(qval, exptime)
+    print("overal exposure", overall_gti.exposure)
+
+    if overall_gti.exposure > 0:
+        exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti, wcs=wcs)
+        vmap = make_overall_vignetting(imgfilters, urdweights={urdn: w*dtcc[urdn] for urdn, w in urdweights.items()}, **kwargs)
+        sky.set_vmap(vmap)
+        print("exptime sum", exptime.sum())
+        print("produce overall urds expmap")
+        if kind == "direct":
+            sky.direct_convolve(qval, exptime)
+        elif kind == "convolve":
+            sky.fft_convolve(qval, exptime)
 
     for urdn in urdgtis:
         gti = urdgtis[urdn] & ~overall_gti
@@ -233,3 +254,72 @@ def make_expmap_for_healpix(attdata, urdgtis, mpnum=MPNUM, dtcorr={}, subscale=4
         print(" done!")
     make_vignetting_for_urdn.clear_cache()
     return emap
+
+
+def initpool(shmask, shape, weights, wcs, barr, ifilter, opx):
+    global wprod, xll, yll, xlsize, locimg, lwcs, barrier, illum_filter, opax
+    barrier = barr
+    lwcs = wcs
+    x, y = np.mgrid[0:48:1, 0:48:1]
+    x, y = x[shmask], y[shmask]
+    xlsize = shmask.sum()
+    locimg = np.zeros(shape, float)
+    wprod = np.tile(weights, 1000)
+    xll, yll = np.tile(x, 1000), np.tile(y, 1000)
+    illum_filter = ifilter
+    opax = opx
+
+def poolworker(args):
+    global wprod, xll, yll, xlsize, locimg, lwcs, illum_filter, opax
+    qlist, dtq = args
+    qlist = Rotation(qlist)
+    pvecs = raw_xy_to_vec(xll, yll, randomize=True)
+    for source in illum_filter.sources:
+        source.setup_for_quats(qlist, opax)
+
+    mask = np.zeros((pvecs.shape[0], len(qlist)), bool)
+    for source in illum_filter.sources:
+        mres = source.mask_vecs_with_setup2(pvecs, qlist, mpnum=1)
+        mask[:, :] = np.logical_or(mask, mres)
+
+    pvecs = np.concatenate([qlist[m].apply(v) for v, m in zip(pvecs, ~mask)], axis=0)
+    #qprod = Rotation(np.repeat(qlist, xlsize, axis=0)) #ts.size - sl*1000].as_quat(), xl.size, axis=0))
+    rd = np.rad2deg(vec_to_pol(pvecs)) #qprod.apply()))
+    xy = (lwcs.all_world2pix(rd.T, 0) + 0.5).astype(int)
+    np.add.at(locimg, (xy[:, 1], xy[:, 0]), np.repeat(dtq, xlsize)*wprod)
+
+def acquire(args):
+    global locimg, barrier
+    barrier.wait()
+    return locimg
+
+def make_pixmap_projection(wcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dtcorr={}, urdweights={}, illum_filter=None, **kwargs):
+    x, y = np.mgrid[0:48:1, 0:48:1]
+
+    shape = shape if not shape is None else [(0, int(wcs.wcs.crpix[1]*2 + 1)), (0, int(wcs.wcs.crpix[0]*2 + 1))]
+    img = np.zeros(np.diff(shape, axis=1).ravel(), float)
+    for urdn in imgfilters:
+        opix = get_pix_overall_countrate_constbkg_ayut(imgfilters[urdn], **kwargs)
+        x0, y0 = get_optical_axis_offset_by_device(urdn)
+        opax = raw_xy_to_vec(*np.array([[x0,], [y0],]))[0]
+        shmask = imgfilters[urdn].meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
+        i, j = np.round(x + 0.5 - x0).astype(int)[shmask], np.round(y + 0.5 - y0).astype(int)[shmask]
+        xl, yl = x[shmask], y[shmask]
+        weights = opix(i, j)
+        ts, qval, dtq, locgti = make_small_steps_quats(attdata, gti=imgfilters[urdn]["TIME"], timecorrection=dtcorr.get(urdn, lambda x: np.ones(x.size)))
+        barrier = Barrier(mpnum)
+        pool = Pool(mpnum, initializer=initpool, initargs=(shmask, img.shape, weights, wcs, barrier, illum_filter, opax))
+        for _ in tqdm.tqdm(pool.imap_unordered(poolworker, ((qval[sl*1000:(sl + 1)*1000].as_quat(), dtq[sl*1000:(sl + 1)*1000]) for sl in range(dtq.size//1000))), total=ts.size//1000):
+            pass
+        img += sum(pool.imap_unordered(acquire, repeat(None, pool._processes)))
+
+        if ts.size//1000 > 0:
+            xlsize = xl.size
+            slast = ts.size%1000
+            wprod = np.tile(weights, slast)
+            xl, yl = np.tile(xl, slast), np.tile(yl, slast)
+            qprod = Rotation(np.repeat(qval[-slast:].as_quat(), xlsize, axis=0)) #ts.size - sl*1000].as_quat(), xl.size, axis=0))
+            rd = np.rad2deg(vec_to_pol(qprod.apply(raw_xy_to_vec(xl, yl, randomize=True))))
+            xy = (wcs.all_world2pix(rd.T, 0) + 0.5).astype(int)
+            np.add.at(img, (xy[:, 1], xy[:, 0]), np.repeat(dtq[-slast:], xlsize)*wprod)
+    return img
