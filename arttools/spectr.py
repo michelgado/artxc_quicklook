@@ -69,6 +69,12 @@ def get_crabrate(imgfilters):
     ofcrate = sum(get_filtered_crab_spectrum(f)[1].sum()*crates[urdn] for urdn, f in imgfilters.items())/ocrate
     return ofcrate
 
+
+def get_specprate(emin, emax, cspec):
+    arf = get_arf_energy_function(get_arf())
+    return quad(lambda e: arf(e)*cspec(e), emin, emax)[0]
+
+
 def get_events_crab_weights(grid, spec, udata):
     #grid, spec = get_background_spectrum(filters)
     gidx = np.zeros(grid["GRADE"].max() + 1, np.int)
@@ -108,6 +114,7 @@ def make_mock_events(size, imgfilters, urdweights={}, cspec=None, pixdist=lambda
         idx = np.searchsorted(pixvol, np.random.uniform(0, pixvol[-1], n))
         events[urdn]["RAW_X"] = xl[idx]
         events[urdn]["RAW_Y"] = yl[idx]
+
     return events
 
 
