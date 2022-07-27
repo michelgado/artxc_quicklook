@@ -15,11 +15,11 @@ class Urddata(object):
         return self.data[args]
 
     @classmethod
-    def read(cls, fitsfile):
+    def read(cls, fitsfile, excludebki=True):
         urdn = fitsfile["EVENTS"].header["URDN"]
-        d = Table(fitsfile["EVENTS"].data).as_array()
+        d = np.unique(Table(fitsfile["EVENTS"].data).as_array())
         filters = IndependentFilters.from_fits(fitsfile)
-        filters["TIME"] = get_gti(fitsfile, usehkgti=False, excludebki=True)
+        filters["TIME"] = get_gti(fitsfile, usehkgti=True, excludebki=excludebki)
         return cls(d, urdn, filters)
 
     @property
@@ -35,16 +35,25 @@ class Urddata(object):
         apply new filter to data
         """
         cfilter = self.filters & filters
-        return self.__class__(self[cfilter.apply(self)], self.urdn, cfilter)
+        return self.__class__(np.copy(self.data[cfilter.apply(self)]), self.urdn, cfilter)
 
 
     @classmethod
     def concatenate(cls, urddlist):
         if np.unique([d.urdn for d in urddlist]).size != 1:
             raise ValueError("can't mix data from different URDNs, since they have different calibrations")
+        #print('filters', [d.filters for d in urddlist])
+        print("exposure", sum([d.filters["TIME"].length for d in urddlist]))
+        print("crossed exposure", reduce(lambda a, b: a | b, [d.filters["TIME"] for d in urddlist]).length)
         cfilter = reduce(lambda a, b: a | b, [d.filters for d in urddlist])
-        if cfilter.volume != sum([d.filters.volume for d in urddlist]):
-            raise ValueError("inversecting data sets")
+        """
+        import pickle
+        pickle.dump([cfilter, [d.filters for d in urddlist]], open("/srg/a1/work/andrey/ART-XC/lp20/filttest.pkl","wb"))
+        print("tot filter", cfilter)
+        print("volume", [d.filters.volume for d in urddlist], sum([d.filters.volume for d in urddlist]), cfilter.volume - sum([d.filters.volume for d in urddlist]))
+        """
+        if abs(cfilter.volume - sum([d.filters.volume for d in urddlist])) > 1e-1:
+            raise ValueError("intersecting data sets")
 
         d = np.concatenate([d.data for d in urddlist])
         return cls(d[np.argsort(d["TIME"])], urddlist[0].urdn, cfilter)
@@ -63,8 +72,10 @@ def read_urdfiles(urdflist, filterslist={}):
         udata = Urddata.read(ffile)
         urdhk[udata.urdn] = urdhk.get(udata.urdn, []) + [np.copy(ffile["HK"].data),]
         gti = Intervals([]) if udata.urdn not in urddata else reduce(lambda a, b: a | b, [f.filters["TIME"] for f in urddata[udata.urdn]])
-        udata.apply_filters(IndependentFilters({"TIME": gti}))
-        udata.apply_filters(filterslist.get(udata.urdn, IndependentFilters({})))
+        udata = udata.apply_filters(IndependentFilters({"TIME": ~gti}))
+        #print("filter", udata.filters["TIME"])
+        udata = udata.apply_filters(filterslist.get(udata.urdn, IndependentFilters({})))
+        #print("filter", udata.filters["TIME"])
         urddata[udata.urdn] = urddata.get(udata.urdn, []) + [udata,]
 
     for urdn in urddata:
@@ -76,6 +87,3 @@ def read_urdfiles(urdflist, filterslist={}):
         urddata[urdn] = udata
 
     return urddata, urdhk
-
-
-
