@@ -68,13 +68,16 @@ def join_lcs(urdbkg):
 
 class Bkgrate(object):
 
-    def __init__(self, te, crate, dtcorr=lambda x: 1.):
+    def __init__(self, te, crate, dtcorr=None):
         self.te = te
         self.crate = crate
         self.dtcorr = dtcorr
 
     def __call__(self, times):
-        return self.crate[np.minimum(np.searchsorted(self.te, times) - 1, self.crate.size - 1)]*self.dtcorr(times)
+        if self.dtcorr is None:
+            return self.crate[np.minimum(np.searchsorted(self.te, times) - 1, self.crate.size - 1)]
+        else:
+            return self.crate[np.minimum(np.searchsorted(self.te, times) - 1, self.crate.size - 1)]*self.dtcorr(times)
 
     def set_dtcorr(self, dtcorr):
         self.dtcorr = dtcorr
@@ -105,7 +108,13 @@ class Bkgrate(object):
             lc = np.zeros(te.size - 1)
             np.add.at(lc, idx, lct[m])
         else:
-            lc = np.array([quad(lambda t: self(t)*dtcorr(t), s, e)[0] for s, e in zip(te[:-1], te[1:])])
+            if type(dtcorr) == interp1d:
+                ttot = np.unique(np.concatenate([self.times, dtcorr.x]))
+                d = np.cumsum(self(ttot)*dtcorr(ttot))
+                di = interp1d(ttot, d, bounds_error=False, fill_value=(0., d[-1]))
+                lc = np.diff(di(te))
+            else:
+                lc = np.array([quad(lambda t: self(t)*dtcorr(t), s, e)[0] for s, e in zip(te[:-1], te[1:])])
         return lc
 
 def make_overall_lc(times, urdgtis, dt=100, scales=urdbkgsc, dtcorr={}):
