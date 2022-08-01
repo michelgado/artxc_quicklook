@@ -291,7 +291,7 @@ def get_arf():
 
 import yaml
 def get_telescope_crabrates(dev=None):
-    crates = yaml.load(open(os.path.join(ARTCALDBPATH, "crab_urd_rates_3surveys.txt")))
+    crates = yaml.load(open(os.path.join(ARTCALDBPATH, "crab_urd_rates_3surveys.txt")), Loader=yaml.FullLoader)
     if dev is None:
         return crates
     else:
