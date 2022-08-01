@@ -9,7 +9,6 @@ from . import psf
 from . import sensitivity
 from . import spectr
 from . import illumination
-from . import point_source
 from . import containers
 from . import arf
 
