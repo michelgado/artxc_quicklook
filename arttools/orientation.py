@@ -2,7 +2,7 @@ from scipy.spatial.transform import Rotation, Slerp
 import numpy as np
 from math import pi, cos, sin, sqrt
 from ._det_spatial import urd_to_vec, F, DL, raw_xy_to_vec
-from .sphere import ConvexHullonSphere, get_vec_triangle_area
+from .sphere import ConvexHullonSphere, get_vec_triangle_area, FullSphere, ConvexHullonSphere, CVERTICES, SPHERE
 from .time import get_hdu_times, GTI, tGTI, emptyGTI
 from .vector import vec_to_pol, pol_to_vec, normalize
 from .caldb import T0, get_boresight_by_device, get_device_timeshift, relativistic_corrections_gti, MJDREF
@@ -293,6 +293,24 @@ class AttDATA(SlerpWithNaiveIndexing):
                 break
             attl = attl.apply_gti(gti)
         return gti
+
+    def get_covering_chulls(self): # expandsize=pi/180.*26.5/60.):
+        vecs = self(self.times).apply([1, 0, 0])
+        gtis, chulls = [], []
+        mtot = np.zeros(vecs.shape[0], bool)
+        for ch in SPHERE.childs:
+            mask = ch.check_inside_polygon(vecs)
+            mtot = mtot | mask
+            if np.any(mask):
+                chloc = ConvexHullonSphere(vecs[mask]).expand(pi/180./3600)
+                gti = self.chull_gti(chloc)
+                gtis.append(gti)
+                chulls.append(chloc)
+            if np.all(mtot):
+                break
+        return chulls, gtis
+
+
 
 
 cache_function = {np.ndarray: lambda x: x.tobytes(),
@@ -1050,32 +1068,10 @@ def get_observations_gti(attdata, join=True):
         gtis = [attdata.gti & GTI(arr) for arr in (~slews).arr]
     return gtis, [ch.area for ch in chulls], [np.rad2deg(vec_to_pol(ch.get_center_of_mass())) for ch in chulls], chulls
 
-"""
-lets cover sphere with four equal triangles
-for that one should find
-[1, 0, 0]
-[cos(alpha), sin(alpha), 0]
-[cos(alpha), sin(alpha) cos(2pi/3), sin(alpha)*sin(2pi/3)]
-cos(alpha) =  cos^2a + sin^2a *cos(2pi/3)
-cos a = cos^2a - 1/2 (1 - cos^2a)
-cos a = 3/2cos^2a - 1/2
-3 cos^2a - 2cos a - 1 = 0
-cos^2a - 2 1/3cos a + 1/9 = 1/3 + 1/9
-(cos a - 1/3)^2 = 4/9
-cos a = +- 2/3 + 1/3
-"""
-CVERTICES = [[1, 0, 0],
-             [-1/3., 0., 2.*sqrt(2.)/3.],
-             [-1/3., sqrt(2/3.), -sqrt(2.)/3.],
-             [-1/3., -sqrt(2/3.), -sqrt(2.)/3.,]]
 
 class ObsClusters(object):
-
-    SPLIT_SEGMENTS = [ConvexHullonSphere(np.roll(CVERTICES, -i, axis=0)[:3]) for i in range(4)]
-
     def __init__(self, join=True, contour=None):
         self.clusters = []
-        self.segments = []
         self.chulls = []
         self.gtis = []
         self._join = join
@@ -1103,17 +1099,15 @@ class ObsClusters(object):
             self.clusters.pop(idx)
             self.chulls.pop(idx)
             self.gtis.pop(idx)
-            self.segments.pop(idx)
         print("replace", cnew, gnew, clidx)
         self.chulls[clist[0]] = cnew
         self.gtis[clist[0]] = gnew
         self.clusters[clist[0]] = clidx
 
-    def append(self, chull, gti, idx, segment):
+    def append(self, chull, gti, idx):
         self.chulls.append(chull)
         self.gtis.append(gti)
         self.clusters.append({idx,})
-        self.segments.append(segment)
 
     def add(self, attdata, key=None):
         self.counter += 1
@@ -1125,45 +1119,50 @@ class ObsClusters(object):
                 gti = GTI(arr)
                 m = gti.mask_external(attloc.times[:-1])
                 chull = ConvexHullonSphere(np.concatenate([attloc.rotations[m].apply(v1) for v1 in self._contour] + [attloc(arr[0]).apply(self._contour),] + [attloc(arr[-1]).apply(self._contour),]))
-                for k, segment in enumerate(self.SPLIT_SEGMENTS):
-                    cloc = chull & segment
-                    if not cloc is None:
-                        self.add_chulls(chull, gti, k)
+                if not cloc is None:
+                    self.add_chulls(chull, gti)
 
-
-    def add_chulls(self, chull, gti, segment):
+    def add_chulls(self, chull, gti):
         clist = []
-        for k, (ch, snum) in enumerate(zip(self.chulls, self.segments)):
-            if snum == segment and ch.intersect(chull):
+        for k, ch in enumerate(self.chulls):
+            if ch.intersect(chull):
                 clist.append(k)
         clist.append(len(self.chulls))
-        self.append(chull, gti, self.counter, segment)
+        self.append(chull, gti, self.counter)
         if len(clist) > 1:
             self.collapse(clist)
 
+class ChullGTI(ConvexHullonSphere):
+    def __init__(self, vertices, parent=None, gti=emptyGTI):
+        self.gti = gti
+        super().__init__(vertices, parent)
 
-"""
-def perpetuate(tdur=10.*24.*3600., csize=4.*24.*3600):
-    delchulls = []
-    clusters, gtis, chulls = [], []
-    counter = 0
-    obs = ObsClusters()
-    while True:
-        attloc, key = yield delchulls
-        g, _, _, c = get_observations_gti(attloc)
-        tstart = np.min([gl.arr[0, 0] for gl in g])
-        gcheck = GTI([tstart - tdur, np.inf])
-        gcum = [gl for gl in gtis if (gcheck & gl).exposure > 0]
+    def update_parent_gti(self):
+        self.gti = reduce(lambda a, b: a | b, [ch.gti for ch in self.childs])
+        if self.parent != self:
+            self.parent.update_parent_gti()
 
-        gtis += g
-        chulls += c
-        clusters += [key, ]*len(g)
+    def update_gti_for_attdata(self, attdata, expandsize=pi/180.*26.5/60.):
+        self.gti = self.gti | attdata.chull_gti(self.expand(expandsize))
+        if self.parent != self:
+            self.parent.update_parent_gti()
 
-def perpetuate(attdata, key):
-    sendlist = []
-    attdata, key = yield sendlist
-    slews = get_slews_gti(attloc)
-"""
+
+class FullSphereChullGTI(ChullGTI):
+    def __init__(self):
+        self.childs = [ChullGTI(np.roll(CVERTICES, -i, axis=0)[:3], self) for i in range(4)]
+        self.parent = [self,]
+        self.vertices = np.empty((0, 3), float)
+        
+    @property
+    def area(self):
+        return 4.*pi*(180/pi)**2.
+
+    def check_inside_polygon(self, vecs):
+        return np.ones(vecs.shape[0], bool) 
+
+    def __and__(self, other):
+        return ChullGTI(other.vertices)
 
 
 
