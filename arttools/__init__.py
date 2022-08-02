@@ -11,6 +11,7 @@ from . import spectr
 from . import illumination
 from . import containers
 from . import arf
+from . import spatialindex
 
 __version__ = "0.3.1"
 
