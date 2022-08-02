@@ -992,12 +992,13 @@ if __name__ == "__main__":
         else:
             flist = [fname,]
         attdata = arttools.orientation.AttDATA.concatenate([arttools.orientation.get_attdata(fname) for fname in flist if "gyro.fits" in fname])
-        gtis, areas, centers = arttools.orientation.get_observations_gti(attdata)
+        gtis, areas, centers, chulls = arttools.orientation.get_observations_gti(attdata)
         with open(parsed.output, 'w') as f:
             for g, a, c in zip(gtis, areas, centers):
                 f.write("center: %.6f %.6f" % tuple(c) + " area %.2f \n" % a)
                 for arr in g.arr:
                     f.write("\t%f %f\n" % tuple(arr))
+
     if parsed.action == "image":
         make_img(parsed.input[1:], parsed.output, gti, emin=parsed.emin, emax=parsed.emax, make_detmap=parsed.make_detmap, ra=parsed.ra, dec=parsed.dec)
 
