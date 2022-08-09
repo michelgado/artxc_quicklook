@@ -153,6 +153,8 @@ class ConvexHullonSphere(object):
 
 
         self.vertices = np.array(ovecs) #self.corners)
+        idx = np.argmin(np.sum(self.vertices*np.roll(self.vertices, -1, axis=0), axis=1))
+        self.vertices = np.roll(self.vertices, -idx - 1, axis=0)
         self.childs = [self,]
         if parent is None:
             self.parent = self

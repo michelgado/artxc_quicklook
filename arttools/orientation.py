@@ -308,7 +308,7 @@ class AttDATA(SlerpWithNaiveIndexing):
                 chulls.append(chloc)
             if np.all(mtot):
                 break
-        return chulls, gtis
+        return zip(chulls, gtis)
 
 
 
@@ -1070,6 +1070,13 @@ def get_observations_gti(attdata, join=True):
 
 
 class ObsClusters(object):
+    """
+    this class can accummulates limitless amount of the attdata (unless its cover more then half of a sky in a single covering convex hull)
+    the main method of class is add (attdata)
+    u can add attdata, which will be splited on separate observations separated by slew episodes (with optical axis movement speed > 100 arcsec/sec)
+    for each such segments gti and covering convex hull is produced, convex hull are then joined if intersecting (gtis are joining too)
+    one can get convex hulls and corresponding gtis as an expicit attributes of the class
+    """ 
     def __init__(self, join=True, contour=None):
         self.clusters = []
         self.chulls = []
@@ -1077,7 +1084,7 @@ class ObsClusters(object):
         self._join = join
         self.counter = -1
         if contour is None:
-            self._contour = raw_xy_to_vec(np.array([-6, -6, 53, 53]), np.array([-3, 51, 51, -3]))
+            self._contour = raw_xy_to_vec(np.array([-6, -6, 53, 53]), np.array([-6, 51, 51, -6]))
         else:
             if not (type(contour) is np.array) or (contour.ndim > 2) or (contour.shape[-1] != 3):
                 raise ValueError("contour is a set of vectors at the edges of convex hull, which incapsulates convolution core")
@@ -1151,7 +1158,7 @@ class ChullGTI(ConvexHullonSphere):
 class FullSphereChullGTI(ChullGTI):
     def __init__(self):
         self.childs = [ChullGTI(np.roll(CVERTICES, -i, axis=0)[:3], self) for i in range(4)]
-        self.parent = [self,]
+        self.parent = self
         self.vertices = np.empty((0, 3), float)
         
     @property
