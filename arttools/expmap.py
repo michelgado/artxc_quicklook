@@ -68,7 +68,7 @@ def make_mosaic_expmap_mp_executor(shape, wcs, vmap, qvals, exptime, mpnum):
 
     return res[0]
 
-def make_expmap_for_wcs(wcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dtcorr={}, kind="direct", urdweights={}, **kwargs):
+def make_expmap_for_attdata(sky, attdata, imgfilters, dtcorr={}, kind="direct", urdweights={}, **kwargs):
     """
     produce exposure map on the provided wcs area, with provided GTI and attitude data
 
@@ -80,16 +80,9 @@ def make_expmap_for_wcs(wcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dtcor
     """
     urdgtis = {urdn: f.filters["TIME"] for urdn, f in imgfilters.items()}
 
-    if shape is None:
-        ysize, xsize = int(wcs.wcs.crpix[0]*2 + 1), int(wcs.wcs.crpix[1]*2 + 1)
-        shape = [(0, xsize), (0, ysize)]
 
     if kind not in ["direct", "convolve"]:
         raise ValueError("only  convolve and direct option for exposure mosiac is available")
-    print(wcs)
-
-    print("sky image initilization")
-    sky = SkyImage(wcs, shape=shape, mpnum=mpnum)
 
 
     overall_gti = emptyGTI
@@ -114,7 +107,7 @@ def make_expmap_for_wcs(wcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dtcor
     print("overal exposure", overall_gti.exposure)
 
     if overall_gti.exposure > 0:
-        exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti, wcs=wcs)
+        exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti, wcs=None if not hasattr(sky, "locwcs") else sky.locwcs)
         vmap = make_overall_vignetting(imgfilters, urdweights={urdn: w*dtcc[urdn] for urdn, w in urdweights.items()}, **kwargs)
         sky.set_vmap(vmap)
         print("exptime sum", exptime.sum())
@@ -131,7 +124,8 @@ def make_expmap_for_wcs(wcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dtcor
             continue
         print("urd %d, exposure %.1f, progress:" % (urdn, gti.exposure))
         exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urdn), gti, \
-                                                             timecorrection=dtcorr.get(urdn, lambda x: 1), wcs=wcs)
+                                                             timecorrection=dtcorr.get(urdn, lambda x: 1), \
+                                                             wcs=None if not hasattr(sky, "locwcs") else sky.locwcs)
         vmap = make_vignetting_for_urdn(urdn, imgfilters[urdn].filters, **kwargs)
         sky.set_vmap(vmap)
         if kind == "direct":
@@ -139,7 +133,18 @@ def make_expmap_for_wcs(wcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dtcor
         elif kind == "convolve":
             sky.fft_convolve(qval, exptime*urdweights.get(urdn, 1.))
         print(" done!")
-    return sky.img
+    return np.copy(sky.img)
+
+def make_expmap_for_wcs(locwcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dtcorr={}, kind="direct", urdweights={}, **kwargs):
+    if shape is None:
+        ysize, xsize = int(wcs.wcs.crpix[0]*2 + 1), int(wcs.wcs.crpix[1]*2 + 1)
+        shape = [(0, xsize), (0, ysize)]
+    print(wcs)
+    sky = SkyImage(wcs, shape=shape, mpnum=mpnum)
+    return make_expmap_for_attdata(sky, attdata, imgfilters, dtcorr=dtcorr, kind=kind, urdweights=urdweights, **kwargs)
+
+
+
 
 def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNUM, dtcorr={}, illum_filters=None, **kwargs):
     """

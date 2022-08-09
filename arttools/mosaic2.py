@@ -50,7 +50,7 @@ def get_split_side(val, guess=None):
     return guess
 
 class Idxcutot(object):
-    def __init__(self, arr, idx):
+    def __init__(self, arr, idx, maks=None):
         self.arr = arr
         self.idx = idx
 
@@ -292,7 +292,6 @@ except:
     print("fail to load astropy healpix model, Healpix interpolator unavailable")
 else:
 
-
     class HealpixSky(SkyInterpolator):
         def __init__(self, nside, idx, vmap=None, rmap=None, mask=None, vecs=None, mpnum=4, barrier=None):
             self.nside = nside
@@ -310,11 +309,14 @@ else:
         def _get_cutout(self, qval):
             idx = np.sort(healpy.query_disc(self.nside, vec=qval.apply([1, 0, 0]), radius=self._sarea))
             idxx = np.searchsorted(self.idx, idx)
-            idxx = idxx[:np.searchsorted(idxx, self.idx.size)]
+            idf = np.searchsorted(idxx, self.idx.size)
+            idx = idx[:idf]
+            idxx = idxx[:idf]
             #return None, None, None
             #idx = np.sort(healpy.query_disc(self.nside, vec=qval.apply([1, 0, 0]), radius=self._sarea))
             #idxx = np.searchsorted(self.idx, idx)
             idxx = idxx[self.idx[idxx] == idx]
+            idxx = idxx[self.mask[idxx]]
             return Idxcutot(self.img, idxx), self.rmap[idxx], self.vecs[idxx]
 
         @DistributedObj.for_each_process

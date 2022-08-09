@@ -295,7 +295,6 @@ class Intervals(object):
         idxgaps = newts.searchsorted((gtloc.arr[:-1, 1] + gtloc.arr[1:, 0])/2.)
         maskgaps = np.ones(newts.size - 1 if newts.size else 0, np.bool)
         maskgaps[idxgaps - 1] = False
-        print(newts[-1])
         #print(ts[:3] - ts[0], ts[-3:] - ts[0])
         #print(newts[:3] - ts[0], ts[-3:] - ts[0])
         #print(newts.size)

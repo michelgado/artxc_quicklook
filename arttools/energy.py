@@ -146,7 +146,7 @@ def add_energies_and_grades(udata, hkdata, caldb, escalecaldb=None, droppha=Fals
     return droppha_data(Urddata(d, udata.urdn, udata.filters)) if droppha else Urddata(d, udata.urdn, udata.filters)
 
 def droppha_data(udata):
-    d = np.lib.recfunctions.drop_fields(d, ["PHA_BOT", "PHA_BOT_SUB1", "PHA_BOT_ADD1", "PHA_TOP", "PHA_TOP_ADD1", "PHA_TOP_SUB1","TIME_F","TIME_I"], usemask=False)
+    d = np.lib.recfunctions.drop_fields(udata.data, ["PHA_BOT", "PHA_BOT_SUB1", "PHA_BOT_ADD1", "PHA_TOP", "PHA_TOP_ADD1", "PHA_TOP_SUB1","TIME_F","TIME_I"], usemask=False)
     return Urddata(d, udata.urdn, udata.filters)
 
 
