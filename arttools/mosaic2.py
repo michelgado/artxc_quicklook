@@ -102,7 +102,8 @@ class SkyInterpolator(DistributedObj):
         self.vecs = np.frombuffer(vecs, dtype=float, count=self.img.size*3).reshape(list(self.img.shape) + [3,])
 
         super().__init__(mpnum, barrier, vecs=vecs, vmap=vmap, rmap=rmap, mask=mask, **kwargs)
-        self.set_vmap(vmap)
+        if not vmap is None:
+            self.set_vmap(vmap)
 
 
     def _get_cutout(self, quat):

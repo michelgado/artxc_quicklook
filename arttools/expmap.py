@@ -1,6 +1,6 @@
 from .caldb import get_boresight_by_device, get_optical_axis_offset_by_device
 from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttInvHist, make_small_steps_quats
-from .mosaic2 import SkyImage
+from .mosaic2 import SkyImage, WCSSky
 from .vignetting import make_vignetting_for_urdn, make_overall_vignetting
 from .psf import get_ipsf_interpolation_func, unpack_inverse_psf_specweighted_ayut, rawxy_to_opaxoffset, get_pix_overall_countrate_constbkg_ayut
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
@@ -135,12 +135,12 @@ def make_expmap_for_attdata(sky, attdata, imgfilters, dtcorr={}, kind="direct", 
         print(" done!")
     return np.copy(sky.img)
 
-def make_expmap_for_wcs(locwcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dtcorr={}, kind="direct", urdweights={}, **kwargs):
+def make_expmap_for_wcs(wcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dtcorr={}, kind="direct", urdweights={}, **kwargs):
     if shape is None:
         ysize, xsize = int(wcs.wcs.crpix[0]*2 + 1), int(wcs.wcs.crpix[1]*2 + 1)
         shape = [(0, xsize), (0, ysize)]
     print(wcs)
-    sky = SkyImage(wcs, shape=shape, mpnum=mpnum)
+    sky = WCSSky(wcs, shape=shape, mpnum=mpnum)
     return make_expmap_for_attdata(sky, attdata, imgfilters, dtcorr=dtcorr, kind=kind, urdweights=urdweights, **kwargs)
 
 
