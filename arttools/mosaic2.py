@@ -71,9 +71,10 @@ class SkyInterpolator(DistributedObj):
     """
     stores an image of the sky and allows to put specific core on the sky coordinates
     """
-    def __init__(self, vmap=None, rmap=None, mask=None, vecs=None, mpnum=4, barrier=None, **kwargs):
+    def __init__(self, vmap=None, rmap=None, mask=None, vecs=None, mpnum=4, subres=10, barrier=None, **kwargs):
 
         self.corners = None
+        self.subres = np.mgrid[-(0.5 - 0.5/subres):0.5:1./subres, -(0.5 - 0.5/subres):0.5:1./subres].reshape((2, -1))
         self.action = put_stright_on #set_action(put_stright_on)
         """
         self.vmap = vmap
