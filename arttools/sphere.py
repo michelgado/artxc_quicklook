@@ -273,7 +273,6 @@ class ConvexHullonSphere(object):
             raise ValueError("can't expand single point chull")
 
 
-        cm = normalize(self.vertices + np.roll(self.vertices, 1, axis=0)) #self.get_center_of_mass()
         orts = self.orts
         if dtheta > 0:
             print(orts.shape)
@@ -289,14 +288,16 @@ class ConvexHullonSphere(object):
 
         svertices = normalize(np.cross(orts, np.roll(orts, 1, axis=0)))
 
+        cm = normalize(svertices + np.roll(svertices, 1, axis=0)) #self.get_center_of_mass()
+
         neworts = normalize(orts - normalize(cm + orts*np.sum(cm*orts, axis=1)[:, np.newaxis])*np.tan(dtheta))
         vertices = normalize(np.cross(neworts, np.roll(neworts, 1, axis=0)))
         print(vertices.shape, self.vertices.shape)
-        mask = np.ones(vertices.shape[0], bool)
+        mask = np.ones(svertices.shape[0], bool)
 
         #if dtheta < 0:
         while True:
-            da = np.sum(self.vertices[mask]*np.roll(self.vertices[mask], 1, axis=0), axis=1)
+            da = np.sum(svertices[mask]*np.roll(svertices[mask], 1, axis=0), axis=1)
             idx = np.argmax(da)
             print("idx", idx, da, np.arccos(da)*180/pi*60.)
             if np.sum(np.cross(vertices[idx], np.roll(vertices, 1, axis=0)[idx])*cm) < 0:
