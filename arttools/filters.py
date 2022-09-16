@@ -248,7 +248,7 @@ class Intervals(object):
         """
         remove intervals shorter then dt
         """
-        self.arr = self._regularize(self.arr + [dt/2., -dt/2.]) - [dt/2., + dt/2.]
+        return self + [dt/2., -dt/2.] - [dt/2., + dt/2.]
 
     def mask_external(self, ts, open_bounds=False):
         """
