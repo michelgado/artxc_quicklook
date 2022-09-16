@@ -171,8 +171,40 @@ class ConvexHullonSphere(object):
                 ch.all_hairs(res)
         return res
 
+    def simplify(self, da=1e-5):
+        orts = self.orts
+        das = np.sum(self.vertices*np.roll(self.vertices, 1, axis=0), axis=1)
+        cola = np.sum(orts*np.roll(orts, 1, axis=0), axis=1)
+        #print("cola", cola, da, self.vertices.shape)
+        if np.max(cola) > cos(da):
+            idxd = np.argmax(cola)
+            """
+            print("removgind", idxd)
+            if das[idxd] > das[idxd - 1]:
+                orts = np.delete(orts, idxd - 1, axis=0)
+                print("roll back")
+            else:
+                orts = np.delete(orts, idxd, axis=0)
+            print("out roll shape", orts.shape)
+            return self.__class__(normalize(np.cross(orts, np.roll(orts, 1, axis=0)))).simplify(da)
+            """
+            return self.__class__(np.delete(self.vertices, idxd, axis=0)).simplify(da)
+
+        return self
+
+
+
+
     @property
     def orts(self):
+        if self.vertices.shape[0] == 2:
+            """
+            in some cases, it apper to be userfull have a special case - a line as a convex hull
+            scuh chull can be expanded in a rectangle
+            """
+            ort1 = normalize(np.cross(*self.vertices))
+            return np.array([ort1, np.cross(self.vertices[0], ort1), -ort1, np.cross(self.vertices[1], -ort1)])
+
         return normalize(np.cross(self.vertices, np.roll(self.vertices, -1, axis=0)))
 
     def check_newpoint(self, vec1, vec3, color, lvl):
@@ -194,7 +226,11 @@ class ConvexHullonSphere(object):
     def check_inside_polygon(self, vecs):
         return np.logical_not(np.any(np.sum(self.orts[np.newaxis, :, :]*vecs[:, np.newaxis, :], axis=2)  > 1e-15, axis=1)) # > 1e-15 instead of 0, because of new vertices lying at the previos edges
 
+
     def expand(self, dtheta):
+        return self.expand3(dtheta)
+
+    def expand1(self, dtheta):
         """
         expand convex moving straight lines, limiting each side of the  convex, on the angle dtheta
         negative angle should be used with caution, since the sum of the angles on vertixes inside convex shrinks with convex surface area and some corners
@@ -228,14 +264,67 @@ class ConvexHullonSphere(object):
         newcorners = normalize(np.cross(neworts, np.roll(neworts, 1, axis=0)))
         return ConvexHullonSphere(newcorners[np.sum(newcorners*self.get_center_of_mass(), axis=1) > 0])
 
+    def expand3(self, dtheta, da=1e-3):
+        """
+        expand by moving orts from the center of mass,
+        if negative expansion, than sides disapearing while smallest sides become revert oriented relative to rest of convex hull
+        """
+        if self.vertices.shape[0] == 1:
+            raise ValueError("can't expand single point chull")
+
+
+        cm = normalize(self.vertices + np.roll(self.vertices, 1, axis=0)) #self.get_center_of_mass()
+        orts = self.orts
+        if dtheta > 0:
+            print(orts.shape)
+            cola = np.sum(orts*np.roll(orts, 1, axis=0), axis=1)
+            while np.min(cola) < -cos(da):
+                idxd = np.argmin(cola)
+                nort = normalize(np.cross(orts[idxd], normalize(np.cross(orts[idxd], orts[idxd - 1]))))
+                print(nort)
+                orts = np.insert(orts, idxd, nort, axis=0) #self.vertices[idxd])), axis=0)
+                print("orts shape", orts.shape)
+                cola = np.sum(orts*np.roll(orts, 1, axis=0), axis=1)
+                print("add ort", idxd)
+
+        svertices = normalize(np.cross(orts, np.roll(orts, 1, axis=0)))
+
+        neworts = normalize(orts - normalize(cm + orts*np.sum(cm*orts, axis=1)[:, np.newaxis])*np.tan(dtheta))
+        vertices = normalize(np.cross(neworts, np.roll(neworts, 1, axis=0)))
+        print(vertices.shape, self.vertices.shape)
+        mask = np.ones(vertices.shape[0], bool)
+
+        #if dtheta < 0:
+        while True:
+            da = np.sum(self.vertices[mask]*np.roll(self.vertices[mask], 1, axis=0), axis=1)
+            idx = np.argmax(da)
+            print("idx", idx, da, np.arccos(da)*180/pi*60.)
+            if np.sum(np.cross(vertices[idx], np.roll(vertices, 1, axis=0)[idx])*cm) < 0:
+                mask[idx - 1] = False
+                vertices = normalize(np.cross(neworts[mask], np.roll(neworts[mask], 1, axis=0)))
+            else:
+                break
+        """
+        import matplotlib.pyplot as plt
+        plt.scatter(*np.rad2deg(vec_to_pol(np.cross(neworts, np.roll(neworts, 1, axis=0)))))
+        #return ConvexHullonSphere(normalize(np.cross(neworts, np.roll(neworts, 1, axis=0))))
+        """
+        return ConvexHullonSphere(vertices) #normalize(np.cross(neworts, np.roll(neworts, 1, axis=0))))
+
+
     @property
     def area(self):
-        return get_vec_triangle_area(self.vertices[np.zeros(self.vertices.shape[0] - 2).astype(np.int)],
+        if self.vertices.shape[0] > 2:
+            return get_vec_triangle_area(self.vertices[np.zeros(self.vertices.shape[0] - 2).astype(np.int)],
                                      self.vertices[1:-1],
                                      self.vertices[2:]).sum()*(180./pi)**2.
+        else:
+            return 0.
 
-    def get_center_of_mass(self, it=3):
-        return get_convex_center(self, it)
+    def get_center_of_mass(self):
+        if self.vertices.shape[0] == 2:
+            return normalize(np.sum(self.vertices, axis=0))
+        return get_convex_center(self)
 
     def get_containing_rectangle(self, alpha=0., rotc=None):
         vm = rotc if not rotc is None else self.get_center_of_mass()
@@ -313,6 +402,15 @@ class ConvexHullonSphere(object):
         else:
             return self.__class__(self.vertices)
 
+    def get_shortest_side_size(self):
+        da = np.arccos(np.sum(self.vertices*np.roll(self.vertices, 1, axis=0), axis=1))
+        return np.min(da)
+
+    def get_shortest_side_index(self):
+        da = np.arccos(np.sum(self.vertices*np.roll(self.vertices, 1, axis=0), axis=1))
+        return np.argmin(da)
+
+
     def remove_shortest_sights(self):
         cm = self.get_center_of_mass()
         v = np.sum(self.vertices*np.roll(self.vertices, 1, axis=0), axis=1)
@@ -388,7 +486,7 @@ class ConvexHullonSphere(object):
                 for ch in chnew.childs:
                     ch.parent = chnew
                 return chnew
-        return None 
+        return None
 
     def has_common_sides(self, other):
         return np.sum(1 - np.sum(other.vertices[:, np.newaxis,:]*self.vertices[np.newaxis, :, :], axis=2).max(axis=1) < 1e-15) == 2
@@ -397,7 +495,7 @@ class ConvexHullonSphere(object):
         hairs = self.all_hairs()
         print("len of all childs", len(hairs))
         for i in range(len(hairs)):
-            h = hairs[i] #, h in enumerate(hairs): 
+            h = hairs[i] #, h in enumerate(hairs):
             if h.area > sarea:
                 continue
             ict = [k for k in range(len(h.parent.childs)) if h.parent.childs[k] != h and h.parent.childs[k] in hairs and h.has_common_sides(h.parent.childs[k])]
@@ -530,13 +628,13 @@ class FullSphere(ConvexHullonSphere):
         self.childs = [ConvexHullonSphere(np.roll(CVERTICES, -i, axis=0)[:3], self) for i in range(4)]
         self.parent = [self,]
         self.vertices = np.empty((0, 3), float)
-        
+
     @property
     def area(self):
         return 4.*pi*(180/pi)**2.
 
     def check_inside_polygon(self, vecs):
-        return np.ones(vecs.shape[0], bool) 
+        return np.ones(vecs.shape[0], bool)
 
     def __and__(self, other):
         return ConvexHullonSphere(other.vertices)
@@ -595,7 +693,10 @@ def get_angle_betwee_three_vectors(vec1, vec2, vec3):
     return alpha
 
 
-def get_convex_center(convex, it=3):
+def get_convex_center(convex):
+    return get_convex_center1(convex)
+
+def get_convex_center1(convex):
     """
     finds a center of mass of a convex on a sphere
 
@@ -622,6 +723,11 @@ def get_convex_center(convex, it=3):
 
     c1 = normalize(np.cross(np.cross(convex.vertices[0], v1), np.cross(convex.vertices[-1], v2)))
     return c1
+
+def get_convex_center2(convex):
+    v = convex.vertices
+    return normalize(np.sum(normalize(v + np.roll(v, 1, axis=0))*np.arccos(np.sum(v*np.roll(v, 1, axis=0), axis=1))[:, np.newaxis], axis=0))
+
 
 def switch_between_corners_to_plane_axis(corners_or_axis):
     """
