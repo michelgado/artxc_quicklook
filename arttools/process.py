@@ -711,6 +711,8 @@ def make_lightcurve(flist, outputname, ra, dec, dt, usergti=tGTI, emin=4., emax=
         ten.append(tee[idx-1])
         idx0 = idx
 
+    print("finall check lcs", np.sum(lcs), np.sum(dtn), np.sum(cs), "binned data", np.sum(lcsn), np.sum(dtnn), np.sum(csn))
+
     cs = np.array(csn)
     dtn = np.array(dtnn)
     lcs = np.array(lcsn)
@@ -722,7 +724,7 @@ def make_lightcurve(flist, outputname, ra, dec, dt, usergti=tGTI, emin=4., emax=
 
     #d = Table.from_pandas(pandas.DataFrame({"TIME": tc, "TIMEDEL":dt, "COUNTS": cs, "BACKV": lcs, "FRACEXP": dtn[gaps]/dt, "RATE": np.maximum(cs - lcs, 0.)/dtn[gaps]}))
 
-    d = QTable([tc*au.second, (ten - tsn)*au.second, cs*au.count, lcs*au.count, dtn/float(dt), np.maximum(cs - lcs, 0.)/dtn*au.count/au.second, np.sqrt(cs)*au.count/dtn/au.second],
+    d = QTable([tc*au.second, (ten - tsn)*au.second, cs*au.count, lcs*au.count, dtn/(ten - tsn), np.maximum(cs - lcs, 0.)/dtn*au.count/au.second, np.sqrt(cs)*au.count/dtn/au.second],
                  names = ["TIME", "TIMEDEL", "COUNT", "BACKV", "FRACEXP", "RATE", "ERROR"])
     phdu = fits.PrimaryHDU(header=fits.Header({"CONTENT":"LIGHT CURVE", "TELESCOP":"ART-XC", "INSTRIME":"T1-7", "TIMEVERS":"OGIP/93-003", "ORIGIN":"IKI", "DATE":datetime.datetime.today().strftime("%y/%m/%d"),
                                                "RA": ra, "DEC": dec,
@@ -733,7 +735,7 @@ def make_lightcurve(flist, outputname, ra, dec, dt, usergti=tGTI, emin=4., emax=
 
     header = fits.Header({"TELESCOP": "ART-XC", "OBS-DATE": "DONTFORGETTOADDDATE", "RA": ra, "DEC": dec, "MJDREFI": int(arttools.caldb.MJDREF), "MJDREFF": arttools.caldb.MJDREF%1,
                           "TUNIT1": "s", "TUNIT2":"s", "TUNIT3":"COUNTS", "TUNIT4":"COUNTS", "TUNIT5":"", "TUNIT6":"COUNTS/s", "TUNIT7": "COUNTS/s",
-                          "TIMEUNIT": "s", "TIMEZERO": 0., "TIMEDEL": dt,
+                          "TIMEUNIT": "s", "TIMEZERO": 0.,
                             "HDUCLASS": "OGIP", "HDUCLAS1":"LIGHTCURVE", "HDUCLAS2":"TOTAL", "HDUCLASS3": "RATE", "TIMEDER": "GEOCENTER",
                           "DATE-OBS": tsobs.strftime("%y/%m/%d"), "TIME-OBS":tsobs.strftime("%H:%M:%S"),
                            "DATE-END": teobs.strftime("%y/%m/%d"), "TIME-END":teobs.strftime("%H:%M:%S"),
