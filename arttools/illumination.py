@@ -61,11 +61,13 @@ def get_events_in_illumination_mask(urdn, srcax, urdevts, attdata):
     mask[~mask][sidx] = ~imask[il, xy[:, 0], xy[:, 1]]
     return mask
 
+"""
 from astropy.io import fits
 ffile = fits.open("/srg/a1/work/andrey/ART-XC/Crab/imask7.fits.gz")
 wcs = WCS(ffile[0].header)
 offsets = ffile[1].data
 imask = ffile[2].data
+"""
 
 def get_events_in_illumination_mask2(urdn, srcax, urdevts, attdata):
     attloc = attdata*get_boresight_by_device(urdn)
@@ -95,10 +97,60 @@ def get_events_in_illumination_mask2(urdn, srcax, urdevts, attdata):
 
 localillumsource = None
 
+
+class AzimuthMaskSet(object):
+    """
+    the mask checks, wether the provided vector located within the specific
+    azimuth angle interval for specific ring
+    it contains regular grid for
+    1) optical axis -- source offsets
+    2) source -- event offsets
+
+    the mask works as follows:
+        it separate all events over their belonging to the particular offset ring, defined by the 1) grid
+        within opax--src ring events separated over their offset from source on the set of rings based on the second grid
+        for each ring a set of azimuthal angles intervals defined [[begining, end], [beginning, end], ....]
+        if source vector is within this interval, a possitive mask is applied to it
+    """
+    def __init__(self, srcoaxofflb, evtsrclb, srcevtbounds):
+        """
+        srcoaxofflb -- lower boundary for optical axis - source offset
+        evtsrclb -- lower boundary for soruce -- events vectors offset
+        srcevtbounds - a set of source centered segments (lower offset boundary and interavls within which mask is True)
+        """
+        a1 = -np.cos(srcoaxofflb)
+        self.srcaxgrid = a1
+        self.evtsrgrid = -np.cos(evtsrclb)
+        grid = np.repeat(np.arange(self.srcaxgrid.size)*self.evtsrgrid.size, [len(c)*2 for c in srcevtbounds])
+        bounds = np.concatenate(srcevtbounds, axis=0)
+        self.grid = grid + np.searchsorted(self.evtsrgrid+1e-10, np.repeat(-np.cos(bounds[:, 0]), 2)) + bounds[:, 2:].ravel()/2./pi
+
+    def check_vecs(self, srcvec, axvec, evtvec):
+        a1 = -np.sum(srcvec*axvec, axis=1)
+        idx1 = (np.searchsorted(self.srcaxgrid, -np.sum(axvec*srcvec, axis=1)) - 1)*self.evtsrgrid.size
+        a2 = np.sum(srcvec*evtvec, axis=1)
+        idx2 = np.searchsorted(self.evtsrgrid, -a2) - 1
+
+        p1 = normalize(axvec + a1[:, np.newaxis]*srcvec[np.newaxis, :])
+        p2 = np.cross(srcvec, p1) #, axis=1)
+        angle = np.arctan2(np.sum(p2*evtvec, axis=1), np.sum(p1*evtvec, axis=1))
+
+        vals = idx1 + idx2 + (angle + pi)/2./pi
+        return np.searchsorted(self.grid, vals)%2 == 1
+
+
 class IlluminationSource(object):
     def __init__(self, ra, dec, wcs, offsets, imask, app=300.):
         self.sourcevector = pol_to_vec(*np.deg2rad([ra, dec]))
-        self.wcs = wcs
+        wcs =  wcs.to_header()
+        if wcs["WCSAXES"] == 3:
+            wcs["WCSAXES"] = 2
+            wcs.pop("CDELT3")
+            wcs.pop("CRPIX3")
+            wcs.pop("CRVAL3")
+
+        self.wcs = WCS(wcs)
+
         self.offsets = offsets
         self.imask = imask
         self.x, self.y = np.mgrid[0:imask.shape[1]:1, 0:imask.shape[2]:1]
@@ -107,16 +159,7 @@ class IlluminationSource(object):
         self.mask = None
         self.qalign = None
         self.sidx = None
-
-    @staticmethod
-    def illumination_slice(w, imask, pvecs, crval, app, srcvec, opaxvecs):
-        qalign = make_align_quat(np.tile(srcvec, (opaxvecs.shape[0], 1)), opaxvecs)
-
-        w.wcs.crval[1] = crval/3600.
-        w = WCS(w.to_header())
-        xyl = (w.all_world2pix(np.rad2deg(vec_to_pol(qalign.apply(pvecs))).T, 1) - 0.5).astype(int)
-        y0, x0 = (w.all_world2pix(np.array([[180., 0.],]), 1) - 0.5).astype(int)[0]
-        return np.logical_and(imask[xyl[:, 1], xyl[:, 0]], ((xyl[:, 1] - x0)**2 + (xyl[:, 0] - y0)**2. > (app/w.wcs.cdelt[0]/3600.)**2.))
+        #-----------------------------------------
 
 
     def get_vectors_in_illumination_mask(self, quats, pvecs, opax, mpnum=1):
@@ -126,42 +169,25 @@ class IlluminationSource(object):
 
         #angles = np.arccos(np.sum(self.sourcevector*opaxvecs, axis=-1))*180./pi*3600.
         angles = -np.sum(self.sourcevector*opaxvecs, axis=-1)
-        """
-        offedges = -np.array([np.cos(self.offsets["OPAXOFFL"]*pi/180./3600.), np.cos(self.offsets["OPAXOFFH"]*pi/180./3600.)]).T
-        sidx = np.argsort(angles)
-        cedges = np.maximum(np.searchsorted(angles[sidx], offedges) - 1, 0)
-        mask = np.zeros(sidx.size, np.bool)
+        #print(angles)
 
-        """
 
-        mask = (angles > self.offsets["OPAXOFFL"][0]*pi/180./3600.) & (angles < self.offsets["OPAXOFFH"][-1]*pi/180./3600.)
+        mask =  (angles < -cos(self.offsets["OPAXOFFH"][-1]*pi/180./3600.))
+        #print(mask.sum())
         pvecs = pvecs[mask]
 
         p1 = normalize(opaxvecs - self.sourcevector[np.newaxis, :]*np.sum(self.sourcevector*opaxvecs, axis=1)[:, np.newaxis])
         p2 = np.cross(self.sourcevector, p1) #, axis=1)
+        #print(p1.shape, p2.shape, pvecs.shape)
         svec = normalize(np.array([-np.sum(self.sourcevector*pvecs, axis=1), np.sum(p2*pvecs, axis=1), np.sum(p1*pvecs, axis=1)]).T)
         offidx = np.searchsorted(-np.cos(self.offsets["OPAXOFFL"]*pi/180./3600.), -np.sum(opaxvecs*self.sourcevector, axis=1)) - 1
-        y, x = (wcs.all_world2pix(np.rad2deg(vec_to_pol(svec)).T, 0) + 0.5).astype(int).T
-        mask[mask] = imask[offidx, x, y].astype(bool)
+        y, x = (self.wcs.all_world2pix(np.rad2deg(vec_to_pol(svec)).T, 0) + 0.5).astype(int).T
+        x = np.maximum(np.minimum(x, self.imask.shape[1] - 1), 0)
+        y = np.maximum(np.minimum(y, self.imask.shape[0] - 1), 0)
 
-        """
-        if mpnum > 1:
-            pool = Pool(mpnum)
-            for (s, e), res in zip(cedges, pool.starmap(self.illumination_slice, [(self.wcs, imask, pvecs[sidx[s:e]], crval, self.app, self.sourcevector, opaxvecs[sidx[s:e]]) for imask, (s, e), crval in zip(self.imask, cedges, self.offsets["CRVAL"]) if e != s])):
-                mask[sidx[s:e]] = res
-        else:
-            qalign = make_align_quat(np.tile(self.sourcevector, (opaxvecs.shape[0], 1)), opaxvecs)
-            for i, crval in enumerate(self.offsets["CRVAL"]):
-                s, e = cedges[i]
-                if e == s:
-                    continue
-                pvecsis = qalign[sidx[s:e]].apply(pvecs[sidx[s:e]])
-                self.wcs.wcs.crval[1] = crval/3600.
-                w1 = WCS(self.wcs.to_header())
-                xyl = (w1.all_world2pix(np.rad2deg(vec_to_pol(pvecsis)).T, 1) - 0.5).astype(int)
-                y0, x0 = (w1.all_world2pix(np.array([[180., 0.],]), 1) - 0.5).astype(int)[0]
-                mask[sidx[s:e]] = self.imask[np.full(xyl.shape[0], i), xyl[:, 1], xyl[:, 0]] & ((xyl[:, 1] - x0)**2 + (xyl[:, 0] - y0)**2. > (self.app/w1.wcs.cdelt[0]/3600.)**2.)
-        """
+        #mask[mask] = imask[offidx, x, y].astype(bool)
+        mask[mask] = self.imask[offidx, x, y].astype(bool)
+
         return mask
 
     def setup_for_quats(self, quats, opax):
