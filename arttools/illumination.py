@@ -3,10 +3,11 @@ import numpy as np
 import tqdm
 from .caldb import get_boresight_by_device, get_optical_axis_offset_by_device, get_illumination_mask, get_shadowmask_by_urd
 from ._det_spatial import offset_to_vec, raw_xy_to_vec, rawxy_to_qcorr
-from .orientation import vec_to_pol, pol_to_vec, get_photons_vectors, make_align_quat
+from .orientation import get_photons_vectors, make_align_quat
 from .filters import Intervals
 from .time import emptyGTI, GTI
 from .aux import DistributedObj
+from .vector import vec_to_pol, pol_to_vec, normalize
 from .telescope import URDNS
 from .psf import get_ipsf_interpolation_func, unpack_inverse_psf_specweighted_ayut, rawxy_to_opaxoffset, unpack_inverse_psf_with_weights, get_pix_overall_countrate_constbkg_ayut
 from .mosaic2 import SkyImage
@@ -60,6 +61,38 @@ def get_events_in_illumination_mask(urdn, srcax, urdevts, attdata):
     mask[~mask][sidx] = ~imask[il, xy[:, 0], xy[:, 1]]
     return mask
 
+from astropy.io import fits
+ffile = fits.open("/srg/a1/work/andrey/ART-XC/Crab/imask7.fits.gz")
+wcs = WCS(ffile[0].header)
+offsets = ffile[1].data
+imask = ffile[2].data
+
+def get_events_in_illumination_mask2(urdn, srcax, urdevts, attdata):
+    attloc = attdata*get_boresight_by_device(urdn)
+    pvecs = get_photons_vectors(urdevts, urdn, attdata)
+    opax = raw_xy_to_vec(*np.array(get_optical_axis_offset_by_device(urdn)).reshape((2, 1)))[0]
+
+
+    opaxvecs = attloc(urdevts["TIME"]).apply(opax)
+
+    p1 = normalize(opaxvecs - srcax[np.newaxis, :]*np.sum(srcax*opaxvecs, axis=1)[:, np.newaxis])
+    p2 = np.cross(srcax, p1) #, axis=1)
+    #print(p2.shape)
+    svec = normalize(np.array([-np.sum(srcax*pvecs, axis=1), np.sum(p2*pvecs, axis=1), np.sum(p1*pvecs, axis=1)]).T)
+    #wcs, offsets, imask = get_illumination_mask()
+
+    offidx = np.searchsorted(-np.cos(offsets["OPAXOFFL"]*pi/180./3600.), -np.sum(opaxvecs*srcax, axis=1)) - 1
+    #print(offidx)
+    radec = np.rad2deg(vec_to_pol(svec))
+    #print(radec)
+    #print(radec.shape)
+
+    y, x = (wcs.all_world2pix(np.rad2deg(vec_to_pol(svec)).T, 0) + 0.5).astype(int).T
+    #print(y, x)
+    mask = imask[offidx, x, y].astype(bool)
+    return mask
+
+
 localillumsource = None
 
 class IlluminationSource(object):
@@ -88,17 +121,30 @@ class IlluminationSource(object):
 
     def get_vectors_in_illumination_mask(self, quats, pvecs, opax, mpnum=1):
         opaxvecs = quats.apply(opax)
+
         #qalign = make_align_quat(np.tile(self.sourcevector, (opaxvecs.shape[0], 1)), opaxvecs)
 
         #angles = np.arccos(np.sum(self.sourcevector*opaxvecs, axis=-1))*180./pi*3600.
         angles = -np.sum(self.sourcevector*opaxvecs, axis=-1)
+        """
         offedges = -np.array([np.cos(self.offsets["OPAXOFFL"]*pi/180./3600.), np.cos(self.offsets["OPAXOFFH"]*pi/180./3600.)]).T
-
-
         sidx = np.argsort(angles)
         cedges = np.maximum(np.searchsorted(angles[sidx], offedges) - 1, 0)
         mask = np.zeros(sidx.size, np.bool)
 
+        """
+
+        mask = (angles > self.offsets["OPAXOFFL"][0]*pi/180./3600.) & (angles < self.offsets["OPAXOFFH"][-1]*pi/180./3600.)
+        pvecs = pvecs[mask]
+
+        p1 = normalize(opaxvecs - self.sourcevector[np.newaxis, :]*np.sum(self.sourcevector*opaxvecs, axis=1)[:, np.newaxis])
+        p2 = np.cross(self.sourcevector, p1) #, axis=1)
+        svec = normalize(np.array([-np.sum(self.sourcevector*pvecs, axis=1), np.sum(p2*pvecs, axis=1), np.sum(p1*pvecs, axis=1)]).T)
+        offidx = np.searchsorted(-np.cos(self.offsets["OPAXOFFL"]*pi/180./3600.), -np.sum(opaxvecs*self.sourcevector, axis=1)) - 1
+        y, x = (wcs.all_world2pix(np.rad2deg(vec_to_pol(svec)).T, 0) + 0.5).astype(int).T
+        mask[mask] = imask[offidx, x, y].astype(bool)
+
+        """
         if mpnum > 1:
             pool = Pool(mpnum)
             for (s, e), res in zip(cedges, pool.starmap(self.illumination_slice, [(self.wcs, imask, pvecs[sidx[s:e]], crval, self.app, self.sourcevector, opaxvecs[sidx[s:e]]) for imask, (s, e), crval in zip(self.imask, cedges, self.offsets["CRVAL"]) if e != s])):
@@ -115,6 +161,7 @@ class IlluminationSource(object):
                 xyl = (w1.all_world2pix(np.rad2deg(vec_to_pol(pvecsis)).T, 1) - 0.5).astype(int)
                 y0, x0 = (w1.all_world2pix(np.array([[180., 0.],]), 1) - 0.5).astype(int)[0]
                 mask[sidx[s:e]] = self.imask[np.full(xyl.shape[0], i), xyl[:, 1], xyl[:, 0]] & ((xyl[:, 1] - x0)**2 + (xyl[:, 0] - y0)**2. > (self.app/w1.wcs.cdelt[0]/3600.)**2.)
+        """
         return mask
 
     def setup_for_quats(self, quats, opax):
@@ -125,7 +172,7 @@ class IlluminationSource(object):
         self.sidx = np.argsort(angles)
         #self.cedges = np.maximum(np.searchsorted(angles[self.sidx], offedges) - 1, 0)
         self.cedges = np.searchsorted(angles[self.sidx], offedges)
-        #print("setup done", self.sourcevector)
+        print("setup done", self.sourcevector)
 
     @staticmethod
     def setup_initializer(illum_source, qinitrot):
