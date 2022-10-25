@@ -29,47 +29,9 @@ MPNUM = cpu_count()//4 + 1
 
 
 def get_events_in_illumination_mask(urdn, srcax, urdevts, attdata):
-    attloc = attdata*get_boresight_by_device(urdn)
-    pvecs = get_photons_vectors(urdevts, urdn, attdata)
-    opax = raw_xy_to_vec(*np.array(get_optical_axis_offset_by_device(urdn)).reshape((2, 1)))[0]
-    opaxvecs = attloc(urdevts["TIME"]).apply(opax)
-    qalign = make_align_quat(np.tile(srcax, (opaxvecs.shape[0], 1)), opaxvecs)
-
-    wcs, offsets, imask = get_illumination_mask()
-
-    angles = np.arccos(np.sum(srcax*opaxvecs, axis=-1))*180./pi*3600.
-    offedges = np.array([offsets["OPAXOFFL"], offsets["OPAXOFFH"]]).T
-    offset_intervals = Intervals(offedges)
-    offset_intervals.merge_joint()
-    mask = ~offset_intervals.mask_external(angles)
-    sidx = np.argsort(angles[~mask])
-    cedges = np.searchsorted(angles[~mask][sidx], offedges)
-    pvecsis = qalign[~mask].apply(pvecs[~mask])[sidx]
-    xy = []
-    for i, crval in enumerate(offsets["CRVAL"]):
-        wcs.wcs.crval[1] = crval/3600.
-        w1 = WCS(wcs.to_header())
-        s, e = cedges[i]
-        xyl = (w1.all_world2pix(np.rad2deg(vec_to_pol(pvecsis[s:e])).T, 1) - 0.5).astype(int)
-        xy.append(xyl)
-        plt.imshow(imask[i])
-        plt.scatter(xyl[:, 0], xyl[:, 1], marker="x")
-        plt.title(crval)
-        plt.show()
-    il = np.repeat(np.arange(len(xy)), [val.shape[0] for val in xy])
-    xy = np.concatenate(xy)
-    mask[~mask][sidx] = ~imask[il, xy[:, 0], xy[:, 1]]
-    return mask
-
-"""
-from astropy.io import fits
-ffile = fits.open("/srg/a1/work/andrey/ART-XC/Crab/imask7.fits.gz")
-wcs = WCS(ffile[0].header)
-offsets = ffile[1].data
-imask = ffile[2].data
-"""
-
-def get_events_in_illumination_mask2(urdn, srcax, urdevts, attdata):
+    """
+    for provided wcs and opticalaxis offset grid OPAXOFFL computes weather the events are within illumination mask
+    """
     attloc = attdata*get_boresight_by_device(urdn)
     pvecs = get_photons_vectors(urdevts, urdn, attdata)
     opax = raw_xy_to_vec(*np.array(get_optical_axis_offset_by_device(urdn)).reshape((2, 1)))[0]
@@ -93,9 +55,6 @@ def get_events_in_illumination_mask2(urdn, srcax, urdevts, attdata):
     #print(y, x)
     mask = imask[offidx, x, y].astype(bool)
     return mask
-
-
-localillumsource = None
 
 
 class AzimuthMaskSet(object):
@@ -123,44 +82,33 @@ class AzimuthMaskSet(object):
         self.evtsrgrid = -np.cos(evtsrclb)
         grid = np.repeat(np.arange(self.srcaxgrid.size)*self.evtsrgrid.size, [len(c)*2 for c in srcevtbounds])
         bounds = np.concatenate(srcevtbounds, axis=0)
-        self.grid = grid + np.searchsorted(self.evtsrgrid+1e-10, np.repeat(-np.cos(bounds[:, 0]), 2)) + bounds[:, 2:].ravel()/2./pi
+        self.grid = grid + np.searchsorted(self.evtsrgrid+1e-10, np.repeat(-np.cos(bounds[:, 0]), 2)) + bounds[:, 1:].ravel()/2./pi
 
     def check_vecs(self, srcvec, axvec, evtvec):
+        """
+        srcvec - (1, 3) - single vector of the source
+        axvec - attributed to fk5 optical axis vector (N, 3)
+        evtsvec - atributed to the each optical axis direction set of events vectors (N, M, 3)
+        """
         a1 = -np.sum(srcvec*axvec, axis=1)
-        idx1 = (np.searchsorted(self.srcaxgrid, -np.sum(axvec*srcvec, axis=1)) - 1)*self.evtsrgrid.size
-        a2 = np.sum(srcvec*evtvec, axis=1)
-        idx2 = np.searchsorted(self.evtsrgrid, -a2) - 1
-
         p1 = normalize(axvec + a1[:, np.newaxis]*srcvec[np.newaxis, :])
+        idx1 = (np.searchsorted(self.srcaxgrid, -np.sum(axvec*srcvec, axis=1)) - 1)*self.evtsrgrid.size
         p2 = np.cross(srcvec, p1) #, axis=1)
-        angle = np.arctan2(np.sum(p2*evtvec, axis=1), np.sum(p1*evtvec, axis=1))
 
-        vals = idx1 + idx2 + (angle + pi)/2./pi
+        a2 = np.sum(srcvec*evtvec, axis=-1)
+        idx2 = np.searchsorted(self.evtsrgrid, -a2) - 1
+        if evtvec.ndim == 2:
+            angle = np.arctan2(np.sum(p2*evtvec, axis=1), np.sum(p1*evtvec, axis=1))
+        else:
+            angle = np.arctan2(np.sum(p2[:, np.newaxis, :]*evtvec, axis=-1), np.sum(p1[:, np.newaxis, :]*evtvec, axis=-1))
+
+        vals = idx1 + idx2 + (angle + pi)/2./pi if evtvec.ndim == 2 else idx1[:, np.newaxis] + idx2 + (angle + pi)/2./pi
         return np.searchsorted(self.grid, vals)%2 == 1
 
 
 class IlluminationSource(object):
-    def __init__(self, ra, dec, wcs, offsets, imask, app=300.):
+    def __init__(self, ra, dec):
         self.sourcevector = pol_to_vec(*np.deg2rad([ra, dec]))
-        wcs =  wcs.to_header()
-        if wcs["WCSAXES"] == 3:
-            wcs["WCSAXES"] = 2
-            wcs.pop("CDELT3")
-            wcs.pop("CRPIX3")
-            wcs.pop("CRVAL3")
-
-        self.wcs = WCS(wcs)
-
-        self.offsets = offsets
-        self.imask = imask
-        self.x, self.y = np.mgrid[0:imask.shape[1]:1, 0:imask.shape[2]:1]
-        self.app = app
-        self.cedges = None
-        self.mask = None
-        self.qalign = None
-        self.sidx = None
-        #-----------------------------------------
-
 
     def get_vectors_in_illumination_mask(self, quats, pvecs, opax, mpnum=1):
         opaxvecs = quats.apply(opax)
