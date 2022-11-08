@@ -8,7 +8,7 @@ from ._det_spatial import offset_to_raw_xy, DL, F, raw_xy_to_offset, \
 from .telescope import URDNS
 from .filters import Intervals
 from .caldb import get_boresight_by_device, get_optical_axis_offset_by_device
-from .psf import xy_to_opaxoffset, unpack_inverse_psf_ayut
+from .psf import xy_to_opaxoffset, unpack_inverse_psf_ayut, unpack_inverse_psf_specweighted_ayut
 from .spectr import get_specweights
 import numpy as np
 from math import log10, pi, sin, cos
@@ -57,6 +57,48 @@ def get_energycorr_for_offset(urdn, xo, yo):
     x0, y0 = get_optical_axis_offset_by_device(urdn)
 
 
+class DetectorVignetting(object):
+    def __init__(self, iifun, app=None):
+        self._set_app_shmask(app)
+        self._set_ipsf_functions(iifun)
+        self._img = np.zeros((46*9 + 121 - 9, 46*9 + 121 - 9), np.double)
+        self.dpix = np.zeros((48, 48), bool)
+
+    def _set_ipsf_functions(self, iifun):
+        self.iifun = iifun
+        self.norm = np.sum([self.iifun(i, j)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
+
+    def _clean_img(self):
+        self._img[:, :] = 0.
+        self.dpix[:, :] = False
+
+    def _set_app_shmask(self, app):
+        if app is None:
+            self.psfmask = None
+        else:
+            x, y = np.mgrid[-60:61:1, -60:61:1]
+            self.psfmask = x**2. + y**2. > app**2./25.
+        self.app = app
+
+    def add_pix(self, x, y, i, j):
+        if ~self.dpix[x, y]:
+            self._img[(x - 1)*9: (x - 1)*9 + 121, (y - 1)*9: (y - 1)*9 + 121] += self.iifun(i, j)
+            self.dpix[x, y] = True
+
+    @property
+    def img(self):
+        return self._img/self.norm
+
+
+    def produce_vignentting(self, x, y, i, j):
+        for xp, yp, il, jl in zip(x, y, i, j):
+            self.add_pix(xp, yp, il, jl)
+        return self.img
+
+
+DEFAULVIGNIFUN = RegularGridInterpolator((np.arange(-262.5, 263, 1)/9.*DL, np.arange(-262.5, 263, 1)/9.*DL), np.zeros((526, 526)), bounds_error=False, fill_value=0.)
+
+
 def make_vignetting_for_urdn(urdn, imgfilter, cspec=None, app=None):
     """
     for provided urd number  energy or photon index provided 2d interpolation function (RegularGridInterpolator) defining the profile of the effective area depending on offset
@@ -84,10 +126,14 @@ def make_vignetting_for_urdn(urdn, imgfilter, cspec=None, app=None):
     x2, y2 = xy_to_opaxoffset(x1, y1, urdn)
 
 
-    ee = np.array([4., 6., 8., 10., 12., 16., 20., 24., 30.])
-    w = get_specweights(imgfilter.filters, ee, cspec)
+    #ee = np.array([4., 6., 8., 10., 12., 16., 20., 24., 30.])
+    #w = get_specweights(imgfilter.filters, ee, cspec)
+    iifun = unpack_inverse_psf_specweighted_ayut(imgfilter.filters, cspec=cspec)
+    vmap = DetectorVignetting(iifun, app)
+    for xl, yl, xo, yo in zip(x1, y1, x2, y2):
+        vmap.add_pix(xl, yl, xo, yo)
 
-
+    """
     if app is None:
         psfmask = None
     else:
@@ -99,13 +145,15 @@ def make_vignetting_for_urdn(urdn, imgfilter, cspec=None, app=None):
         dx, dy = xl - x0, yl - y0
         sl = img[(xl - 1)*9: (xl - 1)*9 + 121, (yl - 1)*9: (yl - 1)*9 + 121]
         lipsf = np.sum(unpack_inverse_psf_ayut(xo, yo)*w[:, np.newaxis, np.newaxis], axis=0)
+        #print(lipsf.shape, x0, y0, xl, yl, sl.shape)
         if not app is None:
             lipsf[psfmask] = 0.
         sl += lipsf
+    """
 
-    dx = (np.arange(img.shape[0]) - (img.shape[0] - 1.)/2.)/9.*DL
-    imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
-    return RegularGridInterpolator((dx, dx), img/imgmax, bounds_error=False, fill_value=0.) #TODO for spefici masks, pixel at optical axis position can be switched off, broking normalization
+    dx = (np.arange(vmap.img.shape[0]) - (vmap.img.shape[0] - 1.)/2.)/9.*DL
+    #imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
+    return RegularGridInterpolator((dx, dx), vmap.img, bounds_error=False, fill_value=0.) #TODO for spefici masks, pixel at optical axis position can be switched off, broking normalization
 
 
 def get_blank_vignetting_interpolation_func():

@@ -2,15 +2,16 @@ from .telescope import URDNS
 import numpy as np
 import tqdm
 from .caldb import get_boresight_by_device, get_optical_axis_offset_by_device, get_illumination_mask, get_shadowmask_by_urd
-from ._det_spatial import offset_to_vec, raw_xy_to_vec, rawxy_to_qcorr
+from ._det_spatial import offset_to_vec, raw_xy_to_vec, rawxy_to_qcorr, urddata_to_offset, urd_to_vec, raw_xy_to_offset
 from .orientation import get_photons_vectors, make_align_quat
-from .filters import Intervals
+from .filters import Intervals, IndependentFilters
 from .time import emptyGTI, GTI
 from .aux import DistributedObj
 from .vector import vec_to_pol, pol_to_vec, normalize
+from .vignetting import DetectorVignetting, DEFAULVIGNIFUN
 from .telescope import URDNS
-from .psf import get_ipsf_interpolation_func, unpack_inverse_psf_specweighted_ayut, rawxy_to_opaxoffset, unpack_inverse_psf_with_weights, get_pix_overall_countrate_constbkg_ayut
-from .mosaic2 import SkyImage
+from .psf import get_ipsf_interpolation_func, unpack_inverse_psf_specweighted_ayut, rawxy_to_opaxoffset, unpack_inverse_psf_with_weights, get_pix_overall_countrate_constbkg_ayut, get_urddata_opaxofset_map
+from .mosaic2 import SkyImage, WCSSky
 from .atthist import make_small_steps_quats, make_wcs_steps_quats, hist_orientation_for_attdata
 from copy import copy
 from math import pi, sin, cos
@@ -71,7 +72,7 @@ class AzimuthMaskSet(object):
         for each ring a set of azimuthal angles intervals defined [[begining, end], [beginning, end], ....]
         if source vector is within this interval, a possitive mask is applied to it
     """
-    def __init__(self, srcoaxofflb, evtsrclb, srcevtbounds):
+    def __init__(self, srcoaxofflb, evtsrclb, srcevtbounds, axvec=None):
         """
         srcoaxofflb -- lower boundary for optical axis - source offset
         evtsrclb -- lower boundary for soruce -- events vectors offset
@@ -79,38 +80,429 @@ class AzimuthMaskSet(object):
         """
         a1 = -np.cos(srcoaxofflb)
         self.srcaxgrid = a1
+        self.offit = Intervals(np.tile(srcoaxofflb, (2, 1)).T + [0., np.median(np.diff(srcoaxofflb))*1.0001,])
         self.evtsrgrid = -np.cos(evtsrclb)
         grid = np.repeat(np.arange(self.srcaxgrid.size)*self.evtsrgrid.size, [len(c)*2 for c in srcevtbounds])
         bounds = np.concatenate(srcevtbounds, axis=0)
         self.grid = grid + np.searchsorted(self.evtsrgrid+1e-10, np.repeat(-np.cos(bounds[:, 0]), 2)) + bounds[:, 1:].ravel()/2./pi
+        self.axvec = axvec
 
-    def check_vecs(self, srcvec, axvec, evtvec):
-        """
-        srcvec - (1, 3) - single vector of the source
-        axvec - attributed to fk5 optical axis vector (N, 3)
-        evtsvec - atributed to the each optical axis direction set of events vectors (N, M, 3)
-        """
+
+    def get_offsetgrid_gti(self, att, srcvec, axvec=None):
+        if axvec is None:
+            if self.axvec is None:
+                raise ValueError("optical axis is not set")
+            axvec = self.axvec
+
+        g = GTI([])
+        for s, e in self.offit.arr:
+            g = g | (~att.circ_gti(srcvec, s*180/pi*3600., axvec) & att.circ_gti(srcvec, e*180/pi*3600., axvec))
+        return g
+
+
+    def get_srcoffset_mask(self, srcvec, axvec=None):
+        if axvec is None:
+            if self.axvec is None:
+                raise ValueError("optical axis is not set")
+            axvec = self.axvec
+
         a1 = -np.sum(srcvec*axvec, axis=1)
-        p1 = normalize(axvec + a1[:, np.newaxis]*srcvec[np.newaxis, :])
+        mask = Intervals(-np.cos(self.offit.arr)).mask_external(a1)
+        return mask
+
+
+    def check_vecs(self, srcvec, evtvec, axvec=None):
+        """
+        axvec - attributed to optical axis vector (1, 3)
+        srcvec - (N, 3) - vector of the source rotated back to the telescope coordinate system
+        evtsvec - atributed to the each source direction set of events vectors (N, M, 3)
+        """
+        if axvec is None:
+            if self.axvec is None:
+                raise ValueError("optical axis is not set")
+            axvec = self.axvec
+
+        # print(srcvec.shape, evtvec.shape)
+
+        a1 = -np.sum(srcvec*axvec, axis=-1)
+        mask = Intervals(-np.cos(self.offit.arr)).mask_external(a1)
+
+        a1 = a1[mask]
+        srcvec = srcvec[mask]
+        evtvec = evtvec[mask]
+
+        p1 = normalize(axvec + a1[:, np.newaxis]*srcvec)
         idx1 = (np.searchsorted(self.srcaxgrid, -np.sum(axvec*srcvec, axis=1)) - 1)*self.evtsrgrid.size
         p2 = np.cross(srcvec, p1) #, axis=1)
 
-        a2 = np.sum(srcvec*evtvec, axis=-1)
+        a2 = np.sum(srcvec*evtvec, axis=-1) if evtvec.ndim == 2 else np.sum(srcvec[:, np.newaxis, :]*evtvec, axis=-1)
         idx2 = np.searchsorted(self.evtsrgrid, -a2) - 1
         if evtvec.ndim == 2:
             angle = np.arctan2(np.sum(p2*evtvec, axis=1), np.sum(p1*evtvec, axis=1))
         else:
             angle = np.arctan2(np.sum(p2[:, np.newaxis, :]*evtvec, axis=-1), np.sum(p1[:, np.newaxis, :]*evtvec, axis=-1))
 
-        vals = idx1 + idx2 + (angle + pi)/2./pi if evtvec.ndim == 2 else idx1[:, np.newaxis] + idx2 + (angle + pi)/2./pi
-        return np.searchsorted(self.grid, vals)%2 == 1
+        if evtvec.ndim == 2:
+            vals = idx1 + idx2 + (angle + pi)/2./pi
+            mask[mask] = np.searchsorted(self.grid, vals)%2 == 1
+        else:
+            vals = idx1[:, np.newaxis] + idx2 + (angle + pi)/2./pi
+            mlong = np.tile(mask, (evtvec.shape[1], 1)).T
+            mlong[mask] = np.searchsorted(self.grid, vals)%2 == 1
+            mask = mlong
+        return mask
+
+class StrayLight(object):
+    FPinhole = 3e3
+    def __init__(self, patches):
+        self.patches = np.array(patches)
+        #print(self.patches.shape)
+        #print(np.concatenate(self.patches, axis=1).T.shape)
+        """
+        self.xb = self.patches[:, 0, :]
+        self.xb = self.xb[np.argsort[self.xb[:, 0]]]
+        self.xbidx = np.argsort(self.xb[:, 1])
+
+        self.yb = self.patches[:, 1, :]
+        self.yb = self.yb[np.argsort(self.yb[:, 0])]
+        self.ybidx = np.argsort(self.xb[:, 1])
+        """
+        if self.patches.size > 0:
+            vecs = offset_to_vec(*np.concatenate(self.patches, axis=1))
+            offangles = np.arccos(vecs[0])
+            self.amin, self.amax = offangles.min(), offangles.max()
+        else:
+            self.amin, self.amax = 0., 0.
+
+    def check_points(self, scvec, x, y):
+        if self.patches.size > 0:
+            mask = (x[:, np.newaxis] > self.patches[np.newaxis, :, 0, 0]) & (x[:, np.newaxis] < self.patches[np.newaxis, :, 0, 1])
+            mi = np.any(mask, axis=1)
+            mask[mi,:] = mask[mi,:] & ((y[mi, np.newaxis] > self.patches[np.newaxis, :, 1, 0]) & (y[mi, np.newaxis] < self.patches[np.newaxis, :, 1, 1]))
+            return np.any(mask, axis=1)
+        else:
+            return np.zeros(scvec.shape[0], bool)
+        #print(self.patches)
+        """
+        for (xl, xh), (yl, yh) in self.patches:
+            xo, yo = x - scvec[:, 1]*self.FPinhole/scvec[:, 0], y + scvec[:, 2]*self.FPinhole/scvec[:, 0]
+            mask = np.logical_or(mask, np.all([xo > xl, xo < xh, yo > yl, yo < yh], axis=0))
+
+        return mask
+        """
+
+    def get_offsetgrid_gti(self, attdata, srcvec):
+        g = GTI([])
+        return (attdata.circ_gti(srcvec, self.amax*180./pi*3600.) & ~attdata.circ_gti(srcvec, self.amin*180/pi*3600.))
+
+
+#==================================================================================================================
+#a set of specific method for interpolation over sky
+
+def set_global_state(sobj, *args, **kwargs):
+    for name, val in kwargs.items():
+        sobj.__setattr__(name, val)
+
+def set_detmap(sobj, filters):
+    sobj.__setattr__("detmap", {urdn: DetectorVignetting(unpack_inverse_psf_specweighted_ayut(f.filters)) for urdn, f in filters.items()})
+
+def make_s_interpolation(sobj, qval, dtn, urdn, mask):
+    sobj.detmap[urdn]._clean_img()
+    sobj.detmap[urdn].produce_vignentting(sobj.urdpixcoord[urdn][0][mask], sobj.urdpixcoord[urdn][1][mask], sobj.ijt[urdn][0][mask], sobj.ijt[urdn][1][mask])
+    sobj.vmap.values = sobj.detmap[urdn].img
+    sobj.interpolate_vmap_for_qval(qval, dtn)
+
+#==================================================================================================================
+
+
+class IlluminationSources(DistributedObj):
+
+    def __init__(self, raset, decset, ifiltsset, slset, mpnum=4, barrier=None):
+        """
+        ifilts is expect to be a set of illumination filters, attributed to each particular telescope had
+        """
+        self.srcsvec = pol_to_vec(*np.deg2rad([raset, decset]))
+        self.srcmask = np.ones(self.srcsvec.shape[0], bool)
+        self.ifiltsset = ifiltsset
+        self.slset = slset
+        self.glist = None
+        super().__init__(mpnum, barrier, raset=raset, decset=decset, ifiltsset=ifiltsset, slset=slset) #=rmap, mask=mask, **kwargs)
+
+
+    def get_illumination_mask(self, attdata, urddata):
+        ifilt = self.ifiltsset.get(urddata.urdn)
+        sfilt = self.slset.get(urddata.urdn)
+
+        #mask = g.mask_external(urddata["TIME"])
+        u, iu = np.unique(urddata[["RAW_X", "RAW_Y"]], return_inverse=True)
+        vecs = urd_to_vec(u)[iu]
+        #vecs = urd_to_vec(urddata) #get_photons_vectors(urddata, urddata.urdn, attdata)
+        mask = np.zeros(vecs.shape[0], bool)
+        qloc = attdata.for_urdn(urddata.urdn)(urddata["TIME"])
+        x, y = urddata_to_offset(urddata)
+
+
+        for srcvec in self.srcsvec:
+            srcvecs = qloc.apply(srcvec, inverse=True)
+            mask[~mask] = ifilt.check_vecs(srcvecs[~mask], vecs[~mask])
+            mask[~mask] = sfilt.check_points(srcvecs[~mask], x[~mask], y[~mask])
+        return mask
+
+    @DistributedObj.for_each_argument
+    def get_snapshot_mask(self, urdn, q, srcmask=None):
+        if srcmask is None:
+            srcmask = self.srcmask
+        mask = np.zeros(self.urdpixvecs[urdn].shape[0], bool)
+        xo, yo = self.urdpixcoord[urdn]
+        i, j = self.ijt[urdn]
+        for srcs, m in zip(self.srcsvec, srcmask):
+            if not m:
+                continue
+            vloc = q.apply(srcs, inverse=True)
+            vloc = np.lib.stride_tricks.as_strided(vloc, shape=self.urdpixvecs[urdn].shape, strides=(0, vloc.strides[0]))
+            mask[~mask] = self.ifiltsset[urdn].check_vecs(vloc[:(~mask).sum()], self.urdpixvecs[urdn][~mask])
+            mask[~mask] = self.slset[urdn].check_points(vloc[:(~mask).sum()], xo[~mask], yo[~mask])
+        return mask if np.any(mask) else None
+
+
+    def get_overall_gti(self, attdata):
+        glist = [] #GTI([]) for _ in self.srcvecs]
+        for srcvec in self.srcsvec:
+            g = GTI([])
+            for urdn in self.ifiltsset:
+                print("check vec and urdn", srcvec, urdn, g.exposure)
+                g = g | self.ifiltsset.get(urdn).get_offsetgrid_gti(attdata.for_urdn(urdn), srcvec)
+                if urdn in self.slset:
+                    g = g | self.slset[urdn].get_offsetgrid_gti(attdata.for_urdn(urdn), srcvec)
+            glist.append(g)
+        return glist
+
+
+    def get_pixmap_tasks(self, tc, dt, qval, urdnsfilters, urdweights, pixresponse):
+        """
+        produces a set of tasks, which can be consumed by the mosaic task
+        """
+        srcsvecs = {}
+        qlist = {}
+        for urdn in urdnsfilters:
+            qloc = qval*get_boresight_by_device(urdn)
+            qlist[urdn] = qloc
+            srcsvecs[urdn] = [qloc.apply(v, inverse=True) for v in self.srcsvec]
+
+        x, y = np.mgrid[0:48:1, 0:48:1]
+        ijt = {}
+        shmasks = {}
+        opaxofmap = {}
+        detidxlist = {}
+        for urdn in urdnsfilters:
+            shmasks[urdn] = urdnsfilters[urdn].meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
+            imap, jmap = get_urddata_opaxofset_map(urdn)
+            opaxofmap[urdn] = (imap, jmap)
+            detidxlist[urdn] = x[shmasks[urdn]], y[shmasks[urdn]]
+            ijt[urdn] = np.array([imap[detidxlist[urdn][0]], jmap[detidxlist[urdn][1]]]).T
+
+        tijt = np.concatenate([v for v in ijt.values()], axis=0)
+        iju = np.unique(tijt, axis=0)
+        dj = iju[:, 1].max() - iju[:, 0].min()
+        for urdn in urdnsfilters:
+            ijt[urdn] = ijt[urdn][:, 0]*dj + ijt[urdn][:, 1]
+
+        def prepeare_pix_task(ij):
+            i, j = ij
+            #print("ij", i, j, tc.size, dt.size, len(qval))
+            qc = []
+            dtt = []
+
+            mask = np.zeros(tc.size, bool)
+            for urdn in urdnsfilters:
+                idx = np.searchsorted(ijt[urdn], i*dj + j)
+                if idx < ijt[urdn].size and ijt[urdn][idx] == i*dj + j:
+                    evtvec = np.repeat(raw_xy_to_vec(detidxlist[urdn][0][idx:idx+1], detidxlist[urdn][1][idx:idx+1]), tc.size, axis=0)
+                    xo, yo = np.repeat(raw_xy_to_offset(detidxlist[urdn][0][idx:idx+1], detidxlist[urdn][1][idx:idx+1]), tc.size, axis=1)
+                    for srcs in srcsvecs[urdn]:
+                        mask[~mask] = self.ifiltsset[urdn].check_vecs(srcs[~mask], evtvec[~mask])
+                        mask[~mask] = self.slset[urdn].check_points(srcs[~mask], xo[~mask], yo[~mask])
+                    #print(mask.size, mask.sum())
+                    if np.any(mask):
+                        qc.append((qlist[urdn][mask]*rawxy_to_qcorr(detidxlist[urdn][0][idx], detidxlist[urdn][1][idx])).as_quat())
+                        dtt.append(dt[mask]*urdweights.get(urdn, 1/7.))
+
+            if len(dtt) > 0:
+                dtt = np.concatenate(dtt)
+                qc = Rotation(np.concatenate(qc))
+                return qc, dtt, pixresponse(i, j)
+            else:
+                return [], np.empty(0, float), None
+
+        pool = ThreadPool(4)
+        return pool.imap_unordered(prepeare_pix_task, iju), iju.shape[0]
+
+
+    def prepare_snapshot_tasks(self, tc, dt, qval, urdnsfilters, urdweights, cspec=None):
+
+        iifuns = {urdn: unpack_inverse_psf_specweighted_ayut(f.filters) for urdn, f in urdnsfilters.items()}
+        vmap = {urdn: DetectorVignetting(iifuns[urdn]) for urdn in iifuns}
+        x, y = np.mgrid[0:48:1,0:48:1]
+
+        ijt = {}
+        urdpixmask = {}
+        urdpixcoord = {}
+        urdpixvecs = {}
+        qboresight = {}
+
+        for urdn in urdnsfilters:
+            urdpixmask[urdn] = urdnsfilters[urdn].meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
+            imap, jmap = get_urddata_opaxofset_map(urdn)
+            urdpixcoord[urdn] = x[urdpixmask[urdn]], y[urdpixmask[urdn]]
+            urdpixvecs[urdn] = raw_xy_to_vec(urdpixcoord[urdn][0], urdpixcoord[urdn][1])
+            ijt[urdn] = imap[urdpixcoord[urdn][0]], jmap[urdpixcoord[urdn][1]]
+            qboresight[urdn] = get_boresight_by_device(urdn)
+
+        """
+        produces a set of tasks, which can be consumed by the mosaic task
+        """
+        #for q, dtn in zip(qval, dt):
+        def prepare_slice_vmap(invars): #(q, dtn, urdn)):
+            q, dtn, urdn = invars
+            qloc = q*qboresight[urdn]
+            mask = np.zeros(urdpixvecs[urdn].shape[0], bool)
+            xo, yo = urdpixcoord[urdn]
+            i, j = ijt[urdn]
+            for srcs in self.srcsvec:
+                vloc = qloc.apply(srcs, inverse=True)
+                vloc = np.lib.stride_tricks.as_strided(vloc, shape=urdpixvecs[urdn].shape, strides=(0, vloc.strides[0]))
+                mask[~mask] = self.ifiltsset[urdn].check_vecs(vloc[:(~mask).sum()], urdpixvecs[urdn][~mask])
+                mask[~mask] = self.slset[urdn].check_points(vloc[:(~mask).sum()], xo[~mask], yo[~mask])
+            if np.any(mask):
+                vmap[urdn]._clean_img()
+                img = vmap[urdn].produce_vignentting(xo[mask], yo[mask], i[mask], j[mask])
+                res = ([q,], [dtn*urdweights[urdn],], img)
+                res = ([], [], None)
+            else:
+                res = ([], [], None)
+            return res
+
+        tp = ThreadPool(5)
+        return tp.imap_unordered(prepare_slice_vmap, ((q, dtn, urdn) for urdn in urdnsfilters for q, dtn in zip(qval, dt)))
+
+
+    def get_illumination_expmap_snaps(self, locwcs, attdata, imgfilters, dtcorr={28: lambda x: np.full(x.size, 1.)}, urdweights={}, mpnum=20):
+        tc, qval, dtn, gloc =  make_wcs_steps_quats(locwcs, attdata, timecorrection=dtcorr[28])
+
+        """
+        iifuns = {urdn: unpack_inverse_psf_specweighted_ayut(f.filters) for urdn, f in imgfilters.items()}
+        vmap = {urdn: DetectorVignetting(iifuns[urdn]) for urdn in iifuns}
+        """
+        x, y = np.mgrid[0:48:1,0:48:1]
+
+        ijt = {}
+        urdpixmask = {}
+        urdpixcoord = {}
+        urdpixvecs = {}
+        qboresight = {}
+
+        for urdn in imgfilters:
+            urdpixmask[urdn] = imgfilters[urdn].meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
+            imap, jmap = get_urddata_opaxofset_map(urdn)
+            urdpixcoord[urdn] = x[urdpixmask[urdn]], y[urdpixmask[urdn]]
+            urdpixvecs[urdn] = raw_xy_to_vec(urdpixcoord[urdn][0], urdpixcoord[urdn][1])
+            ijt[urdn] = imap[urdpixcoord[urdn][0]], jmap[urdpixcoord[urdn][1]]
+            qboresight[urdn] = get_boresight_by_device(urdn)
+
+        sky = WCSSky(locwcs, DEFAULVIGNIFUN, mpnum=mpnum)
+
+        sky.run_static_method(set_global_state, [], ijt=ijt, qboresight=qboresight, urdpixcoord=urdpixcoord, urdpixvecs=urdpixvecs)
+        self.run_static_method(set_global_state, [], ijt=ijt, urdpixvecs=urdpixvecs, urdpixcoord=urdpixcoord)
+
+        glist = self.get_overall_gti(attdata)
+        self.run_static_method(set_global_state, [], glist=glist)
+
+
+        sky.run_static_method(set_detmap, [], filters=imgfilters)
+
+
+        def makemask(urdn, qloc):
+            mask = np.zeros(urdpixvecs[urdn].shape[0], bool)
+            xo, yo = urdpixcoord[urdn]
+            i, j = ijt[urdn]
+            for srcs in self.srcsvec:
+                vloc = qloc.apply(srcs, inverse=True)
+                vloc = np.lib.stride_tricks.as_strided(vloc, shape=urdpixvecs[urdn].shape, strides=(0, vloc.strides[0]))
+                mask[~mask] = self.ifiltsset[urdn].check_vecs(vloc[:(~mask).sum()], urdpixvecs[urdn][~mask])
+                mask[~mask] = self.slset[urdn].check_points(vloc[:(~mask).sum()], xo[~mask], yo[~mask])
+            return mask
+
+
+        def maskiter():
+            csize = self._pool._processes
+            for urdn in imgfilters:
+                print("processing urdn:", urdn)
+                for q, dt, tcl in [(qval[i*csize:min((i+1)*csize, dtn.size)]*qboresight[urdn], dtn[i*csize:min((i+1)*csize, dtn.size)]*urdweights.get(urdn, 1/7.), tc[i*csize:min((i+1)*csize, dtn.size)]) for i in range(dtn.size//self._pool._processes + 1)]:
+                    srcmask = np.array([g.mask_external(tcl) for g in glist]).T
+                    masks = self.get_snapshot_mask((urdn, ql, msrc) for ql, msrc in zip(q, srcmask))
+                    for mask, ql, dtl in zip(masks, q, dt):
+                        if not mask is None:
+                            yield ql, dtl, urdn, mask
+                """
+                for q, dt in zip(qval*qboresight[urdn], dtn*urdweights.get(urdn, 1/7.)):
+                    mask = makemask(urdn, q)
+                    if np.any(mask):
+                        yield q, dt, urdn, mask
+                """
+
+        sky.run_static_method(make_s_interpolation, maskiter(), sync=False)
+        sky.accumulate_img()
+        return np.copy(sky.img)
+
+
+
+
+    def get_illumination_expmap(self, locwcs, attdata, imgfilters, dtcorr={28: lambda x: np.full(x.size, 1.)}, urdweights={}, mpnum=20, kind="fft_convolve", subres=3):
+        gti = reduce(lambda a, b: a | b, [f.filters['TIME'] for f in imgfilters.values()])
+        res = 0.
+        if kind == "fft_convolve":
+            pointing_gti = attdata.get_axis_movement_speed_gti(lambda x: x < 4.*pi/180./3600.)
+            gti = gti & ~pointing_gti
+            print("pointings", pointing_gti.exposure, gti.exposure)
+            if pointing_gti.exposure > 0.:
+                res = self.get_illumination_expmap(locwcs, attdata, {urdn: f.filters & IndependentFilters({"TIME": pointing_gti}) for urdn, f in imgfilters.items()}, dtcorr, urdweights, mpnum, kind="direct")
+
+        tc, qval, dtn, gloc =  make_wcs_steps_quats(locwcs, attdata, gti = gti, timecorrection=dtcorr[28])
+        iifun = get_ipsf_interpolation_func()
+        iicore = unpack_inverse_psf_specweighted_ayut(imgfilters[28])
+        if kind=="fft_convolve":
+            data, total = self.get_pixmap_tasks(tc, dtn, qval, imgfilters, urdweights, iicore)
+            if subres > 1:
+                subres = subres//2*2 + 1 # make subre odd
+                lwcs = WCS(locwcs.to_header())
+                lwcs.wcs.cdelt = locwcs.wcs.cdelt/subres
+                lwcs.wcs.crpix = [locwcs.wcs.crpix[0]*subres + subres//2, locwcs.wcs.crpix[1]*subres + subres//2]
+                lwcs = WCS(lwcs.to_header())
+                shape = [(0, int(locwcs.wcs.crpix[1]*2 + 1)*subres), (0, int(locwcs.wcs.crpix[0]*2 + 1)*subres)]
+                sky = WCSSky(lwcs, iifun, shape=shape, mpnum=mpnum)
+            else:
+                sky = WCSSky(locwcs, iifun, mpnum=mpnum)
+            sky.fft_convolve_multiple(data, total=total, subres=subres)
+            sky.accumulate_img()
+            if subres > 1:
+                subres = subres//2*2 + 1 # make subre odd
+                res = res + sky.img.reshape((sky.img.shape[0]//subres, subres, sky.img.shape[1]//subres, subres)).sum(axis=(1, 3)) #np.lib.stride_tricks.as_strided(sky.img, shape=[sky.img.shape[0]//subres, sky.img.shape[1]//subres, subres, subres], strides = [sky.img.strides[0], sky.img.strides[1], sky.img.strides[0], sky.img.strides[1]])
+            else:
+                res = res + np.copy(sky.img)
+        else:
+            sky = WCSSky(locwcs, DEFAULVIGNIFUN, mpnum=mpnum)
+            data = self.prepare_snapshot_tasks(tc, dtn, qval, imgfilters, urdweights)
+            sky.rmap_convolve_multicore(data, total=tc.size)
+            res = res + np.copy(sky.img)
+        return res #np.copy(sky.img)
+
 
 
 class IlluminationSource(object):
     def __init__(self, ra, dec):
         self.sourcevector = pol_to_vec(*np.deg2rad([ra, dec]))
 
-    def get_vectors_in_illumination_mask(self, quats, pvecs, opax, mpnum=1):
+    def get_vectors_in_illumination_mask(self, quats, pvecs, opax, amask):
         opaxvecs = quats.apply(opax)
 
         #qalign = make_align_quat(np.tile(self.sourcevector, (opaxvecs.shape[0], 1)), opaxvecs)
@@ -334,7 +726,7 @@ class DataDistributer(object):
 
 
 
-class IlluminationSources(object):
+class IlluminationSources1(object):
     def __init__(self, ra, dec, mpnum=MPNUM, clustered=False):
         wcs, offsets, imask = get_illumination_mask()
         self.wcs = wcs

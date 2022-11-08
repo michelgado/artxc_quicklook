@@ -383,10 +383,10 @@ def estimate_optimal_wcs_grid(wcs):
     print("ration snum bnum", ratio, snum, bnum)
     return shape, snum, bnum
 
-def split_by_wcs(wcs, snum=None, shape=None):
+def split_by_wcs(wcs, n=None, shape=None):
     if shape is None:
         shape = [(0, int(wcs.wcs.crpix[1]*2 + 1)), (0, int(wcs.wcs.crpix[0]*2 + 1))]
-    if snum is None:
+    if n is None:
         area = np.prod(np.diff(shape, axis=1).ravel()*wcs.wcs.cdelt)*(pi/180.)**2.
         print("area", area)
         vseg = 4.*(pi/180.)**2.  #characteristic vignetting function size

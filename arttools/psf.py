@@ -18,6 +18,12 @@ def urddata_to_opaxoffset(urddata, urdn):
     x, y = get_optical_axis_offset_by_device(urdn)
     return np.round(urddata["RAW_X"] + 0.5 - x).astype(np.int), np.round(urddata["RAW_Y"] + 0.5 - y).astype(np.int)
 
+def get_urddata_opaxofset_map(urdn):
+    x, y = get_optical_axis_offset_by_device(urdn)
+    X, Y = np.arange(48), np.arange(48)
+    return np.round(X + 0.5 - x).astype(np.int), np.round(Y + 0.5 - y).astype(np.int)
+
+
 def opaxoffset_to_pix(x, y, urdn=None):
     x0, y0 = (23, 23) if urdn is None else get_optical_axis_offset_by_device(urdn)
     return np.round(x0 - 0.5 + x).astype(np.int), np.round(y - 0.5 + y0).astype(np.int)
@@ -147,7 +153,7 @@ def get_ipsf_interpolation_func(app=6.*60):
     return RegularGridInterpolator((xo, yo), np.empty((xo.size, yo.size), np.double), bounds_error=False, fill_value=0.)
 
 
-def select_psf_grups(i, j, energy=None):
+def select_psf_groups(i, j, energy=None):
     if energy is None:
         ijpairs, iidx, counts = np.unique(np.array([i, j]), axis=1, return_counts=True, return_inverse=True)
     else:

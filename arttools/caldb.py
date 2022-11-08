@@ -98,9 +98,17 @@ def mksomething(urddata, hkdata, attdata, gti):
 
 def get_illumination_mask():
     """TODO: put link in the index file"""
-    mfile = fits.open(os.path.join(ARTCALDBPATH, "illum_masks6.fits.gz"))
+    #mfile = fits.open(os.path.join(ARTCALDBPATH, "illum_masks6.fits.gz"))
+    mfile = fits.open(os.path.join(ARTCALDBPATH, "imask7.fits.gz"))
     wcstempalte = WCS(mfile[0].header)
-    return wcstempalte, np.copy(mfile[1].data), np.copy(mfile[2].data)
+    return wcstempalte, np.copy(mfile[1].data), np.copy(mfile[2].data).astype(bool)
+
+def get_azimask_for_urdn(urdn):
+    mfile = fits.open(os.path.join(ARTCALDBPATH, "azimuthal_imask7.fits.gz"))
+    sbounds = mfile[1].data["OPAXOFFL"]*pi/180./3600.
+    ebounds = mfile["EVTOFGRID"].data["SRCEVTOF"]
+    ctot = [np.array([hdu.data["SRCOFFL"], hdu.data["AZSTART"], hdu.data["AZSTOP"]]).T for hdu in mfile[3:]]
+    return sbounds, ebounds, ctot
 
 
 def get_caldata(ctype, dev, gti=None):

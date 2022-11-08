@@ -4,12 +4,13 @@ from scipy.signal import convolve
 from scipy.spatial.transform import Rotation
 from multiprocessing import Pool, Process, Queue, RawArray, cpu_count, Barrier, current_process
 from threading import Thread
+from astropy.wcs import WCS
 from multiprocessing.pool import ThreadPool
 import tqdm
 from .vector import vec_to_pol, pol_to_vec
 from .orientation import OPAX, ra_dec_roll_to_quat
 from .planwcs import get_wcs_roll_for_qval, make_quat_for_wcs, wcs_roll, wcs_qoffset
-from ._det_spatial import offset_to_vec, vec_to_offset, vec_to_offset_pairs
+from ._det_spatial import offset_to_vec, vec_to_offset, vec_to_offset_pairs, F, DL, rawxy_to_qcorr
 from .sphere import ConvexHullonSphere, PRIME_NUMBERS
 from .aux import DistributedObj
 from math import sin, cos, sqrt, pi, log, asin, acos
@@ -66,7 +67,7 @@ class SkyInterpolator(DistributedObj):
         expect to receive four vectors at the corners of interpolation map
         """
         self.corners = ConvexHullonSphere(vals)
-        self.corners = self.corners.expand(2./3660.*pi/180.)
+        #self.corners = self.corners.expand(2./3660.*pi/180.)
 
     """
     stores an image of the sky and allows to put specific core on the sky coordinates
@@ -154,8 +155,22 @@ class SkyInterpolator(DistributedObj):
         radec = vec_to_pol(qval.apply(self.corners.vertices))
         return self.locwcs.all_world2pix(np.rad2deg(radec).T, 0).T.astype(np.int)
 
+    def update_corners(self, sval=1e-9):
+        xd = self.vmap.values.sum(axis=1)
+        yd = self.vmap.values.sum(axis=0)
+        xil, xih = max(np.searchsorted(xd, sval) - 1, 0), min(self.vmap.grid[0].size - np.searchsorted(xd[::-1], sval), self.vmap.grid[0].size - 1)
+        xc = self.vmap.grid[0][[xil, xih, xih, xil]]
+        yil, yih = max(np.searchsorted(yd, sval) - 1, 0), min(self.vmap.grid[1].size - np.searchsorted(yd[::-1], sval), self.vmap.grid[1].size - 1)
+        yc = self.vmap.grid[1][[yil, yil, yih, yih]]
+
+        #self._set_corners(offset_to_vec(xc, yc))
+        #instead of running __init__ for convex hull each time, just monkey patching vertices, since we now they are convex and ordered anyway, not clean, but fast
+        self.corners.vertices = offset_to_vec(xc, yc)
+
     @DistributedObj.for_each_argument
-    def interpolate_vmap_for_qval(self, qval, scale):
+    def interpolate_vmap_for_qval(self, qval, scale, update_corners=False):
+        if update_corners:
+            self.update_corners()
         img, rmap, vecs = self._get_cutout(qval)
         if vecs.size == 0:
             return False
@@ -192,6 +207,17 @@ class SkyInterpolator(DistributedObj):
                 for _ in tqdm.tqdm(self.interpolate_vmap_for_qvals(tasks, **kwargs), total=total):
                     continue
         self.accumulate_img()
+
+
+def cut_empty_img_bounds(img, minval=1e-9, symmetric=True):
+    xmask = img.sum(axis=0) > minval
+    if symmetric:
+        xmask = xmask | xmask[::-1]
+        img = img[:, xmask]
+    ymask = img.sum(axis=1) > minval
+    if symmetric:
+        ymask = ymask | ymask[::-1]
+    return img[ymask]
 
 
 
@@ -231,8 +257,11 @@ class WCSSky(SkyInterpolator):
     # use convolution to assess interpolation result
     #======================================================================================================================================
 
-    def cores_for_rolls(self, rolls):
+    def cores_for_rolls(self, rolls, subgrid=1):
         ra, dec = self.locwcs.all_pix2world([[self.locwcs.wcs.crpix[0], self.locwcs.wcs.crpix[1]],], 0)[0]
+        subsize = np.tan(self.locwcs.wcs.cdelt[0]*180/pi)*F/DL/2.
+        xsub, ysub = np.meshgrid(np.linspace(-subsize, subsize, subgrid + 2)[1:-1], np.linspace(-subsize, subsize, subgrid + 2)[1:-1])
+        qsub = rawxy_to_qcorr(xsub.ravel() + 23.5, ysub.ravel() + 23.5)
         q0 = ra_dec_roll_to_quat(*np.array([ra, dec, 0.]).reshape((3, 1)))[0]
 
         lroll = rolls - np.repeat(wcs_roll(self.locwcs, Rotation(q0.as_quat().reshape((-1, 4)))), np.asarray(rolls).size)
@@ -243,24 +272,32 @@ class WCSSky(SkyInterpolator):
         ysize = int(np.max(np.abs(y - self.locwcs.wcs.crpix[0])) + 0.5)
         shape = np.asarray(self.locwcs.wcs.crpix, int)[::-1].reshape((2, -1)) + [[-xsize, xsize +1], [-ysize, ysize + 1]]
         lsky = self.__class__(self.locwcs, shape=shape, vmap=self.vmap, mpnum=0, barrier=False)
-        for qloc in q0:
-            lsky.clean_image()
-            lsky.interpolate_vmap_for_qval(qloc, 1.)
+
+        for q in qsub:
+            lsky.interpolate_vmap_for_qval(q0[0]*q, 1./len(qsub))
+
+        for qloc in q0[1:]:
             yield np.copy(lsky.img)
+            lsky.clean_image()
+            for q in qsub:
+                lsky.interpolate_vmap_for_qval(qloc*q, 1./len(qsub))
+        yield np.copy(lsky.img)
 
     def get_wcs(self):
         return self.wcs
 
     @DistributedObj.for_each_argument
     def convolve_with_core(self, qvals, scales, core, cache=False):
-        tmpimg = np.zeros((self.img.shape), float)
+        #tmpimg = np.zeros((self.img.shape), float)
         radec = np.rad2deg(vec_to_pol(qvals.apply([1, 0, 0])))
-        xy = (self.locwcs.all_world2pix(radec.T, 0).T[:, np.newaxis, :] + self.subres[:, :, np.newaxis] + 0.5).astype(int).reshape((2, -1))
+        #xy = (self.locwcs.all_world2pix(radec.T, 0).T[:, np.newaxis, :] + self.subres[:, :, np.newaxis] + 0.5).astype(int).reshape((2, -1))
+        xy = (self.locwcs.all_world2pix(radec.T, 0).T[:, np.newaxis, :] + 0.5).astype(int).reshape((2, -1))
         il, ih, jl, jh = xy[1].min(), xy[1].max(), xy[0].min(), xy[0].max()
         il, ih = max(il - core.shape[0]//2, 0), min(ih + core.shape[0]//2 + 1, self.img.shape[0])
         jl, jh = max(jl - core.shape[1]//2, 0), min(jh + core.shape[1]//2 + 1, self.img.shape[1])
         tmpimg = np.zeros((ih - il, jh - jl), float)
-        np.add.at(tmpimg, (xy[1] - il, xy[0] - jl), np.tile(scales/self.subres.size*2, self.subres.size//2))
+        #np.add.at(tmpimg, (xy[1] - il, xy[0] - jl), np.tile(scales/self.subres.size*2, self.subres.size//2))
+        np.add.at(tmpimg, (xy[1] - il, xy[0] - jl), scales)
         self.img[il:ih, jl:jh] += convolve(tmpimg, core, mode="same")
 
     def fft_convolve(self, qvals, scales):
@@ -271,21 +308,40 @@ class WCSSky(SkyInterpolator):
         list(self.convolve_with_core(((qvals[k == uiidx], scales[k == uiidx], core) for k, core in enumerate(cores))))
         self.accumulate_img()
 
-    def fft_convolve_multiple(self, data, total=np.inf):
+    def fft_convolve_multiple(self, data, total=np.inf, subres=1):
+        locwcs = WCS(self.locwcs.to_header())
+        oldshape = np.copy(self.shape)
+        if subres > 1:
+            subres = subres//2*2 + 1
+            lwcs = WCS(locwcs.to_header())
+            lwcs.wcs.cdelt = locwcs.wcs.cdelt/subres
+            lwcs.wcs.crpix = [locwcs.wcs.crpix[0]*subres + subres//2, locwcs.wcs.crpix[1]*subres + subres//2]
+            lwcs = WCS(lwcs.to_header())
+            shape = [(0, int(locwcs.wcs.crpix[1]*2 + 1)*subres), (0, int(locwcs.wcs.crpix[0]*2 + 1)*subres)]
+            self.__init__(lwcs, self.vmap, shape=shape, mpnum=self._pool._processes)
+
+
+
         list(self.clean_image())
         def local_cores_and_rolls(data, sky):
             for qloc, sloc, cloc in data:
-                rolls = wcs_roll(sky.locwcs, qloc)
-                sky.vmap.values = cloc
-                urolls, uiidx = np.unique((rolls*180./pi*2).astype(int), return_inverse=True)
+                if sloc.size > 0:
+                    rolls = wcs_roll(sky.locwcs, qloc)
+                    sky.vmap.values = cloc
+                    urolls, uiidx = np.unique((rolls*180./pi*2).astype(int), return_inverse=True)
 
-                lcores = sky.cores_for_rolls((urolls + 0.5)/360.*pi)
-                for k, core in enumerate(lcores):
-                    yield qloc[k == uiidx], sloc[k == uiidx], core
+                    lcores = sky.cores_for_rolls((urolls + 0.5)/360.*pi)
+                    for k, core in enumerate(lcores):
+                        yield qloc[k == uiidx], sloc[k == uiidx], core
 
         for _ in tqdm.tqdm(self.convolve_with_core(local_cores_and_rolls(data, self)), total=total):
             pass
         self.accumulate_img()
+        if subres > 1:
+            img = self.img.reshape((self.img.shape[0]//subres, subres, self.img.shape[1]//subres, subres)).sum(axis=(1, 3))
+            self.__init__(locwcs, self.vmap, shape=oldshape, mpnum=self._pool._processes)
+            self.img[:, :] = img
+
 
 
 try:
@@ -535,6 +591,8 @@ class SkyImage(DistributedObj):
         list(self.clean_image())
         def local_cores_and_rolls(data, sky):
             for qloc, sloc, cloc in data:
+                if sloc.size == 0:
+                    continue
                 rolls = wcs_roll(sky.locwcs, qloc)
                 sky.vmap.values = cloc
                 urolls, uiidx = np.unique((rolls*180./pi*2).astype(int), return_inverse=True)

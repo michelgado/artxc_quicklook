@@ -47,6 +47,7 @@ class DistributedObj(object):
         global localcopy
         localcopy = cls(**kwargs)
 
+
     def __init__(self, mpnum=0, barrier=None, **kwargs):
         if barrier is None and mpnum > 0:
             self.barrier = Barrier(mpnum)
@@ -64,10 +65,22 @@ class DistributedObj(object):
         return localcopy.__getattribute__(method)(*args, **kwargs)
 
     @staticmethod
+    def perform_staticmethod_for_each_argument(vals):
+        args, method, kwargs = vals
+        global localcopy
+        return method(localcopy, *args, **kwargs) #localcopy.__getattribute__(method)(*args, **kwargs)
+
+    @staticmethod
     def perform_for_each_proccess(vals):
         args, method, kwargs = vals
         localcopy.barrier.wait()
         return localcopy.__getattribute__(method)(*args, **kwargs)
+
+    @staticmethod
+    def perform_staticmethod_for_each_proccess(vals):
+        args, method, kwargs = vals
+        localcopy.barrier.wait()
+        return method(localcopy, *args, **kwargs)
 
     @staticmethod
     def for_each_argument(method):
@@ -92,6 +105,16 @@ class DistributedObj(object):
                 imap = self._pool.imap_unordered(self.perform_for_each_proccess, repeat((args, method.__name__, kwargs), self._pool._processes))
                 return imap if not join else list(imap)
         return mpmethod
+
+    def run_static_method(self, method, args, *largs, sync=True, join=True, **kwargs):
+        if self._pool is None:
+            return method(self, args, *largs, **kwargs)
+        else:
+            if sync:
+                imap = self._pool.imap_unordered(self.perform_staticmethod_for_each_proccess, repeat((args, method, kwargs), self._pool._processes))
+            else:
+                imap = tqdm(self._pool.imap_unordered(self.perform_staticmethod_for_each_argument, zip(args, repeat(method), repeat(kwargs))))
+            return imap if not join else list(imap)
 
 
 def init_local_object(cls, barrier, args, kwargs):
