@@ -309,7 +309,7 @@ class Intervals(object):
         maskshort[idxgaps - 2] = dt[idxgaps - 2] > dtmed*joinsize
         return newts[maskshort], maskgaps[maskshort[:-1]]
 
-    def arange(self, dt, joinsize=0.2, t0=None):
+    def arange(self, dt, joinsize=1, t0=None):
         """
         returns a set of digits, wichi are separated with dt within intervals and also including edges of the intervals
         signature:
@@ -322,6 +322,32 @@ class Intervals(object):
         if t0 is None:
             t0 = np.median(self.arr[:, 0]%dt) + (self.arr[0, 0]//dt - 1)*dt
         te = np.unique(np.concatenate([np.arange((s - t0)//dt + 1, (e - t0)//dt + 1)*dt + t0 for s, e in self.arr]))
+
+        te = np.unique(np.concatenate([self.arr.ravel(), te[self.mask_external(te)]]))
+        gaps = self.mask_external((te[1:] + te[:-1])/2.)
+        print("te.size", te.size)
+        if joinsize != 1:
+            gcut = (np.diff(te) < dt*joinsize) & gaps
+            print("gcut sum", gcut.sum(), np.sum(np.diff(te) < dt*joinsize))
+            #print("gcut sum", gcut.sum())
+            glong = np.ones(te.size, bool)
+            glong[1:-1] = ~(gcut[:-1] & gaps[1:])
+            te = te[glong]
+            print("te.size", te.size)
+
+            gaps = self.mask_external((te[1:] + te[:-1])/2.)
+            gcut = (np.diff(te) < dt*joinsize) & gaps
+            print("gcut sum", gcut.sum(), np.sum(np.diff(te) < dt*joinsize))
+            glong = np.ones(te.size, bool)
+            glong[1:-1] = ~(gcut[1:] & gaps[:-1])
+            te = te[glong]
+            print("te.size", te.size)
+
+            gaps = self.mask_external((te[1:] + te[:-1])/2.)
+
+
+        """
+
         eidx = np.searchsorted(te, self.arr)
         mempty = eidx[:, 0] != eidx[:, 1]
         sidx = np.searchsorted(te, self.arr[mempty, 0])
@@ -338,8 +364,9 @@ class Intervals(object):
 
         te = np.unique(np.concatenate([self.arr.ravel(), te]))
         mgaps = self.mask_external((te[1:] + te[:-1])/2.)
+        """
 
-        return te, mgaps
+        return te, gaps
 
 
 #======================================================================================================================
