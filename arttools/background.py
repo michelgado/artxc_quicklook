@@ -8,7 +8,7 @@ from .orientation import get_photons_sky_coord
 from .containers import Urddata
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from ._det_spatial import DL, dxya, offset_to_vec, vec_to_offset, vec_to_offset_pairs, raw_xy_to_vec, vec_to_offset_pairs
-from .psf import get_pix_overall_countrate_constbkg_ayut, select_psf_grups, urddata_to_opaxoffset
+from .psf import get_pix_overall_countrate_constbkg_ayut, urddata_to_opaxoffset
 from .lightcurve import make_overall_lc, Bkgrate
 from .mosaic2 import SkyImage
 from .telescope import URDNS
@@ -209,7 +209,6 @@ def get_photon_vs_particle_prob(udata, urdweights={}, cspec=None):
         gidx[gridp["GRADE"]] = np.arange(gridb["GRADE"].size)
         pweights[urdn] = specp[eidx, gidx[udata[urdn]["GRADE"]]]/bweights*urdweights.get(urdn, 1/7.)
     return pweights
-
 
 def get_background_lightcurve(tevts, bkgfilters, timebin, imgfilters=None, dtcorr={}):
     """

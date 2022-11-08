@@ -29,6 +29,10 @@ def raw_xy_to_offset(rawx, rawy):
     """
     return (rawx - 23.5)*DL, (rawy - 23.5)*DL
 
+
+def urddata_to_offset(urddata):
+    return raw_xy_to_offset(urddata["RAW_X"], urddata["RAW_Y"])
+
 #@cache_single_result_np
 def offset_to_raw_xy(x, y):
     """

@@ -52,6 +52,7 @@ class Urddata(object):
         print("tot filter", cfilter)
         print("volume", [d.filters.volume for d in urddlist], sum([d.filters.volume for d in urddlist]), cfilter.volume - sum([d.filters.volume for d in urddlist]))
         """
+
         if abs(cfilter.volume - sum([d.filters.volume for d in urddlist])) > 1e-1:
             raise ValueError("intersecting data sets")
 

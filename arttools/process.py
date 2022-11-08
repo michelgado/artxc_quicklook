@@ -265,6 +265,7 @@ def make_spec(ra, dec, survey=None, flist=None, usergti=tGTI):
             emap = arttools.expmap.make_expmap_for_wcs(locwcs, att, urdgti, imgfilters4_12, urdweights=urdcrates) #, urdweights=urdcrates) #emin=4., emax=12., phot_index=1.9)
             tasks = [(qlist[sidx[s:s+c]], pkoef[sidx[s:s+c]], np.copy(arttools.psf.unpack_inverse_psf_ayut(ic, jc)[eidx])) for (ic, jc, eidx), s, c in zip(ije.T, ss, sc)]
 
+
             mask = emap > 1.
             sky.set_mask(mask)
 
@@ -607,7 +608,7 @@ def make_img(flist, outputname, usergti=tGTI, emin=4., emax=12., make_detmap=Fal
 
         mask = emap > 1.
         sky = arttools.mosaic2.SkyImage(lwcs, vmap, mpnum=10)
-        sky.set_mask(mask, join=True)
+        sky.set_mask(mask)
         ctot = gaussian_filter(img1.astype(float), 3.)*2.*pi*9.
         sky.set_action(arttools.mosaic2.get_source_photon_probability, join=True)
         for _ in range(25):
@@ -810,7 +811,6 @@ def make_spec_and_arf(flist, outname, ra, dec, usergti=None):
     hdu.header["EXPOSURE"] = tgti.exposure
     fits.HDUList([pfile[0], hdu, fits.BinTableHDU(data=Table.from_pandas(pandas.DataFrame({"TSTART": gloc.arr[:, 0], "TSTOP":gloc.arr[:, 1]})), name="GTI")]).writeto("%s.pha" % outname, overwrite=True)
     """
-
 
 def estimate_rate(flist, outname, ra, dec, usergti=None, emin=4., emax=12., app=120.):
     allfiles = [l.rstrip() for l in open(flist)]

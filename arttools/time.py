@@ -120,7 +120,7 @@ def get_gti(ffile, gtiextname=None, excludebki=True, merge_interval_dt=None, use
 def make_bki_gti(ffile):
     if 'BKI_STATE' in ffile["HK"].data.dtype.names:
         bkiedges = maskedges(ffile["HK"].data["BKI_STATE"] != 1) + [0, -1]
-        bkigti = GTI(ffile["HK"].data["TIME"][bkiedges]) + [-5, 5]
+        bkigti = GTI(ffile["HK"].data["TIME"][bkiedges]) + [-10, 10]
     else:
         dt = np.diff(ffile["HK"].data["TIME"], 1)
         rate = np.diff(ffile["HK"].data["EVENTS"].astype(np.int), 1)/dt
