@@ -161,35 +161,12 @@ class AttDATA(SlerpWithNaiveIndexing):
         #mbad = mbak & mfov
         edges = medges(mfov[1:] & mbak[:-1]) # + [1, 0]
         edges = edges.reshape((-1, 2))
-        """
-        print(edges.shape)
-        for s, e in edges.reshape((-1, 2)):
-            radec = vec_to_pol(self.rotations[s-2:e+3].apply([1, 0, 0]))
-            plt.plot(radec[0]*180/pi, radec[1]*180/pi)
-            plt.scatter(radec[0][mbak[s-2:e+3]]*180/pi, radec[1][mbak[s-2:e+3]]*180/pi, marker="<", s=50, color="r")
-            plt.scatter(radec[0][mfov[s-2:e+3]]*180/pi, radec[1][mfov[s-2:e+3]]*180/pi, marker=">", s=50, color="g")
-            radec = vec_to_pol(self.rotations[[s, e]].apply([1, 0, 0]))
-            plt.scatter(radec[0]*180/pi, radec[1]*180/pi, marker="x", s=40, color="k")
-            plt.title(self.times[e] - self.times[s])
-            plt.show()
-        print("check interpolation", mfov.sum(), mbak.sum(), mfov.size)
-        idx = np.argwhere(mfov)
-        print(idx)
-        for i in idx[:, 0]:
-            print(mbak[i-2:i+3], mfov[i-2:i+3], mfov[i-2:i+2] & mbak[i-1:i+3])
-            radec = vec_to_pol(self.rotations[i-6:i+7].apply([1, 0, 0]))
-            plt.plot(radec[0]*180/pi, radec[1]*180/pi)
-            plt.scatter(radec[0]*180/pi, radec[1]*180/pi, marker="+", color="k")
-            plt.scatter(radec[0][mbak[i-6:i+7]]*180/pi, radec[1][mbak[i-6:i+7]]*180/pi, marker="<", s=30, color="r")
-            plt.scatter(radec[0][mfov[i-6:i+7]]*180/pi, radec[1][mfov[i-6:i+7]]*180/pi, marker=">", s=30, color="g")
-            plt.plot(radec[0][mgap2[i-6:i+7]]*180/pi, radec[1][mgap2[i-6:i+7]]*180/pi, "r", lw=2)
-            plt.show()
-        g1 = GTI(self.times[edges])
-        g2 = GTI(self.times[edges] + np.minimum(dt[edges], 1e-5)*[1, -1])
-        print(g1.exposure, g2.exposure)
-        pause
-        """
         return GTI(self.times[edges] + np.minimum(dt[edges], 1e-5)*[1, -1])
+
+
+    @lru_cache
+    def for_urdn(self, urdn):
+        return self*get_boresight_by_device(urdn)
 
     def __add__(self, other):
         base = super().__add__(other)
@@ -251,7 +228,12 @@ class AttDATA(SlerpWithNaiveIndexing):
         return tc, dt, dalphadt
 
     def __mul__(self, val):
-        return self.__class__(self.times, self(self.times)*val, gti=self.gti)
+        nsrc = self.__new__(self.__class__)
+        super(self.__class__, nsrc).__init__(self.times, self(self.times)*val)
+        nsrc.gti = self.gti
+        nsrc.bt = self.bt
+        nsrc.by = self.bq
+        return nsrc #self.__class__(self.times, self(self.times)*val, gti=self.gti)
 
     def __rmul__(self, val):
         """
@@ -294,21 +276,27 @@ class AttDATA(SlerpWithNaiveIndexing):
             attl = attl.apply_gti(gti)
         return gti
 
-    def get_covering_chulls(self): # expandsize=pi/180.*26.5/60.):
-        vecs = self(self.times).apply([1, 0, 0])
+    def get_covering_chulls(self, split_criteria = lambda x: [x.apply_gti(gti) for gti in get_observations_gtis(x, False)[0]], fov=None): # expandsize=pi/180.*26.5/60.):
+        if fov is None:
+            fov = raw_xy_to_vec(np.array([-1, 49, 49, -1]), np.array([-1, -1, 49, 49]))
+
         gtis, chulls = [], []
-        mtot = np.zeros(vecs.shape[0], bool)
-        for ch in SPHERE.childs:
-            mask = ch.check_inside_polygon(vecs)
-            mtot = mtot | mask
-            if np.any(mask):
-                chloc = ConvexHullonSphere(vecs[mask]).expand(pi/180./3600)
-                gti = self.chull_gti(chloc)
-                gtis.append(gti)
-                chulls.append(chloc)
-            if np.all(mtot):
-                break
-        return zip(chulls, gtis)
+        for attloc in split_criteria(self):
+            vecs = np.concatenate([attloc(attloc.times).apply(v) for v in fov], axis=0)
+            mtot = np.zeros(vecs.shape[0], bool)
+            for ch in SPHERE.childs:
+                mask = ch.check_inside_polygon(vecs[~mtot])
+                #print("report", mtot.sum(), mask.sum())
+                if np.any(mask):
+                    chloc = ConvexHullonSphere(vecs[~mtot][mask]) #.expand(pi/180./3600)
+                    gti = attloc.chull_gti(ch)
+                    gtis.append(gti)
+                    chulls.append(chloc)
+                    mtot[~mtot] = mask
+                if np.all(mtot):
+                    break
+        print("report: ", [(ch.area, g.exposure) for ch, g in zip(chulls, gtis)])
+        return list(zip(chulls, gtis)) if len(chulls) > 0 else [[], []]
 
 
 
@@ -411,7 +399,9 @@ def read_gyro_fits(gyrohdu):
     gyrodata = gyrohdu.data
     quats = np.array([gyrodata["QORT_%d" % i] for i in [1,2,3,0]]).T
     times = gyrodata["TIME"]
-    masktimes = times > T0
+    mtime = np.median(times)
+    masktimes = (times > mtime - 3.*24.*3600) & (times < mtime + 3.*24.*3600.)
+    #masktimes = times > T0
     mask0quats = np.sum(quats**2, axis=1) > 0.
     mask = np.logical_and(masktimes, mask0quats)
     times, quats = times[mask], quats[mask]
@@ -521,7 +511,8 @@ def get_photons_vectors(urddata, URDN, attdata, subscale=1, randomize=False):
     """
     if not np.all(attdata.gti.mask_external(urddata["TIME"])):
         raise ValueError("some events are our of att gti")
-    qall = attdata(np.repeat(urddata["TIME"], subscale*subscale))*get_boresight_by_device(URDN)
+    urdnatt = attdata.for_urdn(URDN)
+    qall = urdnatt(np.repeat(urddata["TIME"], subscale*subscale))
     photonvecs = urd_to_vec(urddata, subscale, randomize)
     phvec = qall.apply(photonvecs)
     return phvec
@@ -1032,7 +1023,7 @@ def get_attdata(fname, **kwargs):
 
 
 def attdata_for_urd(att, urdn):
-    return att*get_boresight_by_device(urdn)
+    return att.for_urdn(urdn) #*get_boresight_by_device(urdn)
 
 def get_slews_gti(attdata):
     #slew is usually performed at 240"/sec speed, we naively check the times when optical axis movement speed reaches over 100"/sec
@@ -1042,14 +1033,34 @@ def get_slews_gti(attdata):
     slews = slews + [-30, 30]
     return slews
 
-def get_observations_gti(attdata, join=True):
+def get_observations_gtis(attdata, join=True, intpsplitside=100.):
+    '''
+    for provided attitude (in the form of AttDATA container)
+    computes segments separted by slew motion (which is determined as episodes when optical axis angular movement speed is greater then 100 arcsec/sec)
+    additionanl parameters are
+
+    join:
+        join segments, separated by slews, if the zones covered by ART-XC FoV in this segments overlap
+
+    intpsplitside:
+        AttDATA can be composed of different pieces, which are not separated by slew but covers differeny part of the sky
+        this parameter determine, which time gap in the data should be considered as a sign to split observation
+        default: 100s (in GYRO data 2 and 3 seconds time gaps are prety common, but 10 s is almost unseen)
+
+    '''
     slews = get_slews_gti(attdata)
     v = raw_xy_to_vec(np.array([0, 0, 48, 48]), np.array([0, 48, 48, 0]))
     chulls = []
-    for i, arr in enumerate((~slews & attdata.gti).arr):
+    gtis = []
+    sgti = ~(slews | (~attdata.gti).remove_short_intervals(intpsplitside))
+    for i, arr in enumerate(sgti.arr):
         attl = attdata.apply_gti(GTI(arr))
+        print("check", i, arr[1] - arr[0], attl.gti.exposure)
+        if attl.gti.exposure == 0.:
+            continue
         chull = ConvexHullonSphere(np.concatenate([attl.rotations.apply(v1) for v1 in v]))
         chulls.append(chull)
+        gtis.append(attl.gti)
 
     clusters = np.arange(len(chulls))
 
@@ -1064,8 +1075,6 @@ def get_observations_gti(attdata, join=True):
 
         gtis = [attdata.gti & GTI((~slews & attdata.gti).arr[clusters == cluster]) for cluster in np.unique(clusters)]
         chulls = [ConvexHullonSphere(np.concatenate([ch.vertices for ch, cl in zip(chulls, clusters) if cl == cluster], axis=0)) for cluster in np.unique(clusters)]
-    else:
-        gtis = [attdata.gti & GTI(arr) for arr in (~slews).arr]
     return gtis, [ch.area for ch in chulls], [np.rad2deg(vec_to_pol(ch.get_center_of_mass())) for ch in chulls], chulls
 
 
@@ -1076,7 +1085,7 @@ class ObsClusters(object):
     u can add attdata, which will be splited on separate observations separated by slew episodes (with optical axis movement speed > 100 arcsec/sec)
     for each such segments gti and covering convex hull is produced, convex hull are then joined if intersecting (gtis are joining too)
     one can get convex hulls and corresponding gtis as an expicit attributes of the class
-    """ 
+    """
     def __init__(self, join=True, contour=None):
         self.clusters = []
         self.chulls = []
@@ -1160,13 +1169,13 @@ class FullSphereChullGTI(ChullGTI):
         self.childs = [ChullGTI(np.roll(CVERTICES, -i, axis=0)[:3], self) for i in range(4)]
         self.parent = self
         self.vertices = np.empty((0, 3), float)
-        
+
     @property
     def area(self):
         return 4.*pi*(180/pi)**2.
 
     def check_inside_polygon(self, vecs):
-        return np.ones(vecs.shape[0], bool) 
+        return np.ones(vecs.shape[0], bool)
 
     def __and__(self, other):
         return ChullGTI(other.vertices)
@@ -1213,3 +1222,16 @@ def add_new_compressed_att(att, times, names, fname):
                 times.append(atl.gti.arr[:,0])
                 names = names + [fname.rstrip()]*atl.gti.arr.shape[0]
     return att, times, names
+
+def make_mock_att_for_tempalte(template, tshift = 0, leftquat=Rotation([1, 0, 0, 0]), rightquat=Rotation([1, 0, 0, 0])):
+    """
+    its expexted that template contains rotation in spacecract coordinate system
+    """
+    vlist = template[:, 1:4]
+    r = Rotation.from_rotvec(vlist*template[:, 4, np.newaxis]*pi/180.)
+    rlist = [Rotation([1, 0, 0, 0]),]
+    for rl in r:
+        rlist.append(rlist[-1]*rl)
+    r2 = Rotation(np.array([rl.as_quat() for rl in rlist]))
+    te = np.concatenate([[0,], template[:, 0]])
+    return AttDATA(te + tshift, leftquat*r2*rightquat, check_interpolation=False)
