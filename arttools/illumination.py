@@ -72,18 +72,19 @@ class AzimuthMaskSet(object):
         for each ring a set of azimuthal angles intervals defined [[begining, end], [beginning, end], ....]
         if source vector is within this interval, a possitive mask is applied to it
     """
-    def __init__(self, srcoaxofflb, evtsrclb, srcevtbounds, axvec=None):
+    def __init__(self, srcoaxofflb, evtsrclb, srcevtbounds, axvec=None, app=None):
         """
         srcoaxofflb -- lower boundary for optical axis - source offset
         evtsrclb -- lower boundary for soruce -- events vectors offset
         srcevtbounds - a set of source centered segments (lower offset boundary and interavls within which mask is True)
         """
+        minit = np.ones(srcoaxofflb.size, bool) if app is None else srcoaxofflb < app
         a1 = -np.cos(srcoaxofflb)
-        self.srcaxgrid = a1
-        self.offit = Intervals(np.tile(srcoaxofflb, (2, 1)).T + [0., np.median(np.diff(srcoaxofflb))*1.0001,])
+        self.srcaxgrid = a1[minit]
+        self.offit = Intervals(np.tile(srcoaxofflb[minit], (2, 1)).T + [0., np.median(np.diff(srcoaxofflb[minit]))*1.0001,])
         self.evtsrgrid = -np.cos(evtsrclb)
         grid = np.repeat(np.arange(self.srcaxgrid.size)*self.evtsrgrid.size, [len(c)*2 for c in srcevtbounds])
-        bounds = np.concatenate(srcevtbounds, axis=0)
+        bounds = np.concatenate([s for s, m in zip(srcevtbounds, minit) if m], axis=0)
         self.grid = grid + np.searchsorted(self.evtsrgrid+1e-10, np.repeat(-np.cos(bounds[:, 0]), 2)) + bounds[:, 1:].ravel()/2./pi
         self.axvec = axvec
 
@@ -176,9 +177,11 @@ class StrayLight(object):
 
     def check_points(self, scvec, x, y):
         if self.patches.size > 0:
-            mask = (x[:, np.newaxis] > self.patches[np.newaxis, :, 0, 0]) & (x[:, np.newaxis] < self.patches[np.newaxis, :, 0, 1])
+            xo = x - scvec[:, 1]*self.FPinhole/scvec[:, 0]
+            mask = (xo[:, np.newaxis] > self.patches[np.newaxis, :, 0, 0]) & (xo[:, np.newaxis] < self.patches[np.newaxis, :, 0, 1])
             mi = np.any(mask, axis=1)
-            mask[mi,:] = mask[mi,:] & ((y[mi, np.newaxis] > self.patches[np.newaxis, :, 1, 0]) & (y[mi, np.newaxis] < self.patches[np.newaxis, :, 1, 1]))
+            yo = y[mi] + scvec[mi, 2]*self.FPinhole/scvec[mi, 0]
+            mask[mi,:] = mask[mi,:] & ((yo[:, np.newaxis] > self.patches[np.newaxis, :, 1, 0]) & (yo[:, np.newaxis] < self.patches[np.newaxis, :, 1, 1]))
             return np.any(mask, axis=1)
         else:
             return np.zeros(scvec.shape[0], bool)
@@ -217,11 +220,13 @@ def make_s_interpolation(sobj, qval, dtn, urdn, mask):
 
 class IlluminationSources(DistributedObj):
 
-    def __init__(self, raset, decset, ifiltsset, slset, mpnum=4, barrier=None):
+    def __init__(self, raset, decset, ifiltsset, slset, smask=None, mpnum=4, barrier=None):
         """
         ifilts is expect to be a set of illumination filters, attributed to each particular telescope had
         """
         self.srcsvec = pol_to_vec(*np.deg2rad([raset, decset]))
+        self.smask = np.ones(self.srcvec.shape[0], bool) if smask is None else smask
+
         self.srcmask = np.ones(self.srcsvec.shape[0], bool)
         self.ifiltsset = ifiltsset
         self.slset = slset
@@ -242,37 +247,42 @@ class IlluminationSources(DistributedObj):
         x, y = urddata_to_offset(urddata)
 
 
-        for srcvec in self.srcsvec:
+        for srcvec, smask in zip(self.srcsvec, self.smask):
             srcvecs = qloc.apply(srcvec, inverse=True)
             mask[~mask] = ifilt.check_vecs(srcvecs[~mask], vecs[~mask])
-            mask[~mask] = sfilt.check_points(srcvecs[~mask], x[~mask], y[~mask])
+            if smask:
+                mask[~mask] = sfilt.check_points(srcvecs[~mask], x[~mask], y[~mask])
         return mask
 
     @DistributedObj.for_each_argument
-    def get_snapshot_mask(self, urdn, q, srcmask=None):
-        if srcmask is None:
-            srcmask = self.srcmask
+    def get_snapshot_mask(self, urdn, q): #, srcmask=None):
+        #if srcmask is None:
+        #    srcmask = self.srcmask
         mask = np.zeros(self.urdpixvecs[urdn].shape[0], bool)
-        xo, yo = self.urdpixcoord[urdn]
+        xo, yo = self.urdpixoffst[urdn]
         i, j = self.ijt[urdn]
+        """
         for srcs, m in zip(self.srcsvec, srcmask):
             if not m:
                 continue
+        """
+        for srcs, smask in zip(self.srcsvec, self.smask):
             vloc = q.apply(srcs, inverse=True)
             vloc = np.lib.stride_tricks.as_strided(vloc, shape=self.urdpixvecs[urdn].shape, strides=(0, vloc.strides[0]))
             mask[~mask] = self.ifiltsset[urdn].check_vecs(vloc[:(~mask).sum()], self.urdpixvecs[urdn][~mask])
-            mask[~mask] = self.slset[urdn].check_points(vloc[:(~mask).sum()], xo[~mask], yo[~mask])
+            if smask:
+                mask[~mask] = self.slset[urdn].check_points(vloc[:(~mask).sum()], xo[~mask], yo[~mask])
         return mask if np.any(mask) else None
 
 
     def get_overall_gti(self, attdata):
         glist = [] #GTI([]) for _ in self.srcvecs]
-        for srcvec in self.srcsvec:
+        for srcvec, smask in zip(self.srcsvec, self.smask):
             g = GTI([])
             for urdn in self.ifiltsset:
                 print("check vec and urdn", srcvec, urdn, g.exposure)
                 g = g | self.ifiltsset.get(urdn).get_offsetgrid_gti(attdata.for_urdn(urdn), srcvec)
-                if urdn in self.slset:
+                if urdn in self.slset and smask:
                     g = g | self.slset[urdn].get_offsetgrid_gti(attdata.for_urdn(urdn), srcvec)
             glist.append(g)
         return glist
@@ -319,9 +329,10 @@ class IlluminationSources(DistributedObj):
                 if idx < ijt[urdn].size and ijt[urdn][idx] == i*dj + j:
                     evtvec = np.repeat(raw_xy_to_vec(detidxlist[urdn][0][idx:idx+1], detidxlist[urdn][1][idx:idx+1]), tc.size, axis=0)
                     xo, yo = np.repeat(raw_xy_to_offset(detidxlist[urdn][0][idx:idx+1], detidxlist[urdn][1][idx:idx+1]), tc.size, axis=1)
-                    for srcs in srcsvecs[urdn]:
+                    for srcs, smask in zip(srcsvecs[urdn], self.smask):
                         mask[~mask] = self.ifiltsset[urdn].check_vecs(srcs[~mask], evtvec[~mask])
-                        mask[~mask] = self.slset[urdn].check_points(srcs[~mask], xo[~mask], yo[~mask])
+                        if smask:
+                            mask[~mask] = self.slset[urdn].check_points(srcs[~mask], xo[~mask], yo[~mask])
                     #print(mask.size, mask.sum())
                     if np.any(mask):
                         qc.append((qlist[urdn][mask]*rawxy_to_qcorr(detidxlist[urdn][0][idx], detidxlist[urdn][1][idx])).as_quat())
@@ -368,11 +379,12 @@ class IlluminationSources(DistributedObj):
             mask = np.zeros(urdpixvecs[urdn].shape[0], bool)
             xo, yo = urdpixcoord[urdn]
             i, j = ijt[urdn]
-            for srcs in self.srcsvec:
+            for srcs, smask in zip(self.srcsvec, self.smask):
                 vloc = qloc.apply(srcs, inverse=True)
                 vloc = np.lib.stride_tricks.as_strided(vloc, shape=urdpixvecs[urdn].shape, strides=(0, vloc.strides[0]))
                 mask[~mask] = self.ifiltsset[urdn].check_vecs(vloc[:(~mask).sum()], urdpixvecs[urdn][~mask])
-                mask[~mask] = self.slset[urdn].check_points(vloc[:(~mask).sum()], xo[~mask], yo[~mask])
+                if smask:
+                    mask[~mask] = self.slset[urdn].check_points(vloc[:(~mask).sum()], xo[~mask], yo[~mask])
             if np.any(mask):
                 vmap[urdn]._clean_img()
                 img = vmap[urdn].produce_vignentting(xo[mask], yo[mask], i[mask], j[mask])
@@ -398,6 +410,7 @@ class IlluminationSources(DistributedObj):
         ijt = {}
         urdpixmask = {}
         urdpixcoord = {}
+        urdpixoffst = {}
         urdpixvecs = {}
         qboresight = {}
 
@@ -405,6 +418,7 @@ class IlluminationSources(DistributedObj):
             urdpixmask[urdn] = imgfilters[urdn].meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
             imap, jmap = get_urddata_opaxofset_map(urdn)
             urdpixcoord[urdn] = x[urdpixmask[urdn]], y[urdpixmask[urdn]]
+            urdpixoffst[urdn] = raw_xy_to_offset(*urdpixcoord[urdn])
             urdpixvecs[urdn] = raw_xy_to_vec(urdpixcoord[urdn][0], urdpixcoord[urdn][1])
             ijt[urdn] = imap[urdpixcoord[urdn][0]], jmap[urdpixcoord[urdn][1]]
             qboresight[urdn] = get_boresight_by_device(urdn)
@@ -412,7 +426,7 @@ class IlluminationSources(DistributedObj):
         sky = WCSSky(locwcs, DEFAULVIGNIFUN, mpnum=mpnum)
 
         sky.run_static_method(set_global_state, [], ijt=ijt, qboresight=qboresight, urdpixcoord=urdpixcoord, urdpixvecs=urdpixvecs)
-        self.run_static_method(set_global_state, [], ijt=ijt, urdpixvecs=urdpixvecs, urdpixcoord=urdpixcoord)
+        self.run_static_method(set_global_state, [], ijt=ijt, urdpixvecs=urdpixvecs, urdpixcoord=urdpixcoord, urdpixoffst=urdpixoffst)
 
         glist = self.get_overall_gti(attdata)
         self.run_static_method(set_global_state, [], glist=glist)
@@ -425,11 +439,12 @@ class IlluminationSources(DistributedObj):
             mask = np.zeros(urdpixvecs[urdn].shape[0], bool)
             xo, yo = urdpixcoord[urdn]
             i, j = ijt[urdn]
-            for srcs in self.srcsvec:
+            for srcs, smask in zip(self.srcsvec, self.smask):
                 vloc = qloc.apply(srcs, inverse=True)
                 vloc = np.lib.stride_tricks.as_strided(vloc, shape=urdpixvecs[urdn].shape, strides=(0, vloc.strides[0]))
                 mask[~mask] = self.ifiltsset[urdn].check_vecs(vloc[:(~mask).sum()], urdpixvecs[urdn][~mask])
-                mask[~mask] = self.slset[urdn].check_points(vloc[:(~mask).sum()], xo[~mask], yo[~mask])
+                if smask:
+                    mask[~mask] = self.slset[urdn].check_points(vloc[:(~mask).sum()], xo[~mask], yo[~mask])
             return mask
 
 
@@ -438,8 +453,9 @@ class IlluminationSources(DistributedObj):
             for urdn in imgfilters:
                 print("processing urdn:", urdn)
                 for q, dt, tcl in [(qval[i*csize:min((i+1)*csize, dtn.size)]*qboresight[urdn], dtn[i*csize:min((i+1)*csize, dtn.size)]*urdweights.get(urdn, 1/7.), tc[i*csize:min((i+1)*csize, dtn.size)]) for i in range(dtn.size//self._pool._processes + 1)]:
-                    srcmask = np.array([g.mask_external(tcl) for g in glist]).T
-                    masks = self.get_snapshot_mask((urdn, ql, msrc) for ql, msrc in zip(q, srcmask))
+                    #srcmask = np.array([g.mask_external(tcl) for g in glist]).T
+                    #masks = self.get_snapshot_mask((urdn, ql, msrc) for ql, msrc in zip(q, srcmask))
+                    masks = self.get_snapshot_mask([(urdn, ql) for ql in q])
                     for mask, ql, dtl in zip(masks, q, dt):
                         if not mask is None:
                             yield ql, dtl, urdn, mask
