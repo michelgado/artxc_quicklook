@@ -144,15 +144,12 @@ def make_expmap_for_wcs(wcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dtcor
     return make_expmap_for_attdata(sky, attdata, imgfilters, dtcorr=dtcorr, kind=kind, urdweights=urdweights, **kwargs)
 
 
-
-
 def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNUM, dtcorr={}, illum_filters=None, **kwargs):
     """
     estimate exposure within timebins te, for specified directions
     """
     urdgtis = {urdn: f.filters["TIME"] for urdn, f in urdfilters.items()}
 
-    tec, mgaps, se, scalefunc, cumscalefunc = weigt_time_intervals(urdgtis)
     gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
     print("gti exposure", gti.exposure)
     ts, qval, dtq, locgti = make_small_steps_quats(attdata, gti=gti, tedges=te)
@@ -178,11 +175,12 @@ def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNU
         mloc = (idx >= 0) & (idx < te.size - 1)
         np.add.at(dtn, idx[mloc], vval[mloc]*dtu[mloc])
     print("dtn sum", dtn.sum())
+    if not illum_filters is None:
+        dtn = dtn - illum_filters.make_exposures(direction, te, attdata, urdfilters, urdweights, dtcorr, **kwargs)
     return te, dtn
 
 def make_exposures_for_app(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNUM, dtcorr={}, app=None, illum_filters=None, **kwargs):
     urdgtis = {urdn: f.filters["TIME"] for urdn, f in urdfilters.items()}
-    tec, mgaps, se, scalefunc, cumscalefunc = weigt_time_intervals(urdgtis)
     ipsffun = get_ipsf_interpolation_func()
     gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
     #print("gti exposure", gti.exposure)

@@ -130,6 +130,9 @@ def unpack_inverse_psf_specweighted_ayut(imgfilter, cspec=None, app=None):
     return newfunc
 
 def get_pix_overall_countrate_constbkg_ayut(imgfilter, cspec=None, app=None):
+    """
+    return integral over effectiveness on sky area (integral in radians)
+    """
     iifun = get_ipsf_interpolation_func()
     sarea = get_vec_triangle_area(offset_to_vec(iifun.grid[0][:-1], iifun.grid[0][:-1]),
                                   offset_to_vec(iifun.grid[0][1: ], iifun.grid[0][:-1]),
@@ -146,6 +149,9 @@ def get_pix_overall_countrate_constbkg_ayut(imgfilter, cspec=None, app=None):
     return newfunc
 
 def get_ipsf_interpolation_func(app=6.*60):
+    """
+    provides with new instance of ReugularInterpolatorGrid with grid (x, y coordinates) set to the resolution of IPSF crrently stores in caldb
+    """
     ipsf = get_ayut_inversed_psf_data_packed()
     xo = ipsf["offset"].data["x_offset"] #*0.9874317205607761 #*1.0127289656 #*1.0211676541662125
     yo = ipsf["offset"].data["y_offset"] #*0.9874317205607761 #*1.0127289656 #1.0211676541662125

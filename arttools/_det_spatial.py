@@ -81,11 +81,11 @@ def offset_to_vec(x, y):
 
     return: unit vector corresponding to the offset from optical axis, which put the focused light in the pixel
     """
-    outvec = np.empty(x.shape + (3,), np.double)
+    outvec = np.empty(np.asarray(x).shape + (3,), np.double)
     outvec[..., 0] = F
     outvec[..., 1] = x
     outvec[..., 2] = -y
-    return outvec/np.sqrt(np.sum(outvec**2, axis=1))[..., np.newaxis]
+    return outvec/np.sqrt(np.sum(outvec**2, axis=-1))[..., np.newaxis]
 
 
 #@cache_single_result_np

@@ -633,3 +633,22 @@ class SkyImage(DistributedObj):
     @DistributedObj.for_each_process
     def accumulate_trace(self):
         return self.trace
+
+
+"""
+import asyncio
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+
+class ImgBuffer(object):
+    def __init__(self, shape, bsize=10, **kwargs):
+        self.bsize=bsize
+        self.img = np.zeros([bsize,] + list(shape), **kwargs)
+
+    async def addimg(self, img, counter):
+        self.img[counter%self.bsize,:] += img
+
+    async def accumulate(self, inarrgen)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(ThreadPoolExecutor(max_workers=self.bsize), npsum, enumerate(inarrgen))
+
+"""
