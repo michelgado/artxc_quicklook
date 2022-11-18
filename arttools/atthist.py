@@ -1,6 +1,6 @@
 from .time import make_ingti_times, deadtime_correction, GTI, tGTI
-from .vector import pol_to_vec, vec_to_pol
-from .orientation import quat_to_pol_and_roll, align_with_z_quat, minimize_norm_to_survey
+from .vector import pol_to_vec, vec_to_pol, normalize
+from .orientation import quat_to_pol_and_roll, align_with_z_quat, minimize_norm_to_survey, get_linear_and_rot_components
 from .planwcs import get_wcs_roll_for_qval
 from ._det_spatial import DL, offset_to_vec, vec_to_offset_pairs, vec_to_offset
 from .telescope import OPAX
@@ -64,7 +64,16 @@ def hist_orientation(qval, dt):
     np.add.at(exptime, invidx, dt)
     return exptime, qval[uidx]
 
-def make_small_steps_quats(attdata, gti=tGTI, timecorrection=lambda x: 1., tedges=None):
+
+def join_short_rotation_intervals(te, gaps, qvals, ax=OPAX, deltamove=pi/180.*15./3600., deltarot=0.1*pi/180):
+    qrot = (qvals[1:]*qvals[:-1].inv()).as_rotvec()
+    moda = np.sqrt(np.sum(qrot**2, axis=1))
+    caa = np.sqrt(1. - np.sum(qrot*ax, axis=1)**2/moda**2.)
+    lienarshift = caa*moda
+
+
+
+def make_small_steps_quats(attdata, gti=tGTI, tedges=None, dlin=DELTASKYm, drot=DELTAROLL, ax=OPAX):
     """
     provided with AttDATA container (see arttools.orientation.AttDATA)
     produces a set of quaternions, which separated not more than by DELTASY in angles and DELTAROLL in rolls
@@ -75,44 +84,19 @@ def make_small_steps_quats(attdata, gti=tGTI, timecorrection=lambda x: 1., tedge
     returns: qval, exptime, gti - quatertions, exposure time for this quaternions, and resulted overall gti
     """
     locgti = gti & attdata.gti
-    tnew, maskgaps = locgti.make_tedges(attdata.times if tedges is None else tedges)
-    if tnew.size == 0:
-        return np.array([]), Rotation(np.empty((0, 4), np.double)), np.array([]), GTI([])
-
-    ts = ((tnew[1:] + tnew[:-1])/2.)[maskgaps]
-    dt = (tnew[1:] - tnew[:-1])[maskgaps]
-
-    qval = attdata(ts)
-    ra, dec, roll = quat_to_pol_and_roll(attdata(tnew))
-    vec = pol_to_vec(ra, dec)
-    vecprod = np.sum(vec[1:, :]*vec[:-1, :], axis=1)
-    """
-    this ugly thing appears due to the numerical precision
-    """
-    vecprod[vecprod > 1.] = 1.
-    dalpha = np.arccos(vecprod)[maskgaps]
-    cs = np.cos(roll)
-    ss = np.sin(roll)
-    vecprod = np.minimum(ss[1:]*ss[:-1] + cs[1:]*cs[:-1], 1.)
-    droll = np.arccos(vecprod)[maskgaps]
-
-    maskmoving = (dalpha < DELTASKY) & (droll < DELTAROLL)
-    qvalstable = qval[maskmoving]
-    maskstable = np.logical_not(maskmoving)
-    if np.any(maskstable):
-        tsm = (ts - dt/2.)[maskstable]
-        size = np.maximum(dalpha[maskstable]/DELTASKY, droll[maskstable]/DELTAROLL).astype(np.int)
-        dtm = np.repeat(dt[maskstable]/size, size)
-        ar = np.arange(size.sum()) - np.repeat(np.cumsum([0,] + list(size[:-1])), size) + 0.5
-        tnew = np.repeat(tsm, size) + ar*dtm
-        dtn = np.concatenate([dt[maskmoving], dtm]) #*timecorrection(ts[maskmoving]), dtm*timecorrection(tnew)])
-        ts = np.concatenate([ts[maskmoving], tnew])
-        idx = np.argsort(ts)
-        ts, dtn = ts[idx], dtn[idx]
-        qval = attdata(ts)
+    if tedges is None:
+        tnew, gaps = locgti.make_tedges(attdata.times)
     else:
-        dtn = dt
-    return ts, qval, dtn*timecorrection(ts), locgti
+        tnew, gaps = locgti.make_tedges(np.unique([attdata.times, tedges]))
+
+    q = attdata(tnew, ax)
+    lin, rot = get_linear_and_rot_components(q)
+    splitsize = (np.maximum(lin/dlin, rot/drot) + 1).astype(int)
+    splitsize[~gaps] = 1
+    dt = np.diff(tnew)
+    te = np.repeat(te, splitsize) + (np.arange(splitsize.sum()) - np.repeat(np.cumsum([0,] + list(splitsize[:-1])), splitsize))*dt/splitsize
+    gaps = np.repeat(gaps, splitsize)
+    return te, gaps, locgti
 
 
 def make_wcs_steps_quats(wcs, attdata, gti=tGTI, timecorrection=lambda x: 1., tedges=None, ax=OPAX):
@@ -134,7 +118,7 @@ def make_wcs_steps_quats(wcs, attdata, gti=tGTI, timecorrection=lambda x: 1., te
     xte = ((np.arange(nshiftx.sum()) + np.repeat(nshiftx - nshiftx.cumsum(), nshiftx) + 0.5)*np.repeat(np.sign(dx), nshiftx) + np.repeat(xyint[0, :-1] - xy[0, :-1], nshiftx))/np.repeat(dx/dt, nshiftx) + np.repeat(attloc.times[:-1], nshiftx)
     yte = ((np.arange(nshifty.sum()) + np.repeat(nshifty - nshifty.cumsum(), nshifty) + 0.5)*np.repeat(np.sign(dy), nshifty) + np.repeat(xyint[1, :-1] - xy[1, :-1], nshifty))/np.repeat(dy/dt, nshifty) + np.repeat(attloc.times[:-1], nshifty)
     te = np.unique(np.concatenate([attloc.times, xte, yte] if tedges is None else [attloc.times, xte, yte, tedges]))
-    return make_small_steps_quats(attloc, gti, tedges=te, timecorrection=timecorrection)
+    return make_small_steps_quats(attloc, gti, tedges=te, ax=ax)
 
 def hist_orientation_for_attdata(attdata, gti=tGTI, timecorrection=lambda x:1., wcs=None):
     """
@@ -143,15 +127,20 @@ def hist_orientation_for_attdata(attdata, gti=tGTI, timecorrection=lambda x:1., 
     """
     if wcs is None:
         print("small steps")
-        ts, qval, dtn, locgti = make_small_steps_quats(attdata, gti, timecorrection)
+        te, gaps, locgti = make_small_steps_quats(attdata, gti, timecorrection)
     else:
         print("wcs steps")
-        ts, qval, dtn, locgti = make_wcs_steps_quats(wcs, attdata, gti, timecorrection)
-    exptime, qhist = hist_orientation(qval, dtn)
+        te, gaps, locgti = make_wcs_steps_quats(wcs, attdata, gti, timecorrection)
+    tc = (te[1:] + te[:-1])[gaps]/2.
+    dtn = np.diff(te)[gaps]*timecorrection(tc)
+    exptime, qhist = hist_orientation(attdata(tc), dtn)
     return exptime, qhist, locgti
 
 def hist_by_roll_for_attdata(attdata, gti=tGTI, timecorrection=lambda x:1., wcs=None): #wcsax=[0, 0, 1]):
-    ts, qval, dtn, locgti = make_small_steps_quats(attdata, gti, timecorrection)
+    te, gaps, locgti = make_small_steps_quats(attdata, gti, timecorrection)
+    tc = (te[1:] + te[:-1])[gaps]/2.
+    qval = attdata(tc)
+    dtn = np.diff(te)[gaps]*timecorrection(tc)
     if wcs is None:
         ra, dec, roll = quat_to_pol_and_roll(qval)
         roll = (roll*180./pi)%360

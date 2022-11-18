@@ -152,18 +152,16 @@ def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNU
 
     gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
     print("gti exposure", gti.exposure)
-    ts, qval, dtq, locgti = make_small_steps_quats(attdata, gti=gti, tedges=te)
-    tel = np.empty(ts.size*2, np.double)
-    tel[::2] = ts - dtq/2.
-    tel[1::2] = ts + dtq/2.
-    tel = np.sort(tel)
-    tetot, gaps = gti.make_tedges(tel)
+    tel, gaps, locgti = make_small_steps_quats(attdata, gti=gti, tedges=te)
+    tc = (tel[1:] + tel[:-1])[gaps]/2.
+    qval = attdata(tc)
+
     dtn = np.zeros(te.size - 1, np.double)
     x, y = np.mgrid[0:48:1, 0:48:1]
     for urdn in urdgtis:
         if urdgtis[urdn].arr.size == 0:
             continue
-        teu, gaps = urdgtis[urdn].make_tedges(tel)
+        teu, gaps = (urdgtis[urdn] & locgti).make_tedges(tel)
         dtu = np.diff(teu)[gaps]
         tcc = (teu[1:] + teu[:-1])/2.
         tc = tcc[gaps]
@@ -184,20 +182,17 @@ def make_exposures_for_app(direction, te, attdata, urdfilters, urdweights={}, mp
     ipsffun = get_ipsf_interpolation_func()
     gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
     #print("gti exposure", gti.exposure)
-    ts, qval, dtq, locgti = make_small_steps_quats(attdata, gti=gti, tedges=te)
-    #print("dtq sum", dtq.sum())
-    tel = np.empty(ts.size*2, np.double)
-    tel[::2] = ts - dtq/2.
-    tel[1::2] = ts + dtq/2.
-    tel = np.sort(tel)
-    tetot, gaps = gti.make_tedges(tel)
+    tel, gaps, locgti = make_small_steps_quats(attdata, gti=gti, tedges=te)
+    tc = (tel[1:] + tel[:-1])[gaps]/2.
+    qval = attdata(tc)
+
     dtn = np.zeros(te.size - 1, np.double)
     x, y = np.mgrid[0:48:1, 0:48:1]
     cosa = cos(app*pi/180./3600.)
     for urdn in urdgtis:
         if urdgtis[urdn].arr.size == 0:
             continue
-        teu, gaps = urdgtis[urdn].make_tedges(tel)
+        teu, gaps = (urdgtis[urdn] & locgti).make_tedges(tel)
         dtu = np.diff(teu)[gaps]
         tcc = (teu[1:] + teu[:-1])/2.
         tc = tcc[gaps]
@@ -309,7 +304,12 @@ def make_pixmap_projection(wcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dt
         i, j = np.round(x + 0.5 - x0).astype(int)[shmask], np.round(y + 0.5 - y0).astype(int)[shmask]
         xl, yl = x[shmask], y[shmask]
         weights = opix(i, j)
-        ts, qval, dtq, locgti = make_small_steps_quats(attdata, gti=imgfilters[urdn]["TIME"], timecorrection=dtcorr.get(urdn, lambda x: np.ones(x.size)))
+
+        tel, gaps, locgti = make_small_steps_quats(attdata, gti=gti, tedges=te)
+        tc = (tel[1:] + tel[:-1])[gaps]/2.
+        qval = attdata(tc)
+        dtq= np.diff(tel)[gaps]*dtcorr.get(urdn, lambda x: np.full(x.size, 1.))(tc)
+
         barrier = Barrier(mpnum)
         pool = Pool(mpnum, initializer=initpool, initargs=(shmask, img.shape, weights, wcs, barrier, illum_filter, opax))
         for _ in tqdm.tqdm(pool.imap_unordered(poolworker, ((qval[sl*1000:(sl + 1)*1000].as_quat(), dtq[sl*1000:(sl + 1)*1000]) for sl in range(dtq.size//1000))), total=ts.size//1000):

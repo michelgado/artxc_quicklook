@@ -7,6 +7,7 @@ from .time import get_hdu_times, GTI, tGTI, emptyGTI
 from .vector import vec_to_pol, pol_to_vec, normalize
 from .caldb import T0, get_boresight_by_device, get_device_timeshift, relativistic_corrections_gti, MJDREF
 from .containers import Urddata
+from .telescope import URDNS, OPAX
 from .mask import edges as medges
 from functools import reduce, lru_cache
 from scipy.optimize import minimize
@@ -29,7 +30,6 @@ from astropy import time as atime
 qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])
 #qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])
 qgyro0 = Rotation([0., 0., 0., 1.])
-OPAX = np.array([1, 0, 0])
 
 SECPERYR = 3.15576e7
 SOLARSYSTEMPLANENRMALEINFK5 = np.array([-9.83858346e-08, -3.97776911e-01,  9.17482168e-01])
@@ -1180,6 +1180,40 @@ class FullSphereChullGTI(ChullGTI):
     def __and__(self, other):
         return ChullGTI(other.vertices)
 
+
+def get_linear_and_rot_components(qvals, ax=OPAX):
+    """
+    returns linear movement and rotation between two quaternions for specified axis (along which rotation need to be computed)
+    quaternion qvals[1:].inv()*qvals[:-1] provides quaternino in original system of coordinate
+
+    lets assume that the rotation vector is oriented along z in this system, and axis has coordinates ax = (cosp, sinp, 0)
+    then rotated vector would have coordinates axr = (cosp, sinp cosa, sinp sina)
+    and linear rotation between two vectors is a scale prodact of two
+    coslinear = cosp**2 + sinp**2*cosa
+    the rotational angle is defined by the angle between vectors, tangent to shortes trajectory, and one defined by quaternion
+    cos(rot/2) = ([vrot ax] [vort ax]) / sinp
+    where 1/sinp appear due to the necessity to normalize  [vrot ax]
+    vort itself can be defined as  vort = [ax axr]/sqrt(1 - coslinear**2)
+    [vrot ax] = -[ax vrot] = -[ax [ax axr]]/sina = - ax coslinear/sina + axr/sina
+    ([vrot ax] [vort ax]) = ([vrot ax] axr)/sina
+    axr can be defined as follows axr = cosp vrot + (ax - cosp vrot)*cosa + [vrot ax] sina
+    therefore
+    ([vrot ax] axr) = ([vrot ax])**2 sina = sinp**2 sina
+    finally
+    cos(rot/2) = sinp*sina/sqrt(1 - coslinear**2)
+    """
+    qrot = (qvals[1:].inv()*qvals[:-1])
+    vrot = qrot.as_rotvec()
+    moda = np.sqrt(np.sum(vrot**2, axis=1))
+    vrot = vrot/moda[:, np.newaxis]
+    caa = np.sum(vrot*ax, axis=1)
+    sasq = (1 - caa**2.)
+    coslinear = (caa**2 + sasq*np.cos(moda))
+    cosrot = np.empty(coslinear.size, float)
+    mask = coslinear == 1
+    cosrot[mask] = moda
+    cosrot[~mask] = np.arccos(np.sqrt((1. - caa[~mask]**2.)/(1. - coslinear[~mask]**2.))*np.sin(moda[~mask]))*2.
+    return np.arccos(coslinear), cosrot
 
 
 def split_in_two(vectors, times, att, precision=pi/180.*10./3600):
