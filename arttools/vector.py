@@ -9,6 +9,23 @@ def normalize(vecs):
     else:
         return vecs/sqrt(np.sum(vecs**2))
 
+def random_orthogonal(vec):
+    """
+    for a given 3D vector in form of np.array(3)
+    provides randomly oriented orthogonal vectro (not statistically random though)
+
+    ------
+    Params:
+        vec
+
+    returns:
+        vec
+    """
+    idx = np.argsort(vec)
+    rvec = np.zeros(3, np.double)
+    rvec[idx[1:]] = vec[idx[:0:-1]]*[-1, 1]
+    return rvec/sqrt(np.sum(rvec**2.))
+
 
 def get_otrhogonal_vector(ax1, ax2=None):
     """

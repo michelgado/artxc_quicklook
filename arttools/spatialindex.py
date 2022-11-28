@@ -10,9 +10,10 @@ import numpy as np
 def make_attdata_spatial_index(flist, chull=None):
     if chull is None:
         chull = FullSphereChullGTI()
+        chull.split_on_equal_segments(5.)
     else:
-        chull = ChullGTI(chull.vertices)
-    chull.split_on_equal_segments(5.)
+        if not type(chull) in [ChullGTI, FullSphereChullGTI]:
+            chull = ChullGTI(chull.vertices)
     for fname in flist:
         print('starting:',  fname)
         attdata = get_attdata(fname)
@@ -20,12 +21,14 @@ def make_attdata_spatial_index(flist, chull=None):
         print("chulls")
         for i, arr in enumerate((~slews).arr):
             attloc = attdata.apply_gti(GTI(arr))
+            if attloc.gti.exposure == 0:
+                continue
             print("attloc done")
             for ch, g in attloc.get_covering_chulls():
                 print("chull", ch.area)
                 for sch in chull.get_all_child_intersect(ch.expand(pi/180.*26.5/60.)):
                     sch.update_gti_for_attdata(attloc)
-    return chull 
+    return chull
 
 def make_attdata_gti_index(flist):
     gtot = emptyGTI

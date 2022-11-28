@@ -171,6 +171,32 @@ class ConvexHullonSphere(object):
                 ch.all_hairs(res)
         return res
 
+
+    def add_ort_vertices(self, da=1e-5):
+        orts = self.orts
+        cm = self.get_center_of_mass()
+        das = np.sum(self.vertices*np.roll(self.vertices, 1, axis=0), axis=1)
+        cola = np.sum(orts*np.roll(orts, 1, axis=0), axis=1)
+        if np.min(cola) > -cos(da):
+            idxd = np.argmin(cola)
+            nort = normalize(np.cross(self.vertices[idxd], orts[idxd]) + cm *das[idxd]*da)
+            #nv = np.concatenate([[normalize(np.cross(orts[idxd], nort)), normalize(np.cross(nort, orts[idxd - 1]))], np.delete(self.vertices, idxd, axis=0)], axis=0)
+            print(idxd)
+            nverts = normalize(np.array([self.vertices[idxd] + da*self.vertices[idxd - 1], self.vertices[idxd] + da*self.vertices[idxd + 1 if idxd != self.vertices.shape[0] - 1 else -1]]))
+            nv = np.concatenate([nverts, np.delete(self.vertices, idxd, axis=0)], axis=0)
+            return self.__class__(nv)
+        return self
+
+
+    def join_vertices(self, frac=1e-3):
+        da = np.arccos(np.sum(self.vertices*np.roll(self.vertices, 1, axis=0), axis=1))
+        if da.min() < np.max(da)*frac:
+            idxd = np.argmin(da)
+            nverts = np.concatenate([normalize(self.vertices[idxd] + self.vertices[idxd - 1]).reshape((1, 3)), np.delete(self.vertices, [idxd, idxd - 1], axis=0)])
+            return self.__class__(nverts).join_vertices(frac)
+        return self
+
+
     def simplify(self, da=1e-5):
         orts = self.orts
         das = np.sum(self.vertices*np.roll(self.vertices, 1, axis=0), axis=1)
@@ -188,8 +214,25 @@ class ConvexHullonSphere(object):
             print("out roll shape", orts.shape)
             return self.__class__(normalize(np.cross(orts, np.roll(orts, 1, axis=0)))).simplify(da)
             """
-            return self.__class__(np.delete(self.vertices, idxd, axis=0)).simplify(da)
+            cnew = self.__class__.__new__(self.__class__)
+            cnew.vertices = np.delete(self.vertices, idxd, axis=0)
+            return cnew #cnew.simplify(da)
 
+        if np.min(cola) < -cos(da):
+            idx = np.argmin(cola)
+            daa = (pi - np.arccos(cola[idx]))/2.*(1. - np.sum(self.vertices[idx]*self.vertices[[idx - 1, idx + 1 if idx != self.vertices.shape[0] else 0]], axis=1).max())
+
+            print(daa, da)
+            cm = self.get_center_of_mass()
+            dvec = normalize(np.cross(self.vertices[idx], cm))
+            cnew = self.__class__.__new__(self.__class__)
+            vnew = np.empty((self.vertices.shape[0] + 1, 3), float)
+            vnew[:idx, :] = self.vertices[:idx, :]
+            vnew[idx] = self.vertices[idx]*cos(min(da, daa)) - sin(min(da, daa))*dvec
+            vnew[idx + 1] = self.vertices[idx]*cos(min(da, daa)) + sin(min(da, daa))*dvec
+            vnew[idx + 2:, :] = self.vertices[idx + 1:]
+            cnew.vertices = vnew
+            return cnew #.simplify(da)
         return self
 
 
@@ -228,7 +271,7 @@ class ConvexHullonSphere(object):
 
 
     def expand(self, dtheta):
-        return self.expand3(dtheta)
+        return self.expand4(dtheta)
 
     def expand1(self, dtheta):
         """
@@ -264,7 +307,7 @@ class ConvexHullonSphere(object):
         newcorners = normalize(np.cross(neworts, np.roll(neworts, 1, axis=0)))
         return ConvexHullonSphere(newcorners[np.sum(newcorners*self.get_center_of_mass(), axis=1) > 0])
 
-    def expand3(self, dtheta, da=1e-3):
+    def expand3(self, dtheta):
         """
         expand by moving orts from the center of mass,
         if negative expansion, than sides disapearing while smallest sides become revert oriented relative to rest of convex hull
@@ -273,44 +316,38 @@ class ConvexHullonSphere(object):
             raise ValueError("can't expand single point chull")
 
 
+        #cm = normalize(self.vertices + np.roll(self.vertices, 1, axis=0)) #self.get_center_of_mass()
+        cm = self.get_center_of_mass()
         orts = self.orts
-        if dtheta > 0:
-            print(orts.shape)
-            cola = np.sum(orts*np.roll(orts, 1, axis=0), axis=1)
-            while np.min(cola) < -cos(da):
-                idxd = np.argmin(cola)
-                nort = normalize(np.cross(orts[idxd], normalize(np.cross(orts[idxd], orts[idxd - 1]))))
-                print(nort)
-                orts = np.insert(orts, idxd, nort, axis=0) #self.vertices[idxd])), axis=0)
-                print("orts shape", orts.shape)
-                cola = np.sum(orts*np.roll(orts, 1, axis=0), axis=1)
-                print("add ort", idxd)
-
-        svertices = normalize(np.cross(orts, np.roll(orts, 1, axis=0)))
-
-        cm = normalize(svertices + np.roll(svertices, 1, axis=0)) #self.get_center_of_mass()
-
         neworts = normalize(orts - normalize(cm + orts*np.sum(cm*orts, axis=1)[:, np.newaxis])*np.tan(dtheta))
         vertices = normalize(np.cross(neworts, np.roll(neworts, 1, axis=0)))
         print(vertices.shape, self.vertices.shape)
-        mask = np.ones(svertices.shape[0], bool)
+        mask = np.ones(vertices.shape[0], bool)
 
         #if dtheta < 0:
-        while True:
-            da = np.sum(svertices[mask]*np.roll(svertices[mask], 1, axis=0), axis=1)
-            idx = np.argmax(da)
-            print("idx", idx, da, np.arccos(da)*180/pi*60.)
-            if np.sum(np.cross(vertices[idx], np.roll(vertices, 1, axis=0)[idx])*cm) < 0:
-                mask[idx - 1] = False
-                vertices = normalize(np.cross(neworts[mask], np.roll(neworts[mask], 1, axis=0)))
-            else:
-                break
+        if self.vertices.shape[0] > 2:
+            while True:
+                da = np.sum(self.vertices[mask]*np.roll(self.vertices[mask], 1, axis=0), axis=1)
+                idx = np.argmax(da)
+                print("idx", idx, da, np.arccos(da)*180/pi*60.)
+                if np.sum(np.cross(vertices[idx], np.roll(vertices, 1, axis=0)[idx])*cm) < 0:
+                    mask[idx - 1] = False
+                    vertices = normalize(np.cross(neworts[mask], np.roll(neworts[mask], 1, axis=0)))
+                else:
+                    break
         """
         import matplotlib.pyplot as plt
         plt.scatter(*np.rad2deg(vec_to_pol(np.cross(neworts, np.roll(neworts, 1, axis=0)))))
         #return ConvexHullonSphere(normalize(np.cross(neworts, np.roll(neworts, 1, axis=0))))
         """
         return ConvexHullonSphere(vertices) #normalize(np.cross(neworts, np.roll(neworts, 1, axis=0))))
+
+
+    def expand4(self, dtheta, tol=0.1):
+        cm = self.get_center_of_mass()
+        vnew = normalize(self.vertices - cm*np.sum(cm*self.vertices, axis=1)[:, np.newaxis])
+        aold = np.arccos(np.sum(self.vertices*cm, axis=1))
+        return self.__class__(vnew*np.sin(aold + dtheta)[:, np.newaxis] + cm[np.newaxis,:]*np.cos(aold + dtheta)[:, np.newaxis])
 
 
     @property
