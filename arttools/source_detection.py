@@ -1,23 +1,26 @@
 from .telescope import URDNS, concat_data_in_order
-from ._det_spatial import vec_to_offset
-from scipy.spatial.transform import Rotation
+from ._det_spatial import vec_to_offset, get_qcorr_for_urddata
 from .background import get_local_bkgrates, get_photon_vs_particle_prob
-from .psf import urddata_to_opaxoffset, unpack_inverse_psf_ayut, get_ipsf_interpolation_func, select_psf_groups
+from .psf import urddata_to_opaxoffset, unpack_inverse_psf_ayut, get_ipsf_interpolation_func, select_psf_groups, photbkg_pix_coeff
 from .caldb import get_telescope_crabrates
 from .vector import normalize, pol_to_vec, vec_to_pol
 from .mosaic2 import WCSSky, get_source_photon_probability, get_zerosource_photstat
+from .orientation import get_events_quats
+from scipy.spatial.transform import Rotation
 from scipy.optimize import minimize, root
+import numpy as np
 
 urdcrates = get_telescope_crabrates()
 cr = np.sum([v for v in urdcrates.values()])
 urdcrates = {urdn: d/cr for urdn, d in urdcrates.items()}
 
 
-def make_detstat_tasks(urdevt, bkglc, urdweights=urdcrates)
-    bkgrates = {urdn: arttools.background.get_local_bkgrates(urdevt[urdn], bkglc[urdn]) for urdn in URDNS}
-    bkgrates = arttools.telescope.concat_data_in_order(bkgrates)
+def make_detstat_tasks(urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate=0.):
+    bkgrates = {urdn: get_local_bkgrates(urdevt[urdn], bkglc[urdn]) for urdn in URDNS}
+    bkgrates = concat_data_in_order(bkgrates)
 
-    qlist = [Rotation(np.empty((0, 4), np.double)) if urdevt[urdn].size == 0 else arttools.orientation.get_events_quats(urdevt[urdn], urdn, attdata)*arttools._det_spatial.get_qcorr_for_urddata(urdevt[urdn]) for urdn in arttools.telescope.URDNS if urdn in urdevt]
+    print("quats")
+    qlist = [Rotation(np.empty((0, 4), np.double)) if urdevt[urdn].size == 0 else get_events_quats(urdevt[urdn], urdn, attdata)*get_qcorr_for_urddata(urdevt[urdn]) for urdn in URDNS if urdn in urdevt]
     qlist = Rotation.from_quat(np.concatenate([q.as_quat() for q in qlist], axis=0))
 
     i, j = zip(*[urddata_to_opaxoffset(urdevt[urdn], urdn) for urdn in URDNS if urdn in urdevt])
@@ -28,23 +31,31 @@ def make_detstat_tasks(urdevt, bkglc, urdweights=urdcrates)
     photprob = get_photon_vs_particle_prob(urdevt, urdweights=urdcrates)
     photprob = concat_data_in_order(photprob)
 
-    pkoef = photprob/bkgrates
+    pbkgrate = {}
+    for urdn in urdevt:
+        profile = photbkg_pix_coeff(urdn, urdevt[urdn].filters)
+        pbkgrate[urdn] = profile[urdevt[urdn]["RAW_X"], urdevt[urdn]["RAW_Y"]]*photbkgrate
+    pbkgrate = concat_data_in_order(pbkgrate)
+
+    pkoef = photprob/(bkgrates + pbkgrate*photprob)
 
     ije, sidx, ss, sc = select_psf_groups(i, j, eenergy)
     tasks = [(qlist[sidx[s:s+c]], pkoef[sidx[s:s+c]], np.copy(unpack_inverse_psf_ayut(ic, jc)[eidx])) for (ic, jc, eidx), s, c in zip(ije.T, ss, sc)]
     return tasks
 
 
-def make_detmap(wcs, emap, tasks, mpnum=20, maxit=101):
+def make_detmap(locwcs, emap, tasks, mpnum=20, maxit=101):
     vmap = get_ipsf_interpolation_func()
     sky = WCSSky(locwcs, vmap, mpnum=mpnum)
 
     mask = emap > 1.
     sky.set_mask(mask)
 
-    sky.set_action(arttools.mosaic2.get_source_photon_probability)
+    sky.set_action(get_source_photon_probability)
+    ctot = np.ones(emap.shape, float)*np.sum([t[1].size for t in tasks])/2.
     rmap = np.maximum(ctot, 1.)/np.maximum(emap, 1.)
     sky.set_rmap(2./np.maximum(emap, 1.))
+    ctasks = tasks
 
     for _ in range(maxit):
         sky.clean_image()
@@ -61,7 +72,7 @@ def make_detmap(wcs, emap, tasks, mpnum=20, maxit=101):
             break
 
     sky.clean_image()
-    sky.set_action(arttools.mosaic2.get_zerosource_photstat)
+    sky.set_action(get_zerosource_photstat)
     sky.set_rmap(ctot/np.maximum(emap, 1.))
     sky.set_mask(emap > 1.)
     sky.img[:, :] = 0.
@@ -87,12 +98,11 @@ def make_wcs_nearest_interpolator(wcs, scalarmap):
         return scalarmap[x, y]
     return nearest_interpolator
 
-
 def get_nosource_likelihood_ratio_for_direction(srcvec, exposure, tasks):
     rate, svals = estimate_rate_for_direction(srcvec, exposure, tasks)
     return np.sum(np.log(svals*rate + 1.) - exp*rate)
 
-def get_local_maxima(urdevt, bkglc, expmap, urdweights=urdweights):
+def get_local_maxima(urdevt, bkglc, expmap, urdweights=urdcrates):
     """
     expmap is expected to be a function, which returns real exposure corresponding to events, stored in tasks
     """
