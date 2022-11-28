@@ -12,6 +12,8 @@ from . import illumination
 from . import containers
 from . import arf
 from . import spatialindex
+from . import point_source
+from . import source_detection
 
 __version__ = "0.3.1"
 
