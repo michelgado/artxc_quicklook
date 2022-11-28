@@ -144,11 +144,12 @@ def make_expmap_for_wcs(wcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dtcor
     return make_expmap_for_attdata(sky, attdata, imgfilters, dtcorr=dtcorr, kind=kind, urdweights=urdweights, **kwargs)
 
 
-def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNUM, dtcorr={}, illum_filters=None, **kwargs):
+def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNUM, dtcorr={}, app=None, cspec=None, illum_filters=None, **kwargs):
     """
     estimate exposure within timebins te, for specified directions
     """
-    urdgtis = {urdn: f.filters["TIME"] for urdn, f in urdfilters.items()}
+    cgti = attdata.circ_gti(direction, 25.*60.)
+    urdgtis = {urdn: f.filters["TIME"] & cgti for urdn, f in urdfilters.items()}
 
     gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
     print("gti exposure", gti.exposure)
@@ -166,67 +167,17 @@ def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNU
         tcc = (teu[1:] + teu[:-1])/2.
         tc = tcc[gaps]
         qlist = attdata(tc)*get_boresight_by_device(urdn)
-        vmap = make_vignetting_for_urdn(urdn, urdfilters[urdn].filters, **kwargs)
+        vmap = make_vignetting_for_urdn(urdn, urdfilters[urdn].filters, app=app, cspec=cspec) # **kwargs)
         dtc = dtcorr.get(urdn, lambda x: 1.)(tc)
-        vval = vmap(vec_to_offset_pairs(qlist.apply(direction, inverse=True)))*urdweights.get(urdn, 1.)*dtc
+        vval = vmap(vec_to_offset_pairs(qlist.apply(direction, inverse=True)))*urdweights.get(urdn, 1./7.)*dtc
         idx = np.searchsorted(te, tc) - 1
         mloc = (idx >= 0) & (idx < te.size - 1)
         np.add.at(dtn, idx[mloc], vval[mloc]*dtu[mloc])
     print("dtn sum", dtn.sum())
     if not illum_filters is None:
-        dtn = dtn - illum_filters.make_exposures(direction, te, attdata, urdfilters, urdweights, dtcorr, **kwargs)
+        dtn = dtn - illum_filters.make_exposures(direction, te, attdata, urdfilters, urdweights=urdweights, dtcorr=dtcorr, app=app, cspec=cspec)
     return te, dtn
 
-def make_exposures_for_app(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNUM, dtcorr={}, app=None, illum_filters=None, **kwargs):
-    urdgtis = {urdn: f.filters["TIME"] for urdn, f in urdfilters.items()}
-    ipsffun = get_ipsf_interpolation_func()
-    gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
-    #print("gti exposure", gti.exposure)
-    tel, gaps, locgti = make_small_steps_quats(attdata, gti=gti, tedges=te)
-    tc = (tel[1:] + tel[:-1])[gaps]/2.
-    qval = attdata(tc)
-
-    dtn = np.zeros(te.size - 1, np.double)
-    x, y = np.mgrid[0:48:1, 0:48:1]
-    cosa = cos(app*pi/180./3600.)
-    for urdn in urdgtis:
-        if urdgtis[urdn].arr.size == 0:
-            continue
-        teu, gaps = (urdgtis[urdn] & locgti).make_tedges(tel)
-        dtu = np.diff(teu)[gaps]
-        tcc = (teu[1:] + teu[:-1])/2.
-        tc = tcc[gaps]
-        qlist = attdata(tc)*get_boresight_by_device(urdn)
-        vmap = make_vignetting_for_urdn(urdn, urdfilters[urdn].filters, app=app, **kwargs)
-        dtc = dtu*dtcorr.get(urdn, lambda x: 1.)(tc)*urdweights.get(urdn, 1.)
-        vval = vmap(vec_to_offset_pairs(qlist.apply(direction, inverse=True)))*dtc
-        idx = np.searchsorted(te, tc) - 1
-        mloc = (idx >= 0) & (idx < te.size - 1)
-        np.add.at(dtn, idx[mloc], vval[mloc])
-        if not illum_filters is None:
-            #pool = ThreadPool(mpnum)
-            ipsff = unpack_inverse_psf_specweighted_ayut(urdfilters[urdn].filters, **kwargs)
-            shmask = urdfilters[urdn].filters.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
-            xloc, yloc = x[shmask], y[shmask]
-            vec = raw_xy_to_vec(xloc, yloc)
-            opax = raw_xy_to_vec(*np.array(get_optical_axis_offset_by_device(urdn)).reshape((2, 1)))[0]
-            for source in illum_filters.sources:
-                source.setup_for_quats(qlist, opax)
-            mask = np.any([source.mask_vecs_with_setup(vec, qlist, mpnum=mpnum) for source in illum_filters.sources], axis=0)
-            m2 = np.array([(np.sum(vec*q.apply(direction, inverse=True), axis=1) > cosa) for q in qlist]).T
-            mask = np.logical_and(mask, m2)
-            mask = np.logical_and(mask, mloc[np.newaxis, :])
-            i, j = rawxy_to_opaxoffset(xloc, yloc, urdn)
-            qcorr = rawxy_to_qcorr(xloc, yloc)
-            print("illumination exposure", mask.sum(), mask.size - mask.sum(), len(qlist))
-            for il, jl, qc, m, v in zip(i, j, qcorr, mask, vec):
-                if not np.any(m):
-                    continue
-                #print(il, jl, m.sum())
-                ipsffun.values = ipsff(il, jl)
-                vals = -ipsffun(vec_to_offset_pairs((qlist[m]*qc).apply(direction, inverse=True)))*dtc[m]
-                np.add.at(dtn, idx[m], vals)
-    return te, dtn
 
 def make_expmap_for_healpix(attdata, urdgtis, mpnum=MPNUM, dtcorr={}, subscale=4):
     if dtcorr:

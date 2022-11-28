@@ -196,4 +196,8 @@ def rawxy_to_qcorr(x, y):
     return q2*q1
 
 def get_qcorr_for_urddata(udata):
-    return rawxy_to_qcorr(udata["RAW_X"], udata["RAW_Y"])
+    rawxy, iidx = np.unique(udata[["RAW_X", "RAW_Y"]], return_inverse=True)
+    #iidx = np.argsort(iidx)
+    #css = np.cumsum([0,] + list(cts[:-1]))
+    qcorrs = rawxy_to_qcorr(rawxy["RAW_X"], rawxy["RAW_Y"])
+    return Rotation(qcorrs.as_quat()[iidx])

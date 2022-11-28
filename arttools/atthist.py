@@ -73,7 +73,7 @@ def join_short_rotation_intervals(te, gaps, qvals, ax=OPAX, deltamove=pi/180.*15
 
 
 
-def make_small_steps_quats(attdata, gti=tGTI, tedges=None, dlin=DELTASKYm, drot=DELTAROLL, ax=OPAX):
+def make_small_steps_quats(attdata, gti=tGTI, tedges=None, dlin=DELTASKY, drot=DELTAROLL, ax=OPAX):
     """
     provided with AttDATA container (see arttools.orientation.AttDATA)
     produces a set of quaternions, which separated not more than by DELTASY in angles and DELTAROLL in rolls
@@ -87,15 +87,17 @@ def make_small_steps_quats(attdata, gti=tGTI, tedges=None, dlin=DELTASKYm, drot=
     if tedges is None:
         tnew, gaps = locgti.make_tedges(attdata.times)
     else:
-        tnew, gaps = locgti.make_tedges(np.unique([attdata.times, tedges]))
+        tnew, gaps = locgti.make_tedges(np.unique(np.concatenate([attdata.times, tedges])))
 
-    q = attdata(tnew, ax)
-    lin, rot = get_linear_and_rot_components(q)
+    q = attdata(tnew)
+    lin, rot = get_linear_and_rot_components((q[1:].inv()*q[:-1]).as_rotvec())
     splitsize = (np.maximum(lin/dlin, rot/drot) + 1).astype(int)
     splitsize[~gaps] = 1
     dt = np.diff(tnew)
-    te = np.repeat(te, splitsize) + (np.arange(splitsize.sum()) - np.repeat(np.cumsum([0,] + list(splitsize[:-1])), splitsize))*dt/splitsize
     gaps = np.repeat(gaps, splitsize)
+    te = np.empty(gaps.size + 1, float)
+    te[:-1] = np.repeat(tnew[:-1], splitsize) + (np.arange(splitsize.sum()) - np.repeat(np.cumsum([0,] + list(splitsize[:-1])), splitsize))*np.repeat(dt/splitsize, splitsize)
+    te[-1] = tnew[-1]
     return te, gaps, locgti
 
 

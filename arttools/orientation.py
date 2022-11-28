@@ -205,10 +205,11 @@ class AttDATA(SlerpWithNaiveIndexing):
         is defined by the opax*rotvec/dt, this expression gives actual angular speed arcsec/sec
         of the defined axis
         """
-        rmod = np.sqrt(np.sum(self.rotvecs**2, axis=1))
-        proj = np.sqrt(1. - (np.sum(ax*self.rotvecs, axis=1)/rmod)**2.)
-        vspeed = rmod*proj/self.timedelta
-        return GTI(self.times[medges(query(vspeed))])
+        tc, dt, dalphadt = self.get_optical_axis_movement_speed()
+        gaps = self.gti.mask_external(tc)
+        qedges = medges(query(dalphadt) & gaps)
+
+        return GTI(self.times[qedges])
 
     def get_optical_axis_movement_speed(self):
         """
@@ -870,7 +871,7 @@ def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
     if mask is None:
         mask = np.ones(slerp.timedelta.size, np.bool)
 
-    offvec = normalize(offvec)
+    offvec = normalize(np.asarray(offvec))
     """
     scipy slerp works like q_i (q_i^-1 q_i+1 omega dt)
 
@@ -1181,17 +1182,17 @@ class FullSphereChullGTI(ChullGTI):
         return ChullGTI(other.vertices)
 
 
-def get_linear_and_rot_components(qvals, ax=OPAX):
+def get_linear_and_rot_components(vrot, ax=OPAX):
     """
     returns linear movement and rotation between two quaternions for specified axis (along which rotation need to be computed)
     quaternion qvals[1:].inv()*qvals[:-1] provides quaternino in original system of coordinate
 
     lets assume that the rotation vector is oriented along z in this system, and axis has coordinates ax = (cosp, sinp, 0)
-    then rotated vector would have coordinates axr = (cosp, sinp cosa, sinp sina)
+    then rotated vector would have coordinates axr = (cosp, sinp cosa, sinp sina) so (vrot ax) = cosp
     and linear rotation between two vectors is a scale prodact of two
     coslinear = cosp**2 + sinp**2*cosa
     the rotational angle is defined by the angle between vectors, tangent to shortes trajectory, and one defined by quaternion
-    cos(rot/2) = ([vrot ax] [vort ax]) / sinp
+    cos(rot/2) = ([vrot ax] [vort ax]) / sinp      (here (vort ax) = 0, |[vort ax]| = 1)
     where 1/sinp appear due to the necessity to normalize  [vrot ax]
     vort itself can be defined as  vort = [ax axr]/sqrt(1 - coslinear**2)
     [vrot ax] = -[ax vrot] = -[ax [ax axr]]/sina = - ax coslinear/sina + axr/sina
@@ -1200,19 +1201,33 @@ def get_linear_and_rot_components(qvals, ax=OPAX):
     therefore
     ([vrot ax] axr) = ([vrot ax])**2 sina = sinp**2 sina
     finally
-    cos(rot/2) = sinp*sina/sqrt(1 - coslinear**2)
+    cos(rot/2) = sinp*sina/sqrt(1 - coslinear**2) (1)
+
+    there is specific case, which is not well handled by machine precision: coslinear -> 1
+    this case can appear in two cases (moda << 1 & cosp << 1) and sinp << 1
+
+    if cosp ->  1 (sinp << 1)  rot -> moda
+    if moda -> 0 then cos(rot/2) -> 1 (first order decomposition) and 1 - moda^2 (1/3 - 1/8*sinp^2) therefore rot -> moda*sqrt(4/3 - sinp^2)
+    we will approximate both cases with moda*np.sqrt(1 - cosp**2)
     """
-    qrot = (qvals[1:].inv()*qvals[:-1])
-    vrot = qrot.as_rotvec()
+    #qrot = (qvals[1:].inv()*qvals[:-1])
+    #vrot = qrot.as_rotvec()
     moda = np.sqrt(np.sum(vrot**2, axis=1))
     vrot = vrot/moda[:, np.newaxis]
-    caa = np.sum(vrot*ax, axis=1)
-    sasq = (1 - caa**2.)
-    coslinear = (caa**2 + sasq*np.cos(moda))
+    cosp = np.sum(vrot*ax, axis=1)
+    sasq = (1 - cosp**2.)
+    coslinear = (cosp**2 + sasq*np.cos(moda))
     cosrot = np.empty(coslinear.size, float)
-    mask = coslinear == 1
-    cosrot[mask] = moda
-    cosrot[~mask] = np.arccos(np.sqrt((1. - caa[~mask]**2.)/(1. - coslinear[~mask]**2.))*np.sin(moda[~mask]))*2.
+    mask = np.abs(coslinear) > 0.99 # for this condition linear components coluld not be greater then 0.01*pi, therefore a simple approximate estimation of rotation can be used to obtain rotaion angle with ~1% accuracy
+    cosrot[mask] = np.abs(moda[mask])*cosp[mask] ##naive approximation to the second order decomposiition of case moda->0
+    """
+    print("maxcosrot", cosrot[mask].max(), coslinear[mask])
+    print(cosp[~mask], coslinear[~mask], np.sin(moda[~mask]))
+    print(cosp[~mask].max(), cosp[~mask].min(), coslinear[~mask].min(), coslinear[~mask].max(), moda[~mask].min(), moda[~mask].min())
+    """
+    #cr = np.sqrt((1. - cosp[~mask]**2.)/(1. - coslinear[~mask]**2.))*np.sin(moda[~mask])
+    #print("crmin and max", cr.max(), cr.min())
+    cosrot[~mask] = np.arccos(np.minimum(np.sqrt((1. - cosp[~mask]**2.)/(1. - coslinear[~mask]**2.))*np.sin(moda[~mask]), 1.))*2.
     return np.arccos(coslinear), cosrot
 
 

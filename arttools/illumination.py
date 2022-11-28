@@ -306,6 +306,75 @@ class IlluminationSources(DistributedObj):
             glist.append(g)
         return glist
 
+    def get_illumination_expmap_snaps(self, locwcs, attdata, imgfilters, dtcorr={28: lambda x: np.full(x.size, 1.)}, urdweights={}, mpnum=20):
+        imgfilters = {urdn: f.filters for urdn, f in imgfilters.items()}
+        te, gaps, locgti =  make_wcs_steps_quats(locwcs, attdata)
+        tc = (te[1:] + te[:-1])[gaps]/2.
+        qval = attdata(tc)
+        dtt = np.diff(te)[gaps]
+
+        """
+        iifuns = {urdn: unpack_inverse_psf_specweighted_ayut(f.filters) for urdn, f in imgfilters.items()}
+        vmap = {urdn: DetectorVignetting(iifuns[urdn]) for urdn in iifuns}
+        """
+        x, y = np.mgrid[0:48:1,0:48:1]
+
+        ijt = {}
+        urdpixmask = {}
+        urdpixcoord = {}
+        urdpixoffst = {}
+        urdpixvecs = {}
+        qboresight = {}
+
+        for urdn in imgfilters:
+            urdpixmask[urdn] = imgfilters[urdn].meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
+            imap, jmap = get_urddata_opaxofset_map(urdn)
+            urdpixcoord[urdn] = x[urdpixmask[urdn]], y[urdpixmask[urdn]]
+            urdpixoffst[urdn] = raw_xy_to_offset(*urdpixcoord[urdn])
+            urdpixvecs[urdn] = raw_xy_to_vec(urdpixcoord[urdn][0], urdpixcoord[urdn][1])
+            ijt[urdn] = imap[urdpixcoord[urdn][0]], jmap[urdpixcoord[urdn][1]]
+            qboresight[urdn] = get_boresight_by_device(urdn)
+
+        sky = WCSSky(locwcs, DEFAULVIGNIFUN, mpnum=mpnum)
+
+        sky.run_static_method(set_global_state, [], ijt=ijt, qboresight=qboresight, urdpixcoord=urdpixcoord, urdpixvecs=urdpixvecs)
+        self.run_static_method(set_global_state, [], ijt=ijt, urdpixvecs=urdpixvecs, urdpixcoord=urdpixcoord, urdpixoffst=urdpixoffst)
+
+        glist = self.get_overall_gti(attdata)
+        self.run_static_method(set_global_state, [], glist=glist)
+
+
+        sky.run_static_method(set_detmap, [], filters=imgfilters)
+
+
+        def makemask(urdn, qloc):
+            mask = np.zeros(urdpixvecs[urdn].shape[0], bool)
+            xo, yo = urdpixcoord[urdn]
+            i, j = ijt[urdn]
+            for isrc in self.isources:
+                vloc = qloc.apply(isrc.vec, inverse=True)
+                vloc = np.lib.stride_tricks.as_strided(vloc, shape=urdpixvecs[urdn].shape, strides=(0, vloc.strides[0]))
+                if urdn in isrc.imask:
+                    mask[~mask] = isrc.imask[urdn].check_vecs(vloc[:(~mask).sum()], urdpixvecs[urdn][~mask])
+                if urdn in isrc.smask:
+                    mask[~mask] = isrc.smask[urdn].check_points(vloc[:(~mask).sum()], xo[~mask], yo[~mask])
+            return mask
+
+        def maskiter():
+            csize = self._pool._processes
+            for urdn in imgfilters:
+                print("processing urdn:", urdn)
+                dtn = dtt*dtcorr.get(urdn, lambda x: np.full(x.size, 1.))(tc)
+                for q, dt, tcl in [(qval[i*csize:min((i+1)*csize, dtn.size)]*qboresight[urdn], dtn[i*csize:min((i+1)*csize, dtn.size)]*urdweights.get(urdn, 1/7.), tc[i*csize:min((i+1)*csize, dtn.size)]) for i in range(dtn.size//self._pool._processes + 1)]:
+                    masks = self.get_snapshot_mask([(urdn, ql) for ql in q])
+                    for mask, ql, dtl in zip(masks, q, dt):
+                        if not mask is None:
+                            yield ql, dtl, urdn, mask
+
+        sky.run_static_method(make_s_interpolation, maskiter(), sync=False)
+        sky.accumulate_img()
+        return np.copy(sky.img)
+
 
     def get_pixmap_tasks(self, tc, dt, qval, urdnsfilters, urdweights, pixresponse):
         """
@@ -348,7 +417,7 @@ class IlluminationSources(DistributedObj):
                 if idx < ijt[urdn].size and ijt[urdn][idx] == i*dj + j:
                     evtvec = np.repeat(raw_xy_to_vec(detidxlist[urdn][0][idx:idx+1], detidxlist[urdn][1][idx:idx+1]), tc.size, axis=0)
                     xo, yo = np.repeat(raw_xy_to_offset(detidxlist[urdn][0][idx:idx+1], detidxlist[urdn][1][idx:idx+1]), tc.size, axis=1)
-                    for isrc in self.isources: #srcs, smask in zip(srcsvecs[urdn], self.smask):
+                    for srcs, isrc in zip(srcsvecs[urdn], self.isources): #srcs, smask in zip(srcsvecs[urdn], self.smask):
                         if urdn in isrc.imask:
                             mask[~mask] = isrc.imask[urdn].check_vecs(srcs[~mask], evtvec[~mask])
                         if urdn in isrc.smask:
@@ -431,7 +500,7 @@ class IlluminationSources(DistributedObj):
                 res = self.get_illumination_expmap(locwcs, attdata, {urdn: f.filters & IndependentFilters({"TIME": pointing_gti}) for urdn, f in imgfilters.items()}, dtcorr, urdweights, mpnum, kind="direct")
 
 
-        tel, gaps, locgti = make_small_steps_quats(attdata, gti=gti, tedges=te)
+        tel, gaps, locgti = make_small_steps_quats(attdata, gti=gti)
         tc = (tel[1:] + tel[:-1])[gaps]/2.
         qval = attdata(tc)
         dtn = np.diff(tel)[gaps]*dtcorr[28](tc)
@@ -465,12 +534,13 @@ class IlluminationSources(DistributedObj):
             res = res + np.copy(sky.img)
         return res #np.copy(sky.img)
 
-    def make_exposures(self, srcvec, te, att, filters, app=120., urdweights={}, dtcorr={}):
+    def make_exposures(self, srcvec, te, attdata, filters, app=120., urdweights={}, dtcorr={}, cspec=None):
         """
         repeats the utility of expmap.make_exposures -- i.e. computes corrected for vignetting observed time within te time bins towards fk5 vector srcvec,
         but in case of this implementation, the exposures are computed only for the pixels, which are within illumination of stray light mask
         """
-        urdgtis = {urdn: f.filters["TIME"] & Intervals(te[[0, -1]]) for urdn, f in filters.items()}
+        cgti = attdata.circ_gti(srcvec, 25.*60.)
+        urdgtis = {urdn: f.filters["TIME"] & Intervals(te[[0, -1]]) & cgti for urdn, f in filters.items()}
 
         gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
         print("gti exposure", gti.exposure)
@@ -481,22 +551,24 @@ class IlluminationSources(DistributedObj):
         #dtq = np.diff(tel)[gaps]*dtcorr[28](tc)
 
         dtn = np.zeros(te.size - 1, np.double)
+        dtn2 = np.zeros(te.size - 1, np.double)
         x, y = np.mgrid[0:48:1, 0:48:1]
         vecs = raw_xy_to_vec(x.ravel(), y.ravel()).reshape(list(x.shape) + [3,])
         vfun = get_ipsf_interpolation_func()
         for urdn in urdgtis:
             if urdgtis[urdn].arr.size == 0:
                 continue
-            iifun = unpack_inverse_psf_specweighted_ayut(filters[urdn])
+            iifun = unpack_inverse_psf_specweighted_ayut(filters[urdn].filters)
             teu, gaps = (urdgtis[urdn] & locgti).make_tedges(tel)
             dtu = np.diff(teu)[gaps]
             tcc = (teu[1:] + teu[:-1])/2.
             tc = tcc[gaps]
             idx = np.searchsorted(te, tc) - 1
-            qlist = att(tc)*get_boresight_by_device(urdn)
+            qlist = attdata(tc)*get_boresight_by_device(urdn)
             vsrc = qlist.apply(srcvec, inverse=True)
             shmask = filters[urdn].filters.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
             dtc = np.ones(tc.size) if not urdn in dtcorr else dtcorr[urdn](tc)
+            #data = unpack_inverse_psf_datacube_specweight_ayut(filters[urdn], cspec, app)
 
             for xo, yo, v in zip(x[shmask], y[shmask], vecs[shmask]):
                 mask = np.sum(v*vsrc, axis=1) > cos(app*pi/180./3600.)
@@ -504,6 +576,7 @@ class IlluminationSources(DistributedObj):
                     imask = self.check_pixel_in_illumination(urdn, xo, yo, qlist[mask])
                     mask[mask] = imask
                     if np.any(mask):
+                        #naive_bispline_interpolation_specweight(rawx, rawy, vec, data, urdn=None)
                         i, j = rawxy_to_opaxoffset(xo, yo, urdn)
                         qc = rawxy_to_qcorr(xo, yo)
                         vfun.values = iifun(i, j)
