@@ -15,6 +15,16 @@ some notes:
 
 """
 
+def check_big_circle_cross_circle(v1, v2, cax, rad):
+    ort = np.cross(v1, v2)
+    cosr = cos(rad)
+    mask = np.sum(v1*cax, axis=1) > cosr
+    mask = mask | (np.sum(v2*cax, axis=1) > cosr)
+
+    vproj = normalize(cax - ort*np.sum(ort*cax, axis=1)[:, np.newaxis])
+    mask = mask | ((np.sum(vproj*cax, axis=1) > cos(rad)) & (np.sum(np.cross(v1, vproj)*np.cross(vproj, v2), axis=-1) > 0))
+    return mask
+
 
 def get_vec_triangle_area(vec1, vec2, vec3):
     v12 = np.cross(vec1, vec2, axis=-1)
@@ -27,6 +37,9 @@ def get_vec_triangle_area(vec1, vec2, vec3):
     beta = np.arccos(-np.sum(v12*v23, axis=-1))
     gamma = np.arccos(np.sum(v23*v13, axis=-1))
     return alpha + beta + gamma - pi
+
+def triangle_center(vec1, vec2, vec3):
+    return normalize(vec1 + vec2 + vec3)
 
 def random_orthogonal_vec(vec):
     """
@@ -271,7 +284,7 @@ class ConvexHullonSphere(object):
 
 
     def expand(self, dtheta):
-        return self.expand4(dtheta)
+        return self.expand5(dtheta)
 
     def expand1(self, dtheta):
         """
@@ -349,6 +362,18 @@ class ConvexHullonSphere(object):
         aold = np.arccos(np.sum(self.vertices*cm, axis=1))
         return self.__class__(vnew*np.sin(aold + dtheta)[:, np.newaxis] + cm[np.newaxis,:]*np.cos(aold + dtheta)[:, np.newaxis])
 
+    def expand5(self, dtheta):
+        orts = normalize(np.cross(self.vertices, np.roll(self.vertices, -1, axis=0))) # np.cross(self.vertices, np.roll(self.vertices, 1, axis=0)))
+        #orts = normalize(np.cross(np.roll(self.vertices, -1, axis=0), self.vertices)) # np.cross(self.vertices, np.roll(self.vertices, 1, axis=0)))
+        da = np.sum(self.vertices*np.roll(self.vertices, -1, axis=0), axis=1) # cos 2\alpha
+        dtheta = dtheta/np.sqrt((da + 1.)/2.)
+        vpro = normalize(self.vertices + np.roll(self.vertices, -1, axis=0))
+        neworts = orts*np.cos(dtheta)[:, np.newaxis] - vpro*np.sin(dtheta)[:, np.newaxis]
+        cm = self.get_center_of_mass()
+
+        newverts = normalize(np.cross(neworts, np.roll(neworts, 1, axis=0)))
+        return self.__class__(newverts)
+
 
     @property
     def area(self):
@@ -360,9 +385,14 @@ class ConvexHullonSphere(object):
             return 0.
 
     def get_center_of_mass(self):
+        clist = triangle_center(np.tile(self.vertices[0], (self.vertices.shape[0] - 2, 1)), self.vertices[1:-1], self.vertices[2:])
+        mlist = get_vec_triangle_area(np.tile(self.vertices[0], (self.vertices.shape[0] - 2, 1)), self.vertices[1:-1], self.vertices[2:])
+        return normalize(np.sum(clist*mlist[:, np.newaxis], axis=0))
+        """
         if self.vertices.shape[0] == 2:
             return normalize(np.sum(self.vertices, axis=0))
         return get_convex_center(self)
+        """
 
     def get_containing_rectangle(self, alpha=0., rotc=None):
         vm = rotc if not rotc is None else self.get_center_of_mass()
@@ -413,10 +443,33 @@ class ConvexHullonSphere(object):
                 if self.vertices.shape[0] == 3:
                     split_triangle_chull(self)
                 else:
+                    da = np.sum(self.vertices*np.roll(self.vertices, 1, axis=0), axis=1)
+                    idx = np.argmin(da)
                     cm = self.get_center_of_mass()
+                    m1 = (np.sum(np.cross(self.vertices[idx], cm)*self.vertices, axis=1) > 0.)
+                    m2 = (np.sum(np.cross(cm, self.vertices[idx-1])*self.vertices, axis=1) > 0)
+                    print(m1, m2)
+                    mask = (np.sum(np.cross(self.vertices[idx], cm)*self.vertices, axis=1) > 0.) & (np.sum(np.cross(cm, self.vertices[idx-1])*self.vertices, axis=1) > 0)
+                    dc = np.sum(self.vertices*cm, axis=1)
+                    dc[mask] = dc[mask] + 3
+                    idxo = np.argmax(dc)
+                    print(idx, idxo, mask)
+
+
+                    vnew = normalize(np.cross(np.cross(self.vertices[idx-1], self.vertices[idx]), np.cross(self.vertices[idxo], cm))) #) + np.roll(v, 1, axis=0)[idx])
+                    print(vnew)
+                    istart = idxo - idx + 1 if idxo > idx else self.vertices.shape[0] - idx + idxo + 1
+                    chnew1 = self.__class__(np.array([vnew,] + list(np.roll(self.vertices, -idx, axis=0)[:istart])))
+                    chnew2 = self.__class__(np.array(list(np.roll(self.vertices, -idx, axis=0)[istart -1:]) + [vnew,]))
+                    #chnew2 = self.__class__(np.array([vnew,] + list(np.roll(self.vertices, -idxo))[idx - idxo:]))
+                    return chnew1, chnew2
+                    return [[vnew,] + list(np.roll(v, -idx, axis=0)[:2]), list(np.roll(v, -idx, axis=0)[:2]) + [vnew,]]
+
                     self.childs = [ConvexHullonSphere(np.array([cm, v1, v2]), self) for v1, v2 in zip(self.vertices, np.roll(self.vertices, 1, axis=0))]
-                    for ch in self.childs:
-                        ch.split_in_pices(sarea)
+                for ch in self.childs:
+                    ch.split_in_pices(sarea)
+
+
 
 
     def join_small_childs(self, sarea):
@@ -507,6 +560,21 @@ class ConvexHullonSphere(object):
                     child.get_all_child_intersect(other, res)
         return res
 
+    def check_crossing_circle(self, ax, radius):
+        return np.any(check_big_circle_cross_circle(self.vertices, np.roll(self.vertices, 1, axis=0), ax, radius)) | self.check_inside_polygon(ax.reshape((-1, 3)))
+
+    def get_all_childs_crossing_circle(self, ax, radius, res=None):
+        if res is None:
+            res = []
+        if self.check_crossing_circle(ax, radius):
+            if len(self.childs) == 1:
+                res.append(self)
+            else:
+                for child in self.childs:
+                    child.get_all_childs_crossing_circle(ax, radius, res)
+        return res
+
+
     def merge(self, vertices=None):
         if vertices is None:
             vertices = self.vertices
@@ -568,6 +636,27 @@ class ConvexHullonSphere(object):
                 ch.split_on_equal_segments(sarea)
         else:
             if self.area > sarea*1.5:
+                if self.vertices.shape[0] == 3:
+                    split_triangle_chull(self)
+                else:
+                    da = np.sum(self.vertices*np.roll(self.vertices, 1, axis=0), axis=1)
+                    idx = np.argmin(da)
+                    cm = self.get_center_of_mass()
+                    m1 = (np.sum(np.cross(self.vertices[idx], cm)*self.vertices, axis=1) > 0.)
+                    m2 = (np.sum(np.cross(cm, self.vertices[idx-1])*self.vertices, axis=1) > 0)
+                    mask = (np.sum(np.cross(self.vertices[idx], cm)*self.vertices, axis=1) > 0.) & (np.sum(np.cross(cm, self.vertices[idx-1])*self.vertices, axis=1) > 0)
+                    dc = np.sum(self.vertices*cm, axis=1)
+                    dc[mask] = dc[mask] + 2
+                    idxo = np.argmax(dc)
+                    vnew = normalize(np.cross(np.cross(self.vertices[idx-1], self.vertices[idx]), np.cross(self.vertices[idxo], cm))) #) + np.roll(v, 1, axis=0)[idx])
+                    istart = idxo - idx + 1 if idxo > idx else self.vertices.shape[0] - idx + idxo + 1
+                    chnew1 = self.__class__(np.array([vnew,] + list(np.roll(self.vertices, -idx, axis=0)[:istart])), self)
+                    chnew2 = self.__class__(np.array(list(np.roll(self.vertices, -idx, axis=0)[istart -1:]) + [vnew,]), self)
+                    self.childs = [chnew1, chnew2]
+                for ch in self.childs:
+                    ch.split_on_equal_segments(sarea)
+
+                """
                 cm = self.get_center_of_mass()
                 idx1 = np.argmin(np.sum(self.vertices*np.roll(self.vertices, 1, axis=0), axis=1))
                 v1 = normalize(self.vertices[idx1] + np.roll(self.vertices, 1, axis=0)[idx1])
@@ -581,13 +670,40 @@ class ConvexHullonSphere(object):
                 self.childs = [ch1, ch2]
                 for ch in self.childs:
                     ch.split_on_equal_segments(sarea)
+                """
 
 
 def split_triangle(v):
+    #da = np.sum(np.roll(v, 1, axis=0)*np.roll(v, 2, axis=0), axis=1)
+    orts = normalize(np.cross(v, np.roll(v, -1, axis=0)))
+    idx = np.argmin(np.sum(orts*np.roll(orts, 1, axis=0)))
+    cm = triangle_center(v[0], v[1], v[2])
+    vnew = normalize(np.cross(np.cross(v[idx-2], v[idx-1]), np.cross(v[idx], cm))) #) + np.roll(v, 1, axis=0)[idx])
+    return [[vnew,] + list(np.roll(v, -idx, axis=0)[:2]), list(np.roll(v, -idx+1, axis=0)[:2]) + [vnew,]]
+
+def split_triangle2(v):
+    da = np.sum(v*np.roll(v, 1, axis=0))
+    idx = np.argmin(da)
+
+    v12 = np.cross(v[0], v[1], axis=-1)
+    v13 = np.cross(v[0], v[2], axis=-1)
+    v23 = np.cross(v[1], v[2], axis=-1)
+    v12 = v12/np.sqrt(np.sum(v12**2, axis=-1))[:, np.newaxis]
+    v13 = v13/np.sqrt(np.sum(v13**2, axis=-1))[:, np.newaxis]
+    v23 = v23/np.sqrt(np.sum(v23**2, axis=-1))[:, np.newaxis]
+    A = np.arccos(np.sum(v12*v13, axis=-1))
+    B = np.arccos(-np.sum(v12*v23, axis=-1))
+    C = np.arccos(np.sum(v23*v13, axis=-1))
+
+    x = np.arctan((cos(B) - sin((A + B - C)/2.))/(sin(B)*np.sum(v[0]*v[1]) - cos((A + B - C)/2.)))
+    v14 = v12*x/A + v
+
     da = np.sum(v*np.roll(v, 1, axis=0))
     idx = np.argmin(da)
     vnew = normalize(v[idx] + np.roll(v, 1, axis=0)[idx])
     return [[vnew,] + list(np.roll(v, idx, axis=0)[:2]), list(np.roll(v, idx + 2, axis=0)[:2]) + [vnew,]]
+
+
 
 def split_triangle_chull(ch):
     v = ch.vertices
