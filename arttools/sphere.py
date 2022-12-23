@@ -675,11 +675,31 @@ class ConvexHullonSphere(object):
 
 def split_triangle(v):
     #da = np.sum(np.roll(v, 1, axis=0)*np.roll(v, 2, axis=0), axis=1)
+    cosb = np.sum(v*np.roll(v, 1, axis=0), axis=1)
     orts = normalize(np.cross(v, np.roll(v, -1, axis=0)))
-    idx = np.argmin(np.sum(orts*np.roll(orts, 1, axis=0)))
+    angles = np.arccos(np.sum(orts*-np.roll(orts, 1, axis=0), axis=1))
+    idx = np.argmax(angles)
+    a1 = np.sum(angles*np.roll([1, 1, -1], idx))/2.
+    #print(a1, (angles[idx] + angles[idx-2] - angles[idx-1])/2.)
+    x = angles[idx] - np.arctan((cos(angles[idx-1]) - sin(a1))/(sin(angles[idx-1])*cosb[idx] - cos(a1)))
+    """
     cm = triangle_center(v[0], v[1], v[2])
     vnew = normalize(np.cross(np.cross(v[idx-2], v[idx-1]), np.cross(v[idx], cm))) #) + np.roll(v, 1, axis=0)[idx])
     return [[vnew,] + list(np.roll(v, -idx, axis=0)[:2]), list(np.roll(v, -idx+1, axis=0)[:2]) + [vnew,]]
+    """
+    #print(orts)
+    #print("angles", angles, idx, np.arccos(-np.sum(orts[idx]*orts[idx-1])))
+    #print(x, angles[idx])
+    o1 = -normalize(orts[idx-1] - orts[idx]*np.sum(orts[idx]*orts[idx-1]))
+    onew = orts[idx]*cos(x) + o1*sin(x)
+    #print("check vectors", np.sum(onew**2), np.sum(o1*np.cross(orts[idx], orts[idx-1])))
+    #print("check angle", np.arccos(np.sum(onew*orts[idx])), np.arccos(-np.sum(onew*orts[idx-1])))
+    #return onew, normalize(np.cross(orts[idx-2], orts[idx])), normalize(np.cross(onew, orts[idx])), normalize(np.cross(orts[idx-2], onew)), normalize(np.cross(onew, orts[idx-1]))
+    #============================================================================================================
+
+    vnew = normalize(np.cross(orts[idx-2], onew))
+    #return [list(np.roll(v, -idx, axis=0)[:2]) + [vnew,], [vnew,] + list(np.roll(v, -idx-1, axis=0)[:2])]
+    return [list(np.roll(v, -idx, axis=0)[:2]) + [vnew,], [vnew,] + list(np.roll(v, -idx+1, axis=0)[:2])]
 
 def split_triangle2(v):
     da = np.sum(v*np.roll(v, 1, axis=0))
