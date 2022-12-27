@@ -284,7 +284,9 @@ class ConvexHullonSphere(object):
 
 
     def expand(self, dtheta):
-        return self.expand5(dtheta)
+
+        return self.__class__(self.expand5(dtheta))
+        #return self.expand5(dtheta)
 
     def expand1(self, dtheta):
         """
@@ -370,9 +372,18 @@ class ConvexHullonSphere(object):
         vpro = normalize(self.vertices + np.roll(self.vertices, -1, axis=0))
         neworts = orts*np.cos(dtheta)[:, np.newaxis] - vpro*np.sin(dtheta)[:, np.newaxis]
         cm = self.get_center_of_mass()
+        while True:
+            """
+            check is the side, produced by particular ort (orthogonal to it) is consumed by the neighbouring orts, if it does, remove it
+            """
+            mask = np.sum(np.roll(neworts, 1, axis=0)*np.cross(neworts, np.roll(neworts, 2, axis=0)), axis=1) < 0.
+            if ~np.any(mask):
+                break
+            neworts = neworts[~mask]
 
         newverts = normalize(np.cross(neworts, np.roll(neworts, 1, axis=0)))
-        return self.__class__(newverts)
+        return newverts
+        #return self.__class__(newverts)
 
 
     @property
@@ -534,10 +545,14 @@ class ConvexHullonSphere(object):
         o1 = self.orts
         o2 = other.orts
 
+        c1 = self.expand(1e-7)
+        c2 = other.expand(1e-7)
+
+
         for i in range(o1.shape[0]):
             vecs = normalize(np.cross(o1[i], o2))
-            vlist.append(vecs[self.check_inside_polygon(vecs) & other.check_inside_polygon(vecs)])
-            vlist.append(-vecs[self.check_inside_polygon(-vecs) & other.check_inside_polygon(-vecs)])
+            vlist.append(vecs[c1.check_inside_polygon(vecs) & c2.check_inside_polygon(vecs)])
+            vlist.append(-vecs[c1.check_inside_polygon(-vecs) & c2.check_inside_polygon(-vecs)])
         vlist = np.concatenate(vlist, axis=0)
         return None if vlist.shape[0] < 3 else ConvexHullonSphere(vlist)
 
@@ -650,6 +665,7 @@ class ConvexHullonSphere(object):
                     idxo = np.argmax(dc)
                     vnew = normalize(np.cross(np.cross(self.vertices[idx-1], self.vertices[idx]), np.cross(self.vertices[idxo], cm))) #) + np.roll(v, 1, axis=0)[idx])
                     istart = idxo - idx + 1 if idxo > idx else self.vertices.shape[0] - idx + idxo + 1
+                    print(self.__class__)
                     chnew1 = self.__class__(np.array([vnew,] + list(np.roll(self.vertices, -idx, axis=0)[:istart])), self)
                     chnew2 = self.__class__(np.array(list(np.roll(self.vertices, -idx, axis=0)[istart -1:]) + [vnew,]), self)
                     self.childs = [chnew1, chnew2]
@@ -728,7 +744,7 @@ def split_triangle2(v):
 def split_triangle_chull(ch):
     v = ch.vertices
     vnew = split_triangle(v)
-    chnew = [ConvexHullonSphere(np.array(v), ch) for v in vnew]
+    chnew = [ch.__class__(np.array(v), ch) for v in vnew]
     ch.childs = chnew
     return ch.childs
 
