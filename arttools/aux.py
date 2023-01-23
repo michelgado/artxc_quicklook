@@ -1,5 +1,6 @@
 import numpy as np
 from tqdm import tqdm
+from scipy.interpolate import interp1d as i1d
 from multiprocessing import Pool, Barrier, current_process
 from threading import Thread
 from itertools import repeat
@@ -29,6 +30,44 @@ def cache_single_result_np(function):
                 lastcallsignature = callsignature
         return result
     return newfunc
+
+
+class interp1d(i1d):
+    def integrate_in_intervals(self, xs, xe, mask=None):
+        if mask is None:
+            mask = np.ones(xs.size, bool)
+        if self._kind in ["nearest", "nearest-up", "previous", "next"]:
+            bl = self.x[0] > xs[0]
+            br = self.x[-1] < xs[-1]
+            size = self.x.size + br + bl + (self._kind in ["nearest", "nearest-up"])
+            xx = np.empty(size, float)
+            if bl:
+                xx[0] = xs[0]
+                if self._kind in ["nearest", "nearest-up"]:
+                    xx[1] = self.x[0]
+            else:
+                xx[0] = self.x[0]
+
+            if br:
+                xx[-1] = xe[-1]
+                if self._kind in ["nearest", "nearest-up"]:
+                    xx[-2] = self.x[-1]
+            else:
+                xx[-1] = self.x[-1]
+
+            if self._kind in ["nearest", "nearest-up"]:
+                xx[int(bl) + 1:xx.size-int(br)-1] = self.x[:-1] + np.diff(self.x)/2.
+            else:
+                xx[int(bl):xx.size-int(br)] = self.x[:]
+
+
+            sint = np.empty(xx.size, float)
+            sint[0] = 0
+            sint[1:] = np.cumsum(self((xx[1:] + xx[:-1])/2.)*np.diff(xx))
+            return np.interp(xe[mask], xx, sint) - np.interp(xs[mask], xx, sint)
+        else:
+            return np.array([self._spline.integrate(s, e)[0] for s, e, m in zip(xs, xe, mask) if m])  # scipy.integrolate uses De Boor algorithm for spline, this aproach also have explicit integrateion (not vectorized unfortunately)
+
 
 class DistributedObj(object):
     """
