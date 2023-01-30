@@ -96,6 +96,15 @@ def mksomething(urddata, hkdata, attdata, gti):
         spectra with different rmf - always use separately ????
 """
 
+@lru_cache(maxsize=7)
+def get_deadtime_for_dev(dev, gti=None):
+    mfile = get_caldata("DEADTIME", ANYTHINGTOURD[dev], gti)
+
+
+def get_obt_timecorr_calib():
+    #return os.path.join(ARTCALDBPATH, "art_clock_model_corr_v07092022.txt")
+    return fits.getdata(os.path.join(ARTCALDBPATH, "timecorrection.fits"), 1)
+
 def get_illumination_mask():
     """TODO: put link in the index file"""
     #mfile = fits.open(os.path.join(ARTCALDBPATH, "illum_masks6.fits.gz"))
@@ -115,7 +124,7 @@ def get_caldata(ctype, dev, gti=None):
     """
     given the urd as a unique key for calibration data
     """
-    caldata = idxtabl.query("INSTRUME=='%s' and CAL_CNAM=='%s'" % (dev, ctype)).sort_index()
+    caldata = idxtabl.query("INSTRUME=='%s' and CAL_CNAM=='%s'" % (ANYTHINGTOTELESCOPE.get(dev, dev), ctype)).sort_index()
     if gti is None:
         te, gaps = np.array([caldata.iloc[0].CAL_VSB, np.inf]), np.ones(1, bool)
     else:

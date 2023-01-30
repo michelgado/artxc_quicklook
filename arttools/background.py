@@ -6,6 +6,7 @@ from .energy  import get_arf_energy_function
 from .filters import Intervals
 from .orientation import get_photons_sky_coord
 from .containers import Urddata
+from .aux import interp1d
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from ._det_spatial import DL, dxya, offset_to_vec, vec_to_offset, vec_to_offset_pairs, raw_xy_to_vec, vec_to_offset_pairs
 from .psf import get_pix_overall_countrate_constbkg_ayut, urddata_to_opaxoffset, photbkg_pix_coeff
@@ -16,7 +17,7 @@ from functools import reduce
 from multiprocessing import cpu_count, Pool
 from multiprocessing.pool import ThreadPool
 import numpy as np
-from scipy.interpolate import RegularGridInterpolator, interp1d
+from scipy.interpolate import RegularGridInterpolator
 from scipy.integrate import quad
 import matplotlib.pyplot as plt
 from copy import copy
@@ -37,6 +38,9 @@ def make_background_det_map_for_urdn(urdn, imgfilter=None):
     return bkgmap
 
 def make_overall_background_map(subgrid=10, useshadowmask=True):
+    """
+    produces 2d interpolator for the backgroudn with subresolution
+    """
     xmin, xmax = -24.5*DL, 24.5*DL
     ymin, ymax = -24.5*DL, 24.5*DL
 
@@ -183,6 +187,22 @@ def get_background_events_weight(filters, udata):
     return spec[idxe, idxg]/np.sum(spec)
 
 
+def get_particle_and_photon_templates(filters, cspec=None):
+    gridp, specp = get_crabspec_for_filters(filters)
+    specp = (specp/np.diff(gridp["ENERGY"])[:, np.newaxis])/specp.sum()
+    if not cspec is None:
+        arf = get_arf_energy_function(get_arf())
+        spec = np.array([quad(lambda e: arf(e)*cspec(e), elow, ehi)[0] for elow, ehi in zip(gridp["ENERGY"][:-1], gridp["ENERGY"][1:])]) #np.concatenate([cspec/cspec.sum()/np.diff(egrid), [0, ]])
+        spec = spec/spec.sum()
+        specp = specp*(spec/specp.sum(axis=1))[:, np.newaxis]
+        specp = specp/specp.sum()
+
+    gridb, specb = get_background_spectrum(filters)
+    specb = (specb/np.diff(gridb["ENERGY"])[:, np.newaxis])/specb.sum()
+    return gridp, specp, specb
+
+
+
 def get_photon_to_particle_rate_ratio(urddata, cspec=None):
     """
     if cspec is not provided returns a ratio between particle and crab shaped spectrum for each grade and energy
@@ -218,25 +238,30 @@ def get_photon_vs_particle_prob(udata, urdweights={}, cspec=None):
 
 def get_background_lightcurve(tevts, bkgfilters, timebin, imgfilters=None, dtcorr={}):
     """
-    get surface brightness profiless
+    returns an approximation to the background lightcurve for the specified data filters
     """
     bkgprofiles = {urdn: get_background_surface_brigtnress(urdn, bkgfilters[urdn].filters, fill_value=0.) for urdn in bkgfilters}
     urdgti = {urdn: f.filters["TIME"] for urdn, f in bkgfilters.items()}
-    """
-    estimate background count rates ratio to the mean overall countrate
-    """
+
+    tgti = reduce(lambda a, b: a | b, urdgti.values())
+
+    te, gaps = tgti.arange(timebin)
+    ii = np.array([te[:-1], te[1:]]).T[gaps]
+    ffun = tgti.get_interpolation_function()
+
     tweights = np.sum(list(bkgprofiles.values()))/len(bkgprofiles)
     bkgscales = {urdn: np.sum(d)/tweights for urdn, d in bkgprofiles.items()}
 
+    tlive = sum((dtcorr.get(urdn, ffun)*urdgti[urdn].get_interpolation_function(bkgscales[urdn])).integrate_in_intervals(ii) for urdn in bkgfilters)
+    tt = np.concatenate([te[:1], te[1:][gaps]])
+    brate = np.diff(np.searchsorted(tevts, te))[gaps]/tlive
+
+    urdbkg = {urdn: interp1d(tt, np.concatenate([[0,], brate*bkgscales[urdn]]), kind="next", bounds_error=False, fill_value=tuple(brate[[0, -1]]))*dtcorr.get(urdn, ffun) for urdn in bkgfilters}
     """
     estimated mean background rate for background in the desired parameters space (energy, grade, coordinates)
     """
-    tebkg, mgapsbkg, cratebkg, crerrbkg, bkgrate = make_overall_lc(tevts, urdgti, timebin, bkgscales, dtcorr)
-    urdbkg = {urdn: bkgrate._scale(v) for urdn, v in bkgscales.items()}
     if not imgfilters is None:
         urdbkg = {urdn: lc._scale(get_background_bands_ratio(imgfilters[urdn].filters, bkgfilters[urdn].filters)) for urdn, lc in urdbkg.items()}
-    for urdn in dtcorr:
-        urdbkg[urdn].set_dtcorr(dtcorr[urdn])
     return urdbkg
 
 def get_bkg_lightcurve_for_app(urdbkg, filters, att, ax, appsize=120., te=np.array([-np.inf, np.inf]), dtcorr={}, illum_filters=None):
@@ -254,21 +279,24 @@ def get_bkg_lightcurve_for_app(urdbkg, filters, att, ax, appsize=120., te=np.arr
         if filters[urdn].filters["TIME"].arr.size == 0:
             continue
 
-        teu, gaps = (filters[urdn].filters["TIME"] & locgti).make_tedges(tel)
+        lgti = filters[urdn].filters["TIME"] & locgti
+        teu, gaps = lgti.make_tedges(tel)
         tc = (teu[1:] + teu[:-1])[gaps]/2.
         qval = att.for_urdn(urdn)(tc)
         idx = np.searchsorted(te, tc) - 1
         shmask = filters[urdn].filters.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
         x, y = xd[shmask], yd[shmask]
         pr = get_background_surface_brigtnress(urdn, filters[urdn].filters, fill_value=0., normalize=True)[shmask]
-        rl = urdbkg[urdn].integrate_in_timebins(teu, dtcorr.get(urdn, None))[gaps]
+        #rl = urdbkg[urdn].integrate_in_timebins(teu, dtcorr.get(urdn, None))[gaps]
+        print("fill value", urdbkg[urdn].fill_value, lgti.get_interpolation_function().fill_value)
+        rl = (urdbkg[urdn]*lgti.get_interpolation_function()).integrate_in_intervals(np.array([teu[:-1], teu[1:]]).T[gaps])
         qlist = qval*get_boresight_by_device(urdn)
         axvec = qlist.apply(ax, inverse=True)
         #print("rlsize", rl.size, idx.size, axvec.shape)
         #vec = raw_xy_to_vec(x, y)
         for pixnum, (xp, yp, bp, pv) in enumerate(zip(x, y, pr, vecs[shmask])):
             mask = np.sum(axvec*pv, axis=1) > cosa
-            if not illum_filters is None:
+            if not illum_filters is None and np.any(mask):
                 mask[mask] = ~illum_filters.check_pixel_in_illumination(urdn, xp, yp, qlist[mask])
             #print(lcs.size, idx.size, mask.size, mask.sum())
             np.add.at(lcs, idx[mask], rl[mask]*bp)

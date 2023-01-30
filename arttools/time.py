@@ -1,8 +1,10 @@
 import numpy as np
 from .mask import edges as maskedges
+from scipy.signal import medfilt
 from .filters import Intervals
 from math import pi
-from scipy.interpolate import interp1d
+from .aux import interp1d
+from functools import reduce
 import astropy.time as atime
 from astropy.table import Table
 
@@ -133,7 +135,7 @@ def get_filtered_table(tabledata, gti):
     """
     return tabledata[gti.mask_external(tabledata["TIME"])]
 
-def deadtime_correction(urdhk):
+def deadtime_correction(urdhk, deadtime=ARTDEADTIME):
     """
     produces effectivenesess of the events registration depending on overall countrate
 
@@ -152,10 +154,30 @@ def deadtime_correction(urdhk):
     dt = (ts[1:] - ts[:-1])
     mask = (dt > 1.) & (urdhk["EVENTS"][1:] > urdhk["EVENTS"][:-1])
     tcrate = (urdhk["EVENTS"][1:] - urdhk["EVENTS"][:-1])/dt
-    print("received tcrate", tcrate)
-    dtcorr = interp1d((ts[1:] + ts[:-1])[mask]/2., (1. - ARTDEADTIME*tcrate[mask]),
-                      bounds_error=False, fill_value=(1. - ARTDEADTIME*np.median(tcrate)))
+    dtcorr = interp1d(ts[1:][mask], (1. - deadtime*tcrate[mask]), kind="next",
+                      bounds_error=False, fill_value=(1. - deadtime*np.median(tcrate)))
     return dtcorr
+
+def deadtime_correction_from_evt(urddata, cscale, dt=1, med_filter_dt=1000):
+    te, gaps = urddaat.filters["TIME"].arange(dt)
+    crate = np.diff(np.searchsorted(urddata["TIME"], te))/np.diff(te)
+    mrate = medfilt(cs, 3)
+    mrate[[0, -1]] = mrate[[1, -2]]
+    nmed = int(dt/med_filter_dt)
+    nmed = nmed + (nmed + 1)%2
+    nrepeat = np.minimum(np.maximum((np.diff(te)/dt).astype(int), 1), nmed)
+    nrepeat[[0, -1]] = nmed//2 + 1
+    mgaps = np.repeat(gaps, nrepeat)
+    mgaps[:nmed//2] = False
+    mgaps[-(nmed//2):] = False
+    mcrate = medfilt(np.repeat(crate, nrepeat), nmed)[mgaps]
+    raise NotImpementedError("it seems that the median background count rate doesn't allow to trace deadtime variations with 1s resolution")
+    return interp1d(te[1:],)
+
+
+def combine_urddtc(urddtc, scales):
+    return reduce(lambda a, b: a + b, [d._scale(s) for d, s in zip(urddtc.values(), scales)])
+
 
 def get_hdu_times(hdu):
     return atime.Time(hdu.header["MJDREF"], format="mjd") + \
@@ -283,3 +305,15 @@ def make_ingti_times(time, ggti, stick_frac=0.5):
     maskgaps[cidx[1:-1] - 1] = False
     return tnew, maskgaps
 
+def get_global_time(obt, ctable):
+    cidx = np.searchsorted(ctable["OBT"], obt) - 1
+    deltat = 51544. + obt/86400. - ctable["T0"][cidx]  #Molkov's
+    dt = ctable["ph0"][cidx] + (ctable["p0"][cidx] + ctable["pdot0"][cidx]*deltat)*deltat
+    return dt
+
+def add_utc_timecol(urddata, ctable):
+    tnew = urddata["TIME"] + get_global_time(urddata["TIME"], ctable)
+    told = np.copy(urddata["TIME"])
+    urddata["TIME"] = tnew
+    d = np.lib.recfunctions.append_fields(urddata.data, ["OBT"], [told,], usemask=False)
+    return urddata.__class__(d, urddata.urdn, urddata.filters)   # see arttools/containers for Urddata initialization

@@ -33,9 +33,9 @@ def cache_single_result_np(function):
 
 
 class interp1d(i1d):
-    def integrate_in_intervals(self, xs, xe, mask=None):
-        if mask is None:
-            mask = np.ones(xs.size, bool)
+    IORDER = {"nearest": 0, "nearest-up": 0, "previous": 0, "next":0, "slinear": 0.9, "linear": 1, "quadratic": 2, "cubic": 3}
+    def integrate_in_intervals(self, ii):
+        xs, xe = ii.T
         if self._kind in ["nearest", "nearest-up", "previous", "next"]:
             bl = self.x[0] > xs[0]
             br = self.x[-1] < xs[-1]
@@ -64,9 +64,77 @@ class interp1d(i1d):
             sint = np.empty(xx.size, float)
             sint[0] = 0
             sint[1:] = np.cumsum(self((xx[1:] + xx[:-1])/2.)*np.diff(xx))
-            return np.interp(xe[mask], xx, sint) - np.interp(xs[mask], xx, sint)
+            return np.interp(xe, xx, sint) - np.interp(xs, xx, sint)
+
+        if self._kind=="linear":
+            k0 = np.empty(self.y.size + 1, float)
+            k0[1:-1] = self.y[:-1]
+            k0[[0, -1]] = tuple(self.fill_value)[0], tuple(self.fill_value)[-1]
+            k1 = np.empty(self.y.size + 1, float)
+            k1[1:-1] = np.diff(self.y)/np.diff(self.x)/2.
+            k1[[0, -1]] = 0.
+            sint = np.empty(self.y.size + 1, float)
+            sint[[0, -1]] = 0
+            sint[1:-1] = (self.y[1:] + self.y[:-1])*np.diff(self.x)/2.
+            sint = np.cumsum(sint)
+            ss = np.searchsorted(self.x, xs)
+            se = np.searchsorted(self.x, xe)
+            fadd = np.zeros(ss.size, float)
+            m = ss == se
+            fadd[m] = (self(xs[m]) + k1[ss[m]]*(xe - xs)[m])*(xe - xs)[m]
+            m = ss != se
+            fadd[m] = (self(xs[m]) + k1[ss[m]]*(self.x[ss[m]] - xs[m]))*(self.x[ss[m]] - xs[m]) + (k0[se[m] - 1] + k1[se[m]]*(xe[m] - self.x[se[m] - 1]))*(xe[m] - self.x[se[m] - 1]) + sint[se[m] - 1] - sint[ss[m]]
+            return fadd
         else:
-            return np.array([self._spline.integrate(s, e)[0] for s, e, m in zip(xs, xe, mask) if m])  # scipy.integrolate uses De Boor algorithm for spline, this aproach also have explicit integrateion (not vectorized unfortunately)
+            if self._spline.k == 1:
+                return self.__class__(self.x, self.y, bounds_error=self.bounds_error, fill_value=self.fill_value, kind="linear").integrate_in_intervals(ii)
+            else:
+                return np.array([self._spline.integrate(s, e) for s, e in ii])  # scipy.integrolate uses De Boor algorithm for spline, this aproach also have explicit integrateion (not vectorized unfortunately)
+
+    @property
+    def kind(self):
+        if self._kind in ["linear", "nearest", "nearest-up", "previous", "next"]:
+            return self._kind
+        return [None, "slinear", "quadratic", "cubic"][self._spline.k]
+
+    def __add__(self, other):
+        if self.kind != other.kind:
+            raise ValueError("can add only interpolations of the same kind")
+        xx = np.unique(np.concatenate([self.x, other.x]))
+        yy = self(xx) + other(xx)
+
+        bounds_error=self.bounds_error
+        if not self.fill_value is None and not other.fill_value is None:
+            fill_value = tuple(np.asarray(self.fill_value)+np.asarray(other.fill_value))
+        else:
+            fill_value = np.nan
+        return self.__class__(xx, yy, kind=self.kind, bounds_error=bounds_error, fill_value=tuple(fill_value))
+
+    def __mul__(self, other):
+        kind = self._kind if self.IORDER[self._kind] > self.IORDER[other._kind] else other._kind
+        xx = np.unique(np.concatenate([self.x, other.x]))
+        yy = self(xx)*other(xx)
+        bounds_error=self.bounds_error
+        if not self.fill_value is None and not other.fill_value is None:
+            fill_value = tuple(np.asarray(self.fill_value)*np.asarray(other.fill_value))
+        else:
+            fill_value = np.nan
+        return self.__class__(xx, yy, kind=kind, bounds_error=bounds_error, fill_value=tuple(fill_value))
+
+    def __and__(self, other):
+        if self.kind != other.kind:
+            raise ValueError("can join only interpolations of the same kind")
+        if (other.x[0] > self.x[0] and other.x[0] < self.x[1]) or (other.x[1] > self.x[0] and other.x[0] < self.x[1]) or \
+                (self.x[0] > other.x[0] and self.x[0] < other.x[1]) or (self.x[1] > other.x[0] and self.x[0] < other.x[1]):
+            raise ValueError("joined interpolation should not intersect")
+
+        left, right = (self, other) if self.x[-1] < other.x[0] else (other, self)
+        fill_value = (left.fill_value[0], right.fill_value[-1])
+        return interp1d(np.concatenate([left.x, right.x]), np.concatenate([left.y, right.y]), kind=self.kind, bounds_error=self.bounds_error & other.bounds_error, fill_value=fill_value)
+
+
+    def _scale(self, scale):
+        return self.__class__(self.x, self.y*scale, kind=self.kind, bounds_error=self.bounds_error, fill_value=tuple(np.asarray(self.fill_value)*scale))
 
 
 class DistributedObj(object):

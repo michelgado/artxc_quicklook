@@ -3,6 +3,7 @@ from collections import OrderedDict
 from astropy.io import fits
 from astropy.table import Table
 from .caldb import get_shadowmask_by_urd
+from .aux import interp1d
 from .telescope import URDNS
 
 
@@ -367,6 +368,20 @@ class Intervals(object):
         """
 
         return te, gaps
+
+    def get_interpolation_function(self, fillval=1):
+        fv = np.tile([0, fillval], self.arr.shape[0])
+
+        xx = self.arr.ravel()
+        fill_value = (1 if xx[0] == -np.inf else 0, 1 if xx[-1] == np.inf else 0)
+
+        if xx[0] == - np.inf:
+            xx = xx[1:]
+            fv = fv[1:]
+        if xx[-1] == np.inf:
+            xx = xx[:-1]
+            fv = fv[:-1]
+        return interp1d(xx, fv, kind="next", bounds_error=False, fill_value=fill_value)
 
 
 #======================================================================================================================
