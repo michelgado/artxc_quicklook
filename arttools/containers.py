@@ -46,15 +46,25 @@ class Urddata(object):
         print("exposure", sum([d.filters["TIME"].length for d in urddlist]))
         print("crossed exposure", reduce(lambda a, b: a | b, [d.filters["TIME"] for d in urddlist]).length)
         cfilter = reduce(lambda a, b: a | b, [d.filters for d in urddlist])
+
+        cfilter = urddlist[0].filters
+        for d in urddlist[1:]:
+            d.data = d.data[~cfilter.apply(d)]
+            cnew = cfilter | d.filters
+            cdiff = sum([cnew[k] != cfilter[k] for k in cnew])
+            if cdiff > 1:
+                raise ValueError("intersecting data sets")
+            cfilter = cnew
         """
         import pickle
         pickle.dump([cfilter, [d.filters for d in urddlist]], open("/srg/a1/work/andrey/ART-XC/lp20/filttest.pkl","wb"))
         print("tot filter", cfilter)
         print("volume", [d.filters.volume for d in urddlist], sum([d.filters.volume for d in urddlist]), cfilter.volume - sum([d.filters.volume for d in urddlist]))
         """
-
+        """
         if abs(cfilter.volume - sum([d.filters.volume for d in urddlist])) > 1e-1:
             raise ValueError("intersecting data sets")
+        """
 
         d = np.concatenate([d.data for d in urddlist])
         return cls(d[np.argsort(d["TIME"])], urddlist[0].urdn, cfilter)
