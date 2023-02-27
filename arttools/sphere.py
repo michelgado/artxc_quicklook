@@ -2,6 +2,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 from math import sin, cos, pi, sqrt, acos, asin
 from .vector import vec_to_pol, normalize
+from functools import lru_cache, reduce
 
 
 """
@@ -283,6 +284,7 @@ class ConvexHullonSphere(object):
         return np.logical_not(np.any(np.sum(self.orts[np.newaxis, :, :]*vecs[:, np.newaxis, :], axis=2)  > 1e-15, axis=1)) # > 1e-15 instead of 0, because of new vertices lying at the previos edges
 
 
+    @lru_cache(1)
     def expand(self, dtheta):
 
         return self.__class__(self.expand5(dtheta))
