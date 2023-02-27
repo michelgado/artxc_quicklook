@@ -4,6 +4,7 @@ from scipy.signal import medfilt
 from .filters import Intervals
 from math import pi
 from .aux import interp1d
+from .caldb import get_deadtime_for_dev
 from functools import reduce
 import astropy.time as atime
 from astropy.table import Table
@@ -135,7 +136,7 @@ def get_filtered_table(tabledata, gti):
     """
     return tabledata[gti.mask_external(tabledata["TIME"])]
 
-def deadtime_correction(urdhk, deadtime=ARTDEADTIME):
+def deadtime_correction(urdhk, urdn=None): #deadtime=ARTDEADTIME):
     """
     produces effectivenesess of the events registration depending on overall countrate
 
@@ -150,6 +151,11 @@ def deadtime_correction(urdhk, deadtime=ARTDEADTIME):
     n(1 - c\tau) = c
     n = c/(1 - c\tau)
     """
+    if urdn is None:
+        deadtime = ARTDEADTIME
+    else:
+        deadtime = get_deadtime_for_dev(urdn)
+
     ts = urdhk["TIME"]
     dt = (ts[1:] - ts[:-1])
     mask = (dt > 1.) & (urdhk["EVENTS"][1:] > urdhk["EVENTS"][:-1])
