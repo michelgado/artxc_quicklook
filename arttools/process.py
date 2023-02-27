@@ -96,7 +96,7 @@ def update_att(flist, tstart, fnames, atts):
         att = arttools.orientation.get_attdata(gfname)
         if (att.gti & ~atts.gti & ~gnew).exposure == 0:
             continue
-        g1 = att.get_axis_movement_speed_gti(lambda x: (x < pi/180.*110/3600) & (x > pi/180.*75./3600.)) & ~atts.gti & ~gnew
+        g1 = att.get_axis_movement_speed_gti(lambda x: (x < 110.) & (x > 75.)) & ~atts.gti & ~gnew
         if g1.exposure == 0:
             continue
         te, gaps = g1.arange(600)
@@ -327,7 +327,7 @@ def make_spec(ra, dec, survey=None, flist=None, usergti=tGTI):
 
             for urdn in imgfilters:
                 imgfilters[urdn]["ENERGY"] = arttools.filters.Intervals([el, eh])
-                urdgti[urdn] = urdgti[urdn] & att.get_axis_movement_speed_gti(lambda x: x > 70.*pi/180./3600.)
+                urdgti[urdn] = urdgti[urdn] & att.get_axis_movement_speed_gti(lambda x: x > 70.)
                 imgfilters[urdn]["TIME"] = urdgti[urdn]
                 urdevt[urdn] = urdevtt[urdn][imgfilters[urdn].apply(urdevtt[urdn])]
                 print("urdn", urdn, urdevt[urdn].size)
@@ -513,7 +513,7 @@ def analyze_survey(fpath, pastday=None):
         urdfiles += [os.path.join(pastday, "L0", l) for l in allfiles if "urd.fits" in l]
 
     attdata = AttDATA.concatenate([get_attdata(fname) for fname in set(gyrofiles)])
-    gti = attdata.get_axis_movement_speed_gti(lambda x: (x > pi/180.*60./3600) & (x < pi/180.*120./3600.))
+    gti = attdata.get_axis_movement_speed_gti(lambda x: (x > 60.) & (x < 120.))
     gti.remove_short_intervals(3.)
     if gti.exposure == 0:
         return None
@@ -638,14 +638,16 @@ def make_img(flist, outputname, usergti=tGTI, emin=4., emax=12., make_detmap=Fal
 
 
 def make_lightcurve(flist, outputname, ra, dec, dt, usergti=tGTI, emin=4., emax=12., app=120., spec=None, join_sep=0.):
+    timedel = float(dt)
     allfiles = [l.rstrip() for l in open(flist)]
     attfiles = [l for l in allfiles if "gyro.fits" in l]
     urdfiles = [l for l in allfiles if "urd.fits" == l[-8:]]
 
     srcvec = arttools.vector.pol_to_vec(*np.deg2rad([float(ra), float(dec)]).reshape((2, -1)))[0]
 
-    attdata = arttools.orientation.AttDATA.concatenate([arttools.orientation.get_attdata(gf) for gf in attfiles])
-    gti = attdata.circ_gti(srcvec, 22*60.)
+    attdata = arttools.orientation.AttDATA.concatenate([arttools.orientation.get_attdata(gf)  for gf in attfiles])
+    gti = attdata.circ_gti(srcvec, 18*60.)
+    print(gti.arr)
     attdata = attdata.apply_gti((gti & usergti) + [-3, 3])
 
 
@@ -659,9 +661,18 @@ def make_lightcurve(flist, outputname, ra, dec, dt, usergti=tGTI, emin=4., emax=
     for urdn in urddata:
         if not "ENERGY" in urddata[urdn].data.dtype.names:
             urddata[urdn] = arttools.energy.add_energies_and_grades(urddata[urdn], urdhk[urdn], arttools.caldb.get_energycal_by_urd(urdn), arttools.caldb.get_escale_by_urd(urdn))
+        #urddata[urdn].data["TIME"] = urddata[urdn]["TIME"] + arttools.time.get_global_time(urddata[urdn]["TIME"], arttools.caldb.get_obt_timecorr_calib())
+    print(urddata)
+    print({urdn: d.filters["TIME"] for urdn, d in urddata.items()})
+
+
+    #attadta = arttools.orientation.AttDATA(attdata.time + arttools.time.get_global_time(attdata.time, arttools.caldb.get_obt_timecorr_calib()), attdata(attdata.times), attdata.gti)
 
     bkgevts = {urdn: d.apply_filters(bkgfilters) for urdn, d in urddata.items()}
-    urdbkg = arttools.background.get_background_lightcurve(np.sort(np.concatenate([b['TIME'] for b in bkgevts.values()])),
+    if all([d.size == 0 for d in bkgevts.values()]):
+        urdbkg = {urdn: arttools.lightcurve.Bkgrate(np.array([-np.inf, np.inf]), np.array([0.,])) for urdn in URDNS}
+    else:
+        urdbkg = arttools.background.get_background_lightcurve(np.sort(np.concatenate([b['TIME'] for b in bkgevts.values()])),
                                                            bkgevts, 1000., imgfilters)
     urddtc = {urdn: arttools.time.deadtime_correction(hk) for urdn, hk in urdhk.items()}
 
@@ -713,6 +724,7 @@ def make_lightcurve(flist, outputname, ra, dec, dt, usergti=tGTI, emin=4., emax=
         idx0 = idx
 
     print("finall check lcs", np.sum(lcs), np.sum(dtn), np.sum(cs), "binned data", np.sum(lcsn), np.sum(dtnn), np.sum(csn))
+    print("timedel and time bins", timedel, dtn.min(), dtn.max(), np.min(dtnn), np.max(dtnn))
 
     cs = np.array(csn)
     dtn = np.array(dtnn)
@@ -722,22 +734,33 @@ def make_lightcurve(flist, outputname, ra, dec, dt, usergti=tGTI, emin=4., emax=
 
     dt = np.max(ten - tsn)
     tc = (ten + tsn)/2.
+    print("tc", tc)
+    pickle.dump(tc, open("/srg/a1/work/andrey/ART-XC/LMC/tc.pkl", "wb"))
+    print("ten - tsn", ten - tsn)
+    pickle.dump(ten - tsn, open("/srg/a1/work/andrey/ART-XC/LMC/tentsn.pkl", "wb"))
+    print("cs", cs)
+    pickle.dump(cs, open("/srg/a1/work/andrey/ART-XC/LMC/cs.pkl", "wb"))
+    print("lcs", lcs)
+    pickle.dump(lcs, open("/srg/a1/work/andrey/ART-XC/LMC/lcs.pkl", "wb"))
+    print("dtn", dtn, timedel)
+    pickle.dump(dtn, open("/srg/a1/work/andrey/ART-XC/LMC/dtn.pkl", "wb"))
 
     #d = Table.from_pandas(pandas.DataFrame({"TIME": tc, "TIMEDEL":dt, "COUNTS": cs, "BACKV": lcs, "FRACEXP": dtn[gaps]/dt, "RATE": np.maximum(cs - lcs, 0.)/dtn[gaps]}))
+    pickle.dump([tc, (ten - tsn), cs, lcs, dtn/timedel, dtn/timedel, np.maximum(cs - lcs, 0.)/dtn, np.sqrt(cs)/dtn], open("/srg/a1/work/andrey/ART-XC/LMC_X-1/tmp.pkl", "wb"))
 
-    d = QTable([tc*au.second, (ten - tsn)*au.second, cs*au.count, lcs*au.count, dtn/(ten - tsn), np.maximum(cs - lcs, 0.)/dtn*au.count/au.second, np.sqrt(cs)*au.count/dtn/au.second],
+    d = QTable([tc*au.second, (ten - tsn)*au.second, cs*au.count, lcs*au.count, dtn/timedel, np.maximum(cs - lcs, 0.)/dtn*au.count/au.second, np.sqrt(cs)*au.count/dtn/au.second],
                  names = ["TIME", "TIMEDEL", "COUNT", "BACKV", "FRACEXP", "RATE", "ERROR"])
     phdu = fits.PrimaryHDU(header=fits.Header({"CONTENT":"LIGHT CURVE", "TELESCOP":"ART-XC", "INSTRIME":"T1-7", "TIMEVERS":"OGIP/93-003", "ORIGIN":"IKI", "DATE":datetime.datetime.today().strftime("%y/%m/%d"),
-                                               "RA": ra, "DEC": dec,
-                                               "HDUCLASS": "OGIP", "HDUCLAS1":"LIGHTCURVE", "HDUCLAS2":"TOTAL", "HDUCLASS3": "RATE", "TIMEDER": "GEOCENTER",
+                                               "RA": ra, "DEC": dec, "EQUINOX": 2000.0, "RADECSYS": "FK5", "TIMEVERS": "OGIP/93-003", "AUTHOR": "", "TIMEDEL": timedel,
                                                 "DATE-OBS": tsobs.strftime("%y/%m/%d"), "TIME-OBS":tsobs.strftime("%H:%M:%S"),
                                                 "DATE-END": teobs.strftime("%y/%m/%d"), "TIME-END":teobs.strftime("%H:%M:%S"),
                                                }))
 
-    header = fits.Header({"TELESCOP": "ART-XC", "OBS-DATE": "DONTFORGETTOADDDATE", "RA": ra, "DEC": dec, "MJDREFI": int(arttools.caldb.MJDREF), "MJDREFF": arttools.caldb.MJDREF%1,
-                          "TUNIT1": "s", "TUNIT2":"s", "TUNIT3":"COUNTS", "TUNIT4":"COUNTS", "TUNIT5":"", "TUNIT6":"COUNTS/s", "TUNIT7": "COUNTS/s",
-                          "TIMEUNIT": "s", "TIMEZERO": 0.,
-                            "HDUCLASS": "OGIP", "HDUCLAS1":"LIGHTCURVE", "HDUCLAS2":"TOTAL", "HDUCLASS3": "RATE", "TIMEDER": "GEOCENTER",
+    header = fits.Header({"TELESCOP": "ART-XC", "OBS-DATE": tsobs.strftime("%y/%m/%d"), "RA": ra, "DEC": dec, "MJDREFI": int(arttools.caldb.MJDREF), "MJDREFF": arttools.caldb.MJDREF%1,
+                          "TUNIT1": "s", "TUNIT2":"s", "TUNIT3":"COUNTS", "TUNIT4":"COUNTS", "TUNIT5":"", "TUNIT6":"COUNTS/s", "TUNIT7": "COUNTS/s", "GCOUNT": 1, "TIMESYS": "MJD", "TIMEUNIT": "S", "EMIN":emin, "EMAX": emax,
+                          "TSTART": tgti.arr[0, 0], "TSTOP": tgti.arr[-1, 1], "ONTIME": gti.exposure, "TASSIGN": "SATELLITE","TIMEREF": "LOCAL", "CLOCKCOR":"NO", "BACKAPP": True, "DEADAPP": True, "VIGNAPP":True,
+                          "TIMEUNIT": "s", "TIMEZERO": 0., "EUNIT": "keV", "TIMEDEL": timedel,
+                          "HDUCLASS": "OGIP", "HDUCLAS1":"LIGHTCURVE", "HDUCLAS2":"TOTAL", "HDUCLAS3": "RATE", "TIMEDER": "GEOCENTER", "TIMVERS": "OGIP/93-003",
                           "DATE-OBS": tsobs.strftime("%y/%m/%d"), "TIME-OBS":tsobs.strftime("%H:%M:%S"),
                            "DATE-END": teobs.strftime("%y/%m/%d"), "TIME-END":teobs.strftime("%H:%M:%S"),
                           "DATE": datetime.datetime.today().strftime("%y/%m/%d"),
@@ -1015,4 +1038,3 @@ if __name__ == "__main__":
 
     if parsed.action == "get_dfiles":
         get_all_orig_data(parsed.output, ra=parsed.ra, dec=parsed.dec)
-

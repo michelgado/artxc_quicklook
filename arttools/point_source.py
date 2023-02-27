@@ -55,16 +55,13 @@ class Observation(object):
 
         vinit = normalize(np.sum(self.qlist.apply([1, 0, 0]), axis=0))
         vres = minimize(comprob, vinit, method="Nelder-Mead")
-        print([ifun(vec_to_offset_pairs(qc.apply(vres.x, inverse=True)))[0] for ifun, qc in zip(ipsffuncs, self.qlist)])
         return vres.x
 
 
     def get_rate_and_prob(self, ax, app=600., **kwargs):
         ax = normalize(ax)
         te, gaps = self.tgti.arange(1e6)
-        print("in texp")
         te, dtn = make_exposures(ax, te, self.attdata, self.urdgti, self.urdfilters, self.urdweights, app=app, **kwargs)
-        print("out texp")
         texp = np.sum(dtn)
         rate = self.i.size/dtn
         ipsffun = get_ipsf_interpolation_func()
@@ -73,13 +70,10 @@ class Observation(object):
         for il, jl, en, qc in zip(self.i[mask], self.j[mask], self.energy[mask], self.qlist[mask]):
             ipsffun.values = unpack_inverse_psf_ayut(il, jl, en)
             vals.append(ipsffun(vec_to_offset_pairs(qc.apply(ax, inverse=True)))[0])
-        print(vals)
         vals = np.array(vals)
         res = root(lambda x: np.sum(vals*self.pkoef[mask]/(1. + x*vals*self.pkoef[mask])) - texp, self.i.size/texp)
-        print(res)
         rate = res.x[0]
         pval = np.sum(np.log(1. + rate*vals*self.pkoef[mask]))
-        print(vals, rate, pval, texp)
         return rate, pval - rate*texp
 
 

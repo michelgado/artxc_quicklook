@@ -162,7 +162,6 @@ class SkyInterpolator(DistributedObj):
         xc = self.vmap.grid[0][[xil, xih, xih, xil]]
         yil, yih = max(np.searchsorted(yd, sval) - 1, 0), min(self.vmap.grid[1].size - np.searchsorted(yd[::-1], sval), self.vmap.grid[1].size - 1)
         yc = self.vmap.grid[1][[yil, yil, yih, yih]]
-
         #self._set_corners(offset_to_vec(xc, yc))
         #instead of running __init__ for convex hull each time, just monkey patching vertices, since we now they are convex and ordered anyway, not clean, but fast
         self.corners.vertices = offset_to_vec(xc, yc)
@@ -180,8 +179,10 @@ class SkyInterpolator(DistributedObj):
         return np.any(vm > 0.)
 
     @DistributedObj.for_each_argument
-    def interpolate_vmap_for_qvals(self, qvals, scales, vmap):
+    def interpolate_vmap_for_qvals(self, qvals, scales, vmap, update_corners=False):
         self.vmap.values = vmap
+        if update_corners:
+            self.update_corners()
         return [self.interpolate_vmap_for_qval(q, s) for q, s in zip(qvals, scales)]
 
     def direct_convolve(self, qvals, scales):
@@ -223,11 +224,11 @@ def cut_empty_img_bounds(img, minval=1e-9, symmetric=True):
 
 class WCSSky(SkyInterpolator):
 
-    def __init__(self, locwcs, vmap=None, rmap=None, mask=None, vecs=None, shape=None, mpnum=4, barrier=None):
+    def __init__(self, locwcs, vmap=None, rmap=None, mask=None, vecs=None, shape=None, mpnum=4, barrier=None, **kwargs):
         self.locwcs = locwcs
         self.shape = shape if not shape is None else [(0, int(locwcs.wcs.crpix[1]*2 + 1)), (0, int(locwcs.wcs.crpix[0]*2 + 1))]
         self.img = np.zeros(np.diff(self.shape, axis=1).ravel(), float)
-        super().__init__(mpnum=mpnum, barrier=barrier, vecs=vecs, vmap=vmap, rmap=rmap, mask=mask, shape=self.shape, locwcs=self.locwcs)
+        super().__init__(mpnum=mpnum, barrier=barrier, vecs=vecs, vmap=vmap, rmap=rmap, mask=mask, shape=self.shape, locwcs=self.locwcs, **kwargs)
 
     #mandatory methods required by vector interpolator
     #======================================================================================================================================
@@ -526,10 +527,12 @@ class SkyImage(DistributedObj):
 
 
     @DistributedObj.for_each_argument
-    def interpolate_vmap_for_qvals(self, qvals, scales, vmap, cache=False):
+    def interpolate_vmap_for_qvals(self, qvals, scales, vmap, cache=False, update_corners=False):
         if cache:
             self.cache.append((qvals, scales, vmap))
         self.vmap.values = vmap
+        if update_corners:
+            self.update_corners()
         return [self.interpolate_vmap_for_qval(q, s) for q, s in zip(qvals, scales)]
 
 

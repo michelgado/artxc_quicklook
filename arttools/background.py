@@ -10,7 +10,6 @@ from .aux import interp1d
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from ._det_spatial import DL, dxya, offset_to_vec, vec_to_offset, vec_to_offset_pairs, raw_xy_to_vec, vec_to_offset_pairs
 from .psf import get_pix_overall_countrate_constbkg_ayut, urddata_to_opaxoffset, photbkg_pix_coeff
-from .lightcurve import make_overall_lc, Bkgrate
 from .mosaic2 import SkyImage
 from .telescope import URDNS
 from functools import reduce
@@ -379,7 +378,7 @@ def get_bkg_spec(urdbkg, filters, att, ax, appsize, dtcorr={}, illum_filters=Non
         teu, gaps = filters[urdn].filters["TIME"].make_tedges(tel)
         tc = (teu[1:] + teu[:-1])[gaps]/2.
 
-        rl = urdbkg[urdn].integrate_in_timebins(teu, dtcorr.get(urdn, None))[gaps]
+        rl = urdbkg[urdn].integrate_in_intervals(np.array([teu[:-1], teu[1:]]).T[gaps]) #teu, dtcorr.get(urdn, None))[gaps]
         vec = raw_xy_to_vec(x, y)
 
         if not illum_filters is None:
@@ -406,7 +405,7 @@ def get_background_bands_ratio(filters1, filters2):
 
 def make_mock_data(urdn, bkglc, imgfilter, cspec=None):
     gti = imgfilter["TIME"]
-    te, gaps = gti.make_tedges(bkglc.te)
+    te, gaps = gti.make_tedges(bkglc.x)
     tc = (te[1:] + te[:-1])[gaps]/2.
     totcts = bkglc(tc)*np.diff(te)[gaps]
     grid, datacube = get_background_for_urdn(urdn)

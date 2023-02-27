@@ -1,21 +1,22 @@
-from .background import get_background_surface_brigtnress, get_background_spectrum
+from .background import get_background_surface_brigtnress, get_background_spectrum, get_particle_and_photon_templates
 from copy import copy
 from .caldb import get_shadowmask_by_urd, get_vigneting_by_urd, OPAX, OPAXOFFSET, get_boresight_by_device
-from ._det_spatial import offset_to_vec, vec_to_offset, DL, F
+from ._det_spatial import offset_to_vec, vec_to_offset, DL, F, raw_xy_to_offset, raw_xy_to_vec, vec_to_offset_pairs
 from .telescope import URDNS
 from .lightcurve import sum_lcs, Bkgrate
 from .time import emptyGTI
-from .atthist import hist_orientation_for_attdata, make_wcs_steps_quats
+from .atthist import hist_orientation_for_attdata, make_wcs_steps_quats, make_small_steps_quats
 from .vector import vec_to_pol, pol_to_vec
-from .filters import get_shadowmask_filter
+from .filters import get_shadowmask_filter, IndependentFilters
 from .energy  import get_arf_energy_function
 from .caldb import  get_optical_axis_offset_by_device, get_arf, get_crabspec
 from .planwcs import ConvexHullonSphere, convexhull_to_wcs
-from .psf import xy_to_opaxoffset, unpack_inverse_psf_ayut, unpack_inverse_psf_ayut, unpack_inverse_psf_with_weights, get_ipsf_interpolation_func
+from .psf import xy_to_opaxoffset, unpack_inverse_psf_ayut, unpack_inverse_psf_ayut, unpack_inverse_psf_with_weights, get_ipsf_interpolation_func, naive_bispline_interpolation, photbkg_pix_coeff
 from .mosaic2 import SkyImage
 from .spectr import get_filtered_crab_spectrum, Spec
 from .vignetting import get_blank_vignetting_interpolation_func
 from .illumination import DataDistributer
+from scipy.optimize import minimize, root
 
 from scipy.interpolate import interp1d, RegularGridInterpolator
 from scipy.integrate import quad
@@ -25,10 +26,117 @@ from astropy.wcs import WCS
 from multiprocessing import cpu_count, Pool, Process, Queue, RawArray
 import numpy as np
 from functools import reduce
-from math import pi, sqrt, sin, cos
+from math import pi, sqrt, sin, cos, log10
 import pickle
 
 MPNUM = cpu_count()
+
+
+
+def get_sb_distribution(ax, att, filters, urdbkg, wcs=None, photbkgrate=0., urdweights={}, dtcorr={}, illum_filters=None, cspec=None):
+    te, gaps, locgti = make_small_steps_quats(att, att.circ_gti(ax, 25.*60.))
+    tc = (te[1:] + te[:-1])[gaps]/2.
+    dt = np.diff(te)[gaps]
+    iifun = get_ipsf_interpolation_func()
+    x, y = np.mgrid[0:48:1, 0:48:1]
+    nmask = np.zeros((82, 82), bool)
+    nxof, nyof = raw_xy_to_offset(np.arange(-17.5, 65.6), np.arange(-17.5, 65.6))
+    imap, jmap = np.arange(-17, 65), np.arange(-10, 65)
+    ishift, jshift = np.mgrid[-7:8:1, -7:8:1]
+
+    v = raw_xy_to_vec(x.ravel(), y.ravel()).reshape(list(x.shape) + [3,])
+    cfilters = IndependentFilters({"TIME": locgti}) & filters
+    bmin = 1e5
+    bmax = 0.
+    smin = 1e5
+    smax = 0.
+    for urdn in filters:
+        pgrid, photrate, partrate  = get_particle_and_photon_templates(filters[urdn], cspec=cspec)
+        bkgprofile = get_background_surface_brigtnress(urdn, filters[urdn].filters, fill_value=0.)
+        bmax = max(partrate.max()*urdbkg[urdn].crate.max()*bkgprofile.max(), bmax)
+        brmin = urdbkg[urdn].crate[urdbkg[urdn].crate > 0.].min()
+        bmin = min(bmin, partrate.min()*brmin*bkgprofile[bkgprofile > 0.].min())
+        smax = max(smax, photrate.max()*urdweights.get(urdn, 1/7.))
+        smin = min(smin, photrate.min()*urdweights.get(urdn, 1/7.))
+
+    print("grid smax bmax", smax, bmax, smin, bmin)
+
+    sbin = np.linspace(0., smax*129/128.5, 129)
+    bbin = np.linspace(0., bmax*128/128.5, 129)
+    sbin = np.logspace(log10(smin) - 3, log10(smax), 129)
+    bbin = np.logspace(log10(bmin), log10(bmax), 129)
+    h = 0.
+    stsum = 0.
+    for urdn in filters:
+        nmask[:, :] = False
+        shmask = filters[urdn].meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
+        nmask[17:-17, 17:-17] = shmask
+        gtimask = filters[urdn]["TIME"].mask_external(tc)
+        dtl = dt[gtimask]
+        tcl = tc[gtimask]
+        srcvec = att.for_urdn(urdn)(tcl).apply(ax, inverse=True)
+        xax, yax = vec_to_offset(srcvec)
+        ic, jc = np.searchsorted(nxof, xax) - 1, np.searchsorted(nxof, yax) - 1
+        pixmask = nmask[np.repeat(ic, ishift.size) + np.tile(ishift.ravel(), ic.size), np.repeat(jc, jshift.size) + np.tile(jshift.ravel(), jc.size)]
+        rsize = pixmask.reshape((-1, ishift.size)).sum(axis=1)
+        i, j = np.repeat(ic, rsize) + np.tile(ishift.ravel(), ic.size)[pixmask] - 17, np.repeat(jc, rsize) + np.tile(jshift.ravel(), jc.size)[pixmask] - 17
+        #return i[:200], j[:200], np.repeat(srcvec, rsize, axis=0)[:200]
+        #print("resulted separate pix events", i.size)
+        dtl = np.repeat(dtl, rsize)
+        pgrid, photrate, partrate  = get_particle_and_photon_templates(filters[urdn], cspec=cspec)
+        egrid = (pgrid["ENERGY"][1:] + pgrid["ENERGY"][:-1])/2.
+        lbrate = urdbkg[urdn](np.repeat(tcl, rsize))
+        bkgprofile = get_background_surface_brigtnress(urdn, filters[urdn].filters, fill_value=0.)
+        pbkgprofile = photbkg_pix_coeff(urdn, filters[urdn], cspec=cspec)*urdweights.get(urdn, 1/7.)
+
+        bkgpixrate = bkgprofile[i, j]*lbrate
+        pbkgpixrate = pbkgprofile[i, j]*photbkgrate
+
+        for energy, gradphotrate, gradpartrate in zip(egrid, photrate, partrate): #[4.5,]: #egrid:
+            mask, s = naive_bispline_interpolation(i, j, np.repeat(srcvec, rsize, axis=0), energy=energy, urdn=urdn)
+            if not illum_filters is None:
+                imask = ~illum_filters.check_pixel_in_illumination(urdn, i[mask], j[mask], att.for_urdn(urdn)(np.repeat(tcl, rsize)[mask]))
+                s = s[imask]
+                mask[mask] = imask
+            dtw = dtl[mask]
+            stsum += np.sum(s*gradphotrate.sum()*dtw)*urdweights.get(urdn, 1/7.)
+            sl = (s[:, np.newaxis]*gradphotrate[np.newaxis, :]).ravel()*urdweights.get(urdn, 1/7.)
+            bl = (bkgpixrate[mask, np.newaxis]*gradpartrate[np.newaxis, :] + pbkgpixrate[mask, np.newaxis]*gradphotrate[np.newaxis,:]).ravel()
+            h += np.histogram2d(sl, bl, [sbin, bbin], weights = np.repeat(dtw, gradphotrate.size))[0]
+    return sbin, bbin, h
+
+
+import matplotlib.pyplot as plt
+
+def get_detection_quantiles_fluxes(sbin, bbin, dthist, thlim=11.3, quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.98,]):
+    ss = np.sqrt(sbin[1:]*sbin[:-1])
+    bs = np.sqrt(bbin[1:]*bbin[:-1])
+    B, S = np.meshgrid(bs, ss)
+    sopt, bopt = S[dthist>0.], B[dthist > 0.]
+    dt = dthist[dthist > 0.]
+    expt = np.sum(dt*sopt)   # vignetting corrected exposure
+    nbkg = np.sum(dt*bopt)   # overall expected background
+    rsig = sqrt(nbkg)/expt # 1 sigma backgorund events noise
+    rs = np.logspace(log10(rsig) - 1., log10(rsig) + 1., 50) # vicinity of the backgroudn noise
+    th = np.array([np.sum(np.log(r*sopt/bopt + 1)*(sopt*r + bopt)*dt) - expt*r for r in rs]) # math expecteation of Theta for r
+    plt.plot(rs, th)
+    rthreshold = interp1d(th, rs)(thlim) # sensitivity is approximately proportional to
+    rs = np.logspace(log10(rthreshold) - 1., log10(rthreshold) + 1., 60) # 0.1 -- 10 vicinity of 50% quntile
+    frac = []
+    #brut forse poisson simulation here :(
+    for rl in rs:
+        rdist = np.empty(2048, float)
+        thdist = np.empty(2048, float)
+        for i in range(2048):
+            nevts = np.random.poisson((sopt*rl + bopt)*dt)
+            sens, bens = np.repeat(sopt, nevts), np.repeat(bopt, nevts)
+            rres = root(lambda r: np.sum(sens/(sens*r + bens)) - expt, rl)
+            rdist[i] = max(rres.x[0], 0.)
+            thdist[i] = np.sum(np.log(sens*rdist[i]/bens + 1.)) - expt*rdist[i]
+        frac.append(np.sum(thdist > thlim)/2048.)
+    return interp1d(frac, rs)(quantiles)
+
+
 
 def make_detstat_psf_weigthtfun(rate, brate, imgfilter, powi=1, cspec=None, app=None):
     ee = np.array([4., 6., 8., 10., 12., 16., 20., 24., 30.])

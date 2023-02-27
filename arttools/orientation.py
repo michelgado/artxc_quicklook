@@ -1,5 +1,6 @@
 from scipy.spatial.transform import Rotation, Slerp
 import numpy as np
+from copy import copy
 from math import pi, cos, sin, sqrt
 from ._det_spatial import urd_to_vec, F, DL, raw_xy_to_vec
 from .sphere import ConvexHullonSphere, get_vec_triangle_area, FullSphere, ConvexHullonSphere, CVERTICES, SPHERE
@@ -131,7 +132,7 @@ class AttDATA(SlerpWithNaiveIndexing):
                 super().__init__(times, self(times))
                 # check interpolation one more time to see wether new neighbouring
                 # points provied good interpolation if no, exclude them from GTI
-                bti.remove_short_intervals(3.)
+                bti = bti.remove_short_intervals(3.01)
                 self.gti = self.gti & ~bti #self._check_interpolation_quality()
             else:
                 self.gti = self.gti & ~self._check_interpolation_quality()
@@ -195,7 +196,7 @@ class AttDATA(SlerpWithNaiveIndexing):
             return self.__class__(ts, quats, gti=gti)
         """
 
-    def get_axis_movement_speed_gti(self, query = lambda x: x < pi/180.*100/3600, ax=OPAX):
+    def get_axis_movement_speed_gti(self, query = lambda x: x < 100., ax=OPAX):
         """
         create a gti for the selected query based on the axis movement speed
 
@@ -205,13 +206,13 @@ class AttDATA(SlerpWithNaiveIndexing):
         is defined by the opax*rotvec/dt, this expression gives actual angular speed arcsec/sec
         of the defined axis
         """
-        tc, dt, dalphadt = self.get_optical_axis_movement_speed()
-        gaps = self.gti.mask_external(tc)
-        qedges = medges(query(dalphadt) & gaps)
+        tc, dt, dalphadt = self.get_optical_axis_movement_speed(ax)
+        qedges = medges(query(dalphadt)) + [0, -1]
 
-        return GTI(self.times[qedges])
 
-    def get_optical_axis_movement_speed(self):
+        return GTI(tc[qedges] + dt[qedges]*[-0.5, 0.5])
+
+    def get_optical_axis_movement_speed(self, ax=OPAX):
         """
         for provided gyrodata computes angular speed
         returns:
@@ -224,7 +225,7 @@ class AttDATA(SlerpWithNaiveIndexing):
         te, mgaps = self.gti.make_tedges(self.times)
         tc = ((te[1:] + te[:-1])/2.)[mgaps]
         dt = (te[1:] - te[:-1])[mgaps]
-        vecs = self(te).apply(OPAX)
+        vecs = self(te).apply(ax)
         dalphadt = np.arccos(np.sum(vecs[:-1]*vecs[1:], axis=1))[mgaps]/dt*180./pi*3600.
         return tc, dt, dalphadt
 
@@ -269,33 +270,32 @@ class AttDATA(SlerpWithNaiveIndexing):
 
     def chull_gti(self, chull, ax=OPAX):
         gti = tGTI
-        attl = self
+        attl = copy(self)
         for v in chull.orts:
             gti = gti & attl.circ_gti(-v, 90.*3600 - 0.1, ax=OPAX)
             if gti.exposure == 0:
                 break
-            attl = attl.apply_gti(gti)
+            attl = attl.apply_gti(gti, check_interpolation=False, hide_bad_interpolations=False)
         return gti
 
     def get_covering_chulls(self, split_criteria = lambda x: [x.apply_gti(gti) for gti in get_observations_gtis(x, False)[0]], fov=None): # expandsize=pi/180.*26.5/60.):
         if fov is None:
-            fov = raw_xy_to_vec(np.array([-1, 49, 49, -1]), np.array([-1, -1, 49, 49]))
+            fov = raw_xy_to_vec(np.array([-12, 60, 60, -12]), np.array([-12, -12, 60, 60]))
 
         gtis, chulls = [], []
+        ssegments = [c.expand(pi/180.*26.6/60.) for c in SPHERE.childs]
         for attloc in split_criteria(self):
-            vecs = np.concatenate([attloc(attloc.times).apply(v) for v in fov], axis=0)
-            mtot = np.zeros(vecs.shape[0], bool)
-            for ch in SPHERE.childs:
-                mask = ch.check_inside_polygon(vecs[~mtot])
-                #print("report", mtot.sum(), mask.sum())
-                if np.any(mask):
-                    chloc = ConvexHullonSphere(vecs[~mtot][mask]) #.expand(pi/180./3600)
-                    gti = attloc.chull_gti(ch)
-                    gtis.append(gti)
+            #vecs = np.concatenate([attloc(attloc.times).apply(v) for v in fov], axis=0)
+            #return vecs
+            #mtot = np.zeros(vecs.shape[0], bool)
+            for ch in ssegments: #SPHERE.childs:
+                #mask = ch.check_inside_polygon(vecs[~mtot])
+                gloc = attloc.chull_gti(ch)
+                if gloc.exposure > 0.:
+                    gtis.append(gloc)
+                    q = attloc(gloc.make_tedges(attloc.times)[0])
+                    chloc = ConvexHullonSphere(np.concatenate([q.apply(v) for v in fov], axis=0)) & ch
                     chulls.append(chloc)
-                    mtot[~mtot] = mask
-                if np.all(mtot):
-                    break
         print("report: ", [(ch.area, g.exposure) for ch, g in zip(chulls, gtis)])
         return list(zip(chulls, gtis)) if len(chulls) > 0 else [[], []]
 
@@ -334,10 +334,13 @@ def define_required_correction(attdata):
     The precise information on when to apply this corrections is stored in the CALDB files.
 
     """
-    a1 = attdata.apply_gti((attdata.gti & gyrocorrectionbti) + [1.4, -1.4])
-    a2 = attdata.apply_gti((attdata.gti & ~gyrocorrectionbti) + [1.4, -1.4])
-    print(a1.gti.exposure, a2.gti.exposure, (a1.gti & a2.gti).exposure)
-    return AttDATA.concatenate([a2, make_gyro_relativistic_correction(a1)]) #a2 + make_gyro_relativistic_correction(a1)
+    if (attdata.gti & gyrocorrectionbti).exposure > 0.:
+        a1 = attdata.apply_gti((attdata.gti & gyrocorrectionbti) + [1.4, -1.4])
+        a2 = attdata.apply_gti((attdata.gti & ~gyrocorrectionbti) + [1.4, -1.4])
+        print(a1.gti.exposure, a2.gti.exposure, (a1.gti & a2.gti).exposure)
+        return AttDATA.concatenate([a2, make_gyro_relativistic_correction(a1)]) #a2 + make_gyro_relativistic_correction(a1)
+    else:
+        return attdata
 
 
 def lorentz_transform(speed, vec, beta):
@@ -962,6 +965,7 @@ def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
     frac[m2] = (t1 - slerp.times[:-1][m2] + t3 - t2)/slerp.timedelta[m2] #np.maximum((np.minimum(phi2, rmod) - np.maximum(phi1, 0)), 0)/rmod #*slerp.timedelta[m2]
     return frac, gti
 
+
 def minimize_norm_to_survey(attdata, rpvec):
     """
     for provided attdata find vector, for which minimize SUM (vrot*opax)^2 where OPAX is mean optical axis oriented with attitude in fk5 frame
@@ -1000,7 +1004,7 @@ def align_with_z_quat(vec):
     q[3] = cos(alpha/2.)
     return Rotation(q)
 
-def get_attdata(fname, **kwargs):
+def get_attdata(fname, atshift=0., **kwargs):
     ffile = fits.open(fname)
     if "gyro" in fname:
         attdata = read_gyro_fits(ffile["ORIENTATION"])
@@ -1016,8 +1020,8 @@ def get_attdata(fname, **kwargs):
         d = ffile[1].data
         attdata = AttDATA(d["TIME"], ra_dec_roll_to_quat(d["RA"], d["DEC"], d["ROLL"])*get_boresight_by_device("GYRO"))
 
-    attdata.times = attdata.times - tshift
-    attdata.gti.arr = attdata.gti.arr - tshift
+    attdata.times = attdata.times - tshift + atshift
+    attdata.gti.arr = attdata.gti.arr - tshift + atshift
     if "gyro" in fname:
         attdata = define_required_correction(attdata)
     return attdata
@@ -1028,9 +1032,9 @@ def attdata_for_urd(att, urdn):
 
 def get_slews_gti(attdata):
     #slew is usually performed at 240"/sec speed, we naively check the times when optical axis movement speed reaches over 100"/sec
-    slews = attdata.get_axis_movement_speed_gti(lambda x: x > pi/180.*100./3600.)
+    slews = attdata.get_axis_movement_speed_gti(lambda x: x > 100.)
     #the 100"/sec speed is reached after 30 sec of acceleration
-    slews.remove_short_intervals(30.)
+    slews = slews.remove_short_intervals(30.)
     slews = slews + [-30, 30]
     return slews
 
@@ -1054,8 +1058,9 @@ def get_observations_gtis(attdata, join=True, intpsplitside=100.):
     chulls = []
     gtis = []
     sgti = ~(slews | (~attdata.gti).remove_short_intervals(intpsplitside))
+    print("sgti exposure", sgti.exposure)
     for i, arr in enumerate(sgti.arr):
-        attl = attdata.apply_gti(GTI(arr))
+        attl = attdata.apply_gti(GTI(arr), check_interpolation=False)
         print("check", i, arr[1] - arr[0], attl.gti.exposure)
         if attl.gti.exposure == 0.:
             continue
@@ -1215,6 +1220,7 @@ def get_linear_and_rot_components(vrot, ax=OPAX):
     moda = np.sqrt(np.sum(vrot**2, axis=1))
     vrot = vrot/moda[:, np.newaxis]
     cosp = np.sum(vrot*ax, axis=1)
+    cosp[moda == 0] = 0.
     sasq = (1 - cosp**2.)
     coslinear = (cosp**2 + sasq*np.cos(moda))
     cosrot = np.empty(coslinear.size, float)
@@ -1244,6 +1250,22 @@ def linear_segments(vectors, times, att, idx0=0, idx=None, precision=pi/180.*10.
         linear_segments(vectors[:s+1], times[:s+1], att, idx0, idx, precision)
         linear_segments(vectors[s:], times[s:], att, idx0 + s, idx, precision)
     return sorted(idx)
+
+def pack_attdata(att, precision):
+    """
+    pack attitude data in a way, optical axis position can be restored with 5 arcsec accuracy
+    """
+    acomp = []
+    for te, ts in att.gti.arr:
+        gloc = GTI([te, ts])
+        t, gaps = gloc.make_tedges(att.times)
+        vecs = att(t).apply([1, 0, 0])
+        idx = np.unique(linear_segments(vecs, t, idx=[0, t.size - 1], att=att, precision=precision))
+        aloc = AttDATA(t[idx], att(t[idx]), gti=gloc, check_interpolation=False)
+        aloc.gti = gloc
+        acomp.append(aloc)
+    return AttDATA.concatenate(acomp, check_interpolation=False) #hide_bad_interpolations=False)
+
 
 def add_new_compressed_att(att, times, names, fname):
     print(fname)

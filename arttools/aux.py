@@ -164,6 +164,7 @@ class DistributedObj(object):
         else:
             self.barrier = barrier
             self._pool = None
+        #super().__init__(**kwargs)
 
     @staticmethod
     def perform_for_each_argument(vals):

@@ -8,6 +8,8 @@ from .mosaic2 import WCSSky, get_source_photon_probability, get_zerosource_phots
 from .orientation import get_events_quats
 from scipy.spatial.transform import Rotation
 from scipy.optimize import minimize, root
+from multiprocessing.pool import ThreadPool
+from threading import Thread, Lock
 import numpy as np
 
 urdcrates = get_telescope_crabrates()
@@ -34,7 +36,7 @@ def make_detstat_tasks(urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate
     pbkgrate = {}
     for urdn in urdevt:
         profile = photbkg_pix_coeff(urdn, urdevt[urdn].filters)
-        pbkgrate[urdn] = profile[urdevt[urdn]["RAW_X"], urdevt[urdn]["RAW_Y"]]*photbkgrate
+        pbkgrate[urdn] = profile[urdevt[urdn]["RAW_X"], urdevt[urdn]["RAW_Y"]]*photbkgrate(urdevt[urdn], attdata) #attdata, urdevt)
     pbkgrate = concat_data_in_order(pbkgrate)
 
     pkoef = photprob/(bkgrates + pbkgrate*photprob)
@@ -44,32 +46,70 @@ def make_detstat_tasks(urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate
     return tasks
 
 
-def make_detmap(locwcs, emap, tasks, mpnum=20, maxit=101):
+def make_detmap(locwcs, emap, tasks, sky=None, mpnum=20, maxit=101, ctot=None):
     vmap = get_ipsf_interpolation_func()
-    sky = WCSSky(locwcs, vmap, mpnum=mpnum)
+    if sky is None:
+        sky = WCSSky(locwcs, vmap, mpnum=mpnum)
+    else:
+        sky.set_vmap(vmap)
 
     mask = emap > 1.
     sky.set_mask(mask)
 
     sky.set_action(get_source_photon_probability)
-    ctot = np.ones(emap.shape, float)*np.sum([t[1].size for t in tasks])/2.
-    rmap = np.maximum(ctot, 1.)/np.maximum(emap, 1.)
-    sky.set_rmap(2./np.maximum(emap, 1.))
+    if ctot is None:
+        ctot = np.ones(emap.shape, float)*np.sum([t[1].size for t in tasks])/2.
+        rmap = np.maximum(ctot, 0.)/np.maximum(emap, 1.)
+    else:
+        rmap = np.maximum(ctot, 0.)/np.maximum(emap, 1.)
+    sky.set_rmap(rmap) #2./np.maximum(emap, 1.))
     ctasks = tasks
+
+
+    def singlevec_estimation(lock):
+        while np.any(sky.mask):
+            lock.acquire()
+            idx = np.argmax(np.abs(sky.img[sky.mask] - ctot[sky.mask]))
+            idx = np.searchsorted(sky.mask.ravel().cumsum(), idx + 1)
+            #idx = np.searchsorted(sky.mask.ravel(), True) # get first True index
+            xi, yi = np.unravel_index(idx, sky.mask.shape)
+            locvec = sky.vecs[xi, yi]
+            locexp = emap[xi, yi]
+            rate, svals = estimate_rate_for_direction(locvec, locexp, ctasks)
+            ctot[xi, yi] = rate*locexp
+            print("executed", xi, yi, rate*locexp)
+            sky.mask[xi, yi] = False
+            lock.release()
+
+    """
+    lock = Lock()
+    singlethread = Thread(target=singlevec_estimation, args=(lock,))
+    singlethread.start()
+    """
+
 
     for _ in range(maxit):
         sky.clean_image()
         ctasks = [(q, s, c) if np.all(m) else (q[m], s[m], c) for (q, s, c), m in zip(ctasks, sky.rmap_convolve_multicore(ctasks, ordered=True, total=len(ctasks))) if np.any(m)]
+        #lock.acquire()
+        sky.img[:, :] = 0.
         sky.accumulate_img()
         mold = np.copy(sky.mask)
         sky.set_mask(np.all([sky.mask, ~((sky.img < ctot) & (sky.img < 0.5)), np.abs(sky.img - ctot) > np.maximum(ctot, 2)*5e-3], axis=0))
         print("img mask", sky.mask.size, sky.mask.sum(), "total events", np.sum([t[1].size for t in ctasks]))
         print("zero photons cts: ", sky.mask.sum(), "conv hist", np.histogram(np.abs(ctot[sky.mask] - sky.img[sky.mask])/ctot[sky.mask], [0., 1e-3, 1e-2, 5e-2, 0.1, 0.5, 1., 10000.]))
         ctot[mold] = np.copy(sky.img[mold])
+        #lock.release()
         sky.set_rmap(ctot/np.maximum(emap, 1.))
-        sky.img[:, :] = 0.
         if not np.any(sky.mask):
             break
+
+    """
+    lock.acquire()
+    sky.mask[:, :] = False
+    lock.release()
+    singlethread.join()
+    """
 
     sky.clean_image()
     sky.set_action(get_zerosource_photstat)
@@ -78,6 +118,7 @@ def make_detmap(locwcs, emap, tasks, mpnum=20, maxit=101):
     sky.img[:, :] = 0.
     sky.rmap_convolve_multicore(tasks, total=len(tasks))
     return ctot, np.copy(sky.img)
+
 
 def estimate_rate_for_direction(srcvec, exposure, tasks):
     vmap = get_ipsf_interpolation_func()

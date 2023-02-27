@@ -79,6 +79,25 @@ class Bkgrate(object):
         else:
             return self.crate[np.minimum(np.searchsorted(self.te, times) - 1, self.crate.size - 1)]*self.dtcorr(times)
 
+    @classmethod
+    def from_events(cls, times, gti, dt=None, scales=None):
+        if dt is None:
+            te = gti.arr.ravel()
+            gaps = np.ones(te.size - 1, bool)
+            gaps[1::2] = False
+        else:
+            te, gaps = gti.arange(dt)
+
+        if type(scales) == interp1d:
+            fill_value = i2.y[[0, -1]] if np.isnan(scales.fill_value) else fill_value
+            tii, gloc = gti.make_tedges(np.unique(np.cocnatenate([te, scales.x])))
+            tcc = (tii[1:] + tii[:-1])/2.
+            dtt = (tii[1:] - tii[:-1])
+            sloc = np.diff(interp(te, tii[1:], np.cumsum(scales(tcc)*gaps*dtt), left=fill_value[0], right=fill_value[1]))
+        else:
+            pass
+        #rate = np.searchsorted
+
     def set_dtcorr(self, dtcorr):
         self.dtcorr = dtcorr
 

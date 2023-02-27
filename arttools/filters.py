@@ -1,5 +1,6 @@
 import numpy as np
 from collections import OrderedDict
+from copy import copy
 from astropy.io import fits
 from astropy.table import Table
 from .caldb import get_shadowmask_by_urd
@@ -370,6 +371,10 @@ class Intervals(object):
         return te, gaps
 
     def get_interpolation_function(self, fillval=1):
+        """
+        produce interpolation function which returns fillval within intervals and 0 outside
+        this interpolation function can be integrated in arbitrary intervals
+        """
         fv = np.tile([0, fillval], self.arr.shape[0])
 
         xx = self.arr.ravel()
@@ -381,6 +386,9 @@ class Intervals(object):
         if xx[-1] == np.inf:
             xx = xx[:-1]
             fv = fv[:-1]
+        if xx.size == 1:
+            xx = np.repeat(xx, 2)
+            fv = np.repeat(fv, 2)
         return interp1d(xx, fv, kind="next", bounds_error=False, fill_value=fill_value)
 
 
@@ -679,6 +687,12 @@ class IndependentFilters(dict):
         return tuple((key, f.hash()) for key, f in self.items())
 
 
+    def substitute(self, key, newfilter):
+        newif = {k: copy(f) for k, f in self.items()}
+        newif[key] = newfilter
+        return self.__class__(newif)
+
+
 #======================================================================================================================
 
 def get_shadowmask_filter(urdn):
@@ -695,4 +709,4 @@ DEFAULTFILTERS = {urdn: IndependentFilters({"ENERGY": Intervals([4., 12.]),
                                             "GRADE": RationalSet(range(10)),
                                             ("RAW_X", "RAW_Y"): get_shadowmask_filter(urdn)}) for urdn in URDNS}
 
-DEFAULTBKGFILTER = IndependentFilters({"ENERGY": Intervals([40., 100.]), "RAW_X": InversedRationalSet([0, 47]), "RAW_Y":InversedRationalSet([0, 47])})
+DEFAULTBKGFILTER = IndependentFilters({"ENERGY": Intervals([40., 100.]), "RAW_X": RationalSet(range(1, 47)), "RAW_Y":RationalSet(range(1,47)), "GRADE": RationalSet(range(16))})

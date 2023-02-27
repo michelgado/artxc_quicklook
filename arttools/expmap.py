@@ -6,7 +6,6 @@ from .psf import get_ipsf_interpolation_func, unpack_inverse_psf_specweighted_ay
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from .vector import vec_to_pol, pol_to_vec
 from .mask import edges
-from .lightcurve import weigt_time_intervals
 from itertools import repeat
 from ._det_spatial import vec_to_offset_pairs, raw_xy_to_vec, rawxy_to_qcorr
 from .telescope import URDNS
@@ -123,7 +122,7 @@ def make_expmap_for_attdata(sky, attdata, imgfilters, dtcorr={}, kind="direct", 
             print("urd %d has no individual gti, continue" % urdn)
             continue
         print("urd %d, exposure %.1f, progress:" % (urdn, gti.exposure))
-        exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urdn), gti, \
+        exptime, qval, locgti = hist_orientation_for_attdata(attdata.for_urdn(urdn), gti, \
                                                              timecorrection=dtcorr.get(urdn, lambda x: 1), \
                                                              wcs=None if not hasattr(sky, "locwcs") else sky.locwcs)
         vmap = make_vignetting_for_urdn(urdn, imgfilters[urdn].filters, **kwargs)
@@ -135,12 +134,13 @@ def make_expmap_for_attdata(sky, attdata, imgfilters, dtcorr={}, kind="direct", 
         print(" done!")
     return np.copy(sky.img)
 
-def make_expmap_for_wcs(wcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dtcorr={}, kind="direct", urdweights={}, **kwargs):
+def make_expmap_for_wcs(wcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dtcorr={}, kind="direct", urdweights={}, sky=None, **kwargs):
     if shape is None:
         ysize, xsize = int(wcs.wcs.crpix[0]*2 + 1), int(wcs.wcs.crpix[1]*2 + 1)
         shape = [(0, xsize), (0, ysize)]
     print(wcs)
-    sky = WCSSky(wcs, shape=shape, mpnum=mpnum)
+    if sky is None:
+        sky = WCSSky(wcs, shape=shape, mpnum=mpnum)
     return make_expmap_for_attdata(sky, attdata, imgfilters, dtcorr=dtcorr, kind=kind, urdweights=urdweights, **kwargs)
 
 
@@ -173,7 +173,6 @@ def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNU
         idx = np.searchsorted(te, tc) - 1
         mloc = (idx >= 0) & (idx < te.size - 1)
         np.add.at(dtn, idx[mloc], vval[mloc]*dtu[mloc])
-    print("dtn sum", dtn.sum())
     if not illum_filters is None:
         dtn = dtn - illum_filters.make_exposures(direction, te, attdata, urdfilters, urdweights=urdweights, dtcorr=dtcorr, app=app, cspec=cspec)
     return te, dtn

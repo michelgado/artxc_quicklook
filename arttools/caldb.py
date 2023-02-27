@@ -44,6 +44,7 @@ FLATVIGN = False
 FLATBKG = False
 el = None
 bkggti = None
+imask = None
 
 qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])*Rotation([ 1.07307728e-05,  2.94924883e-07, -3.05587484e-05, -9.99999999e-01])
 qgyro0 = Rotation([0., 0., 0., 1.])
@@ -98,19 +99,27 @@ def mksomething(urddata, hkdata, attdata, gti):
 
 @lru_cache(maxsize=7)
 def get_deadtime_for_dev(dev, gti=None):
-    mfile = get_caldata("DEADTIME", ANYTHINGTOURD[dev], gti)
+    mfile, gti = get_caldata("DEADTIME", ANYTHINGTOURD[dev], gti)[0]
+    return fits.getdata(mfile, 1)["DEADTIME"][0]*1e-3
 
 
 def get_obt_timecorr_calib():
     #return os.path.join(ARTCALDBPATH, "art_clock_model_corr_v07092022.txt")
     return fits.getdata(os.path.join(ARTCALDBPATH, "timecorrection.fits"), 1)
 
+
+@lru_cache(maxsize=1)
 def get_illumination_mask():
     """TODO: put link in the index file"""
-    #mfile = fits.open(os.path.join(ARTCALDBPATH, "illum_masks6.fits.gz"))
-    mfile = fits.open(os.path.join(ARTCALDBPATH, "imask7.fits.gz"))
-    wcstempalte = WCS(mfile[0].header)
-    return wcstempalte, np.copy(mfile[1].data), np.copy(mfile[2].data).astype(bool)
+    pfile = fits.open(os.path.join(ARTCALDBPATH, "imask8.fits.gz"))
+    return pfile[1].data["STOP"], pfile[2].data["EDGES"], pfile[3].data["EDGES"], pfile[4].data.astype(bool)
+
+@lru_cache(maxsize=7)
+def get_stray_light_mask_by_urd(urdn):
+    return pickle.load(open(os.path.join(ARTCALDBPATH, "stray_light_patches.pkl"), "rb"))[urdn]
+
+
+
 
 def get_azimask_for_urdn(urdn):
     mfile = fits.open(os.path.join(ARTCALDBPATH, "azimuthal_imask7.fits.gz"))

@@ -6,6 +6,7 @@ import numpy as np
 from math import sin, cos, pi, sqrt
 from scipy.interpolate import RegularGridInterpolator
 from scipy.integrate import quad
+from functools import lru_cache
 
 def xy_to_opaxoffset(x, y, urdn):
     x0, y0 = (24, 24) if urdn is None else get_optical_axis_offset_by_device(urdn)
@@ -21,6 +22,7 @@ def rawxy_to_opaxoffset(rawx, rawy, urdn):
 def urddata_to_opaxoffset(urddata, urdn):
     return rawxy_to_opaxoffset(urddata["RAW_X"], urddata["RAW_Y"], urdn)
 
+@lru_cache(maxsize=7)
 def get_urddata_opaxofset_map(urdn):
     x, y = get_optical_axis_offset_by_device(urdn)
     X, Y = np.arange(48), np.arange(48)
@@ -79,7 +81,7 @@ def vec_to_ipsfpix(rawx, rawy, vec, urdn=None):
     yl[m] = -yl[m]
     return unpack_pix_index(i, j), xl, yl
 
-def naive_bispline_interpolation(rawx, rawy, vec, energy=None, urdn=None):
+def naive_bispline_interpolation(rawx, rawy, vec, energy=None, urdn=None): #, data=None):
     """
     for specified event provides bilinearly interpolated ipsf core values towards defined direction
     """
@@ -87,41 +89,47 @@ def naive_bispline_interpolation(rawx, rawy, vec, energy=None, urdn=None):
 
     imgmax = np.sum([unpack_inverse_psf_ayut(i, j)[:, 60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)], axis=0)
 
+    """
+    if data is None:
+    """
     data = get_ayut_inverse_psf_datacube_packed()
+
     k, xl, yl = vec_to_ipsfpix(rawx, rawy, vec, urdn)
     mask = np.all([xl > iifun.grid[0][0], xl < iifun.grid[0][-1], yl > iifun.grid[1][0], yl < iifun.grid[1][-1]], axis=0)
+    #print("mask sum and size", mask.size, mask.sum())
     k, xl, yl = k[mask], xl[mask], yl[mask]
     ip = np.searchsorted(iifun.grid[0], xl) - 1
     jp = np.searchsorted(iifun.grid[1], yl) - 1
-    eidx = np.searchsorted(ayutee, energy[mask]) - 1
+    eidx = np.searchsorted(ayutee, energy[mask]) - 1 if energy is np.array else np.searchsorted(ayutee, energy)
     ishift = 1 - 2*(xl < iifun.grid[0][ip])
     jshift = 1 - 2*(yl < iifun.grid[1][jp])
+    #print(ip.size, eidx.size)
     xg, yg = iifun.grid
     s = 1./((xg[ip + ishift] - xg[ip])*(yg[jp + jshift] - yg[jp]))*( \
         data[k, eidx, ip, jp]*(xg[ip+ishift] - xl)*(yg[jp + jshift] - yl) + \
         data[k, eidx, ip+ishift, jp]*(xl - xg[ip])*(yg[jp + jshift] - yl) + \
         data[k, eidx, ip, jp+jshift]*(xg[ip+ishift] - xl)*(yl - yg[jp]) + \
         data[k, eidx, ip+ishift, jp+jshift]*(xl - xg[ip])*(yl - yg[jp]))
-    return mask, s/imgmax[eidx]
+    mask[mask] = s > 0.
+    return mask, (s/imgmax[eidx])[s > 0.]
 
-def naive_bispline_interpolation_specweight(rawx, rawy, vec, data, urdn=None):
+def naive_bispline_interpolation_specweight(rawx, rawy, vec, data, urdn=None, cspec=None):
     """
     for specified event provides bilinearly interpolated ipsf core values towards defined direction
     """
     iifun = get_ipsf_interpolation_func()
-    w = get_specweights(imgfilter, ayutee, cspec)
+    if data is None:
+        w = get_specweights(imgfilter, ayutee, cspec)
+        data = np.sum(get_ayut_inverse_psf_datacube_packed()*w[np.newaxis, :, np.newaxis, np.newaxis], axis=1)
+        imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
+        data = data/imgmax #(data[0, 60, 60] + data[1, 60, 51]*4 + data[2, 51, 51]*4)
 
-    data = np.sum(get_ayut_inverse_psf_datacube_packed()*w[np.newaxis, :, np.newaxis, np.newaxis], axis=1)
-    imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
-    data = data/imgmax #(data[0, 60, 60] + data[1, 60, 51]*4 + data[2, 51, 51]*4)
-
-    data = get_ayut_inverse_psf_datacube_packed()
+    #data = get_ayut_inverse_psf_datacube_packed()
     k, xl, yl = vec_to_ipsfpix(rawx, rawy, vec, urdn)
     mask = np.all([xl > iifun.grid[0][0], xl < iifun.grid[0][-1], yl > iifun.grid[1][0], yl < iifun.grid[1][-1]], axis=0)
     k, xl, yl = k[mask], xl[mask], yl[mask]
     ip = np.searchsorted(iifun.grid[0], xl) - 1
     jp = np.searchsorted(iifun.grid[1], yl) - 1
-    eidx = np.searchsorted(ayutee, energy[mask]) - 1
     ishift = 1 - 2*(xl < iifun.grid[0][ip])
     jshift = 1 - 2*(yl < iifun.grid[1][jp])
     xg, yg = iifun.grid
@@ -229,11 +237,12 @@ def unpack_inverse_psf_datacube_specweight_ayut(imgfilter, cspec, app=None):
     w = get_specweights(imgfilter, ayutee, cspec)
 
     x, y = np.mgrid[-60:61:1, -60:61:1]
+    data = get_ayut_inverse_psf_datacube_packed()
     if not app is None:
         psfmask = x**2. + y**2. <= app**2./25.
         data = data*psfmask[np.newaxis, np.newaxis, :, :]
 
-    data = np.sum(get_ayut_inverse_psf_datacube_packed()*w[np.newaxis, :, np.newaxis, np.newaxis], axis=1)
+    data = np.sum(data*w[np.newaxis, :, np.newaxis, np.newaxis], axis=1)
     imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
     data = data/imgmax #(d
     return data

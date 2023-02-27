@@ -89,11 +89,18 @@ class DetectorVignetting(object):
     def img(self):
         return self._img/self.norm
 
-
     def produce_vignentting(self, x, y, i, j):
         for xp, yp, il, jl in zip(x, y, i, j):
             self.add_pix(xp, yp, il, jl)
         return self.img
+
+    def get_corners():
+        x = np.arange(48)[np.any(self.dpix, axis=1)]
+        xmin, xmax = x.min(), x.max()
+        y = np.arange(48)[np.any(self.dpix, axis=0)]
+        ymin, ymax = y.min(), y.max()
+        return raw_xy_to_offset(np.array([xmin, xmax, xmax, xmin]), np.array([ymin, ymin, ymax, ymax]))
+
 
 
 DEFAULVIGNIFUN = RegularGridInterpolator((np.arange(-262.5, 263, 1)/9.*DL, np.arange(-262.5, 263, 1)/9.*DL), np.zeros((526, 526)), bounds_error=False, fill_value=0.)
