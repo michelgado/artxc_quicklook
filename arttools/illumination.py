@@ -8,7 +8,8 @@ from .filters import Intervals, IndependentFilters
 from .time import emptyGTI, GTI
 from .aux import DistributedObj
 from .vector import vec_to_pol, pol_to_vec, normalize
-from .vignetting import DetectorVignetting, DEFAULVIGNIFUN
+from .vignetting import DetectorVignetting, DEFAULVIGNIFUN, sensitivity_second_order
+from .background import get_background_surface_brigtnress
 from .telescope import URDNS
 from .psf import get_ipsf_interpolation_func, unpack_inverse_psf_specweighted_ayut, rawxy_to_opaxoffset, \
     unpack_inverse_psf_with_weights, get_pix_overall_countrate_constbkg_ayut, get_urddata_opaxofset_map, naive_bispline_interpolation, \
@@ -313,10 +314,21 @@ class IlluminationSources(object):
         if not filters is None:
             self.set_urdn_data_filters(filters)
 
-    def set_urdn_data_filters(self, filters):
+    def set_urdn_data_filters(self, filters, scales=None, brates=None, vfun=None):
         self.filters = filters
         self.detmap = {urdn: DetectorVignetting(unpack_inverse_psf_specweighted_ayut(f.filters)) for urdn, f in filters.items()}
         self.shmasks = {urdn: f.filters.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)]) for urdn, f in filters.items()}
+        if not brates is None:
+            for urdn in self.detmap:
+                brate = get_background_surface_brigtnress(urdn, filters[urdn], normalize=True)*brates[urdn]
+                self.detmap[urdn].set_bkgratemap(brate)
+        if not scales is None:
+            for urdn in self.detmap:
+                self.detmap[urdn].set_vignscale(scales[urdn])
+        if not vfun is None:
+            for urdn in self.detmap:
+                self.detmap[urdn].set_vignetting_functions(vfun)
+
 
     def check_pixel_in_illumination(self, urdn, xof, yof, qloc, pixvec=None, mask=None):
         if mask is None:
@@ -421,8 +433,8 @@ class WCSSkyWithIllumination(WCSSky, IlluminationSources): #, IlluminationSource
         #WCSSky.__init__(self, isources, *args, filters=filters, **kwargs)
 
     @DistributedObj.for_each_process
-    def update_filters(self, filters):
-        self.set_urdn_data_filters(filters)
+    def update_filters(self, filters, **kwargs):
+        self.set_urdn_data_filters(filters, **kwargs)
 
     @DistributedObj.for_each_process
     def set_urdn(self, urdn):
@@ -462,6 +474,26 @@ class WCSSkyWithIllumination(WCSSky, IlluminationSources): #, IlluminationSource
 
         self.accumulate_img()
         return np.copy(self.img)
+
+    def get_theta_sq_component(self, attdata, urdfilters, brates, urdweights={}):
+        urdgtis = {urdn: f.filters["TIME"] for urdn, f in urdfilters.items()}
+        self.update_filters({urdn: f.filters for urdn, f in urdfilters.items()}, brates=brates, scales={urdn: urdweights.get(urdn, 1/7.) for urdn in urdfilters}, vfun=sensitivity_second_order)
+
+        for urdn in urdgtis:
+            self.set_urdn(urdn)
+            gti = urdgtis[urdn]
+            if gti.exposure == 0:
+                print("urd %d has no individual gti, continue" % urdn)
+                continue
+            print("urd %d, exposure %.1f, progress:" % (urdn, gti.exposure))
+            exptime, qval, locgti = hist_orientation_for_attdata(attdata.for_urdn(urdn), gti, \
+                                                                wcs=self.locwcs)
+            for _ in tqdm.tqdm(self.interpolate_vmap_for_qval(zip(qval, exptime)), total=exptime.size):
+                pass
+
+        self.accumulate_img()
+        return np.copy(self.img)
+
 
 
 

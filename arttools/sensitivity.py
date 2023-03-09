@@ -14,7 +14,7 @@ from .planwcs import ConvexHullonSphere, convexhull_to_wcs
 from .psf import xy_to_opaxoffset, unpack_inverse_psf_ayut, unpack_inverse_psf_ayut, unpack_inverse_psf_with_weights, get_ipsf_interpolation_func, naive_bispline_interpolation, photbkg_pix_coeff
 from .mosaic2 import SkyImage
 from .spectr import get_filtered_crab_spectrum, Spec
-from .vignetting import get_blank_vignetting_interpolation_func
+from .vignetting import get_blank_vignetting_interpolation_func, sensitivity_second_order, make_vignetting_for_urdn
 from .illumination import DataDistributer
 from scipy.optimize import minimize, root
 
@@ -31,6 +31,128 @@ import pickle
 
 MPNUM = cpu_count()
 
+"""
+let assume, that rate estimate is correct, then mean expected Theta is
+\sum ln((rs_i + b_i)/b_i) (rs_i + b_i) dt_i
+if we produce Teylor sequence from the logarithm
+
+ln(1 + rs/b)*(rs + b) = \sum_k (-1)^{k+1)/r (rs/b)^k (rs + b) = \
+    \ sum_k (-1)^{k+1)/k (rs/b)^{k + 1) b +  \sum_k (-1)^{k + 1} (rs/b)^k b = \
+    rs + \sum_k (-1)^{k + 1}(1/k - 1/(k + 1)) (rs/b)^{k + 1} b =
+    rs + \sum_k (-1)^{k + 1}/(k*(k + 1)) (rs/b)^{k + 1} b
+
+
+therefore, the logarithm can be presented as a Teylor sequenc
+
+"""
+def make_theta_2nd_order_overall_profile(imgfilters, brates, urdweights={}, subgrid=10, **kwargs):
+    """
+    produces combined effective area of seven detector as projected on sky
+
+    --------------
+    Parameters:
+        same as for make_vignetting_for_urdn, with additional arguments of urdweights - which weight vignetting map of each urd
+
+    returns:
+        scipy.interpolate.RegularGridInterpolator provideds projection of the effective area of seven detectors on sky, depending on offset from the "telescope axis" defined
+        by mean quaternion stored in CALDB, offsets can be coverted to vectors with arttools._det_spatial.offset_to_vec which assumes focal length arttools._det_spatial.F
+    """
+    if subgrid < 1:
+        print("ahtung! subgrid defines splines of the translation of multiple vigneting file into one map")
+        print("set subgrid to 2")
+        subgrid = 2
+    #x, y = np.meshgrid(np.linspace(-24., 24., 48*subgrid), np.np.linspace(-24., 24., 48*subgrid))
+    xmin, xmax = -40.*DL, 40.*DL
+    ymin, ymax = -40.*DL, 40.*DL
+
+    vecs = offset_to_vec(np.array([xmin, xmax, xmax, xmin]),
+                         np.array([ymin, ymin, ymax, ymax]))
+
+    vmaps = {}
+    for urdn in URDNS:
+        quat = get_boresight_by_device(urdn)
+        xlim, ylim = vec_to_offset(quat.apply(vecs))
+        xmin, xmax = min(xmin, xlim.min()), max(xmax, xlim.max())
+        ymin, ymax = min(ymin, ylim.min()), max(ymax, ylim.max())
+
+    dd = DL/subgrid
+    dx = dd - (xmax - xmin)%dd
+    xmin, xmax = xmin - dx/2., xmax + dx
+    dy = dd - (ymax - ymin)%dd
+    ymin, ymax = ymin - dy/2., ymax + dy
+
+    x, y = np.mgrid[xmin:xmax:dd, ymin:ymax:dd]
+    shape = x.shape
+    newvmap = np.zeros(shape, np.double)
+    vecs = offset_to_vec(np.ravel(x), np.ravel(y))
+
+    for urdn in URDNS:
+        vmap = make_vignetting_for_urdn(urdn, imgfilters[urdn].filters, brate=brates[urdn], scale=urdweights.get(urdn, 1./7.), vfun=sensitivity_second_order)
+        quat = get_boresight_by_device(urdn)
+        newvmap += vmap(vec_to_offset_pairs(quat.apply(vecs, inverse=True))).reshape(shape)
+
+    mask = newvmap > 0.
+    mx = mask.any(axis=1)
+    my = mask.any(axis=0)
+    mask = mx[:, np.newaxis] & my[np.newaxis, :]
+    vmapnew = np.copy(newvmap[mx, :][:, my])
+    vmapnew[np.isnan(vmapnew)] = 0.0
+
+    vmap = RegularGridInterpolator((x[:, 0][mx], y[0][my]), vmapnew, bounds_error=False, fill_value=0)
+    return vmap
+
+
+def get_theta_teylor_component(sky, attdata, imgfilters, brates, kind="direct", urdweights={}, **kwargs):
+    """
+    produce exposure map on the provided wcs area, with provided GTI and attitude data
+
+    There are two hidden nonobvious properties of the input data expected:
+    1) gti is expected to be a dict with key is urd number
+        and value is elevant for this urd gti in the form of Nx2 numpy array
+    2) wcs is expected to be astropy.wcs.WCS class,
+        crpix is expected to be exactly the central pixel of the image
+    """
+    urdgtis = {urdn: f.filters["TIME"] for urdn, f in imgfilters.items()}
+
+
+    if kind not in ["direct", "convolve"]:
+        raise ValueError("only  convolve and direct option for exposure mosiac is available")
+
+
+    overall_gti = emptyGTI
+
+    dtcc = {urdn: 1. for urdn in URDNS}
+    overall_gti = reduce(lambda a, b: a & b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
+
+    print("overal exposure", overall_gti.exposure)
+
+    if overall_gti.exposure > 0:
+        exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti, wcs=None if not hasattr(sky, "locwcs") else sky.locwcs)
+        vmap = make_theta_2nd_order_overall_profile(imgfilters, brates=brates, urdweights=urdweights, **kwargs)
+        sky.set_vmap(vmap)
+        print("exptime sum", exptime.sum())
+        print("produce overall urds expmap")
+        if kind == "direct":
+            sky.direct_convolve(qval, exptime)
+        elif kind == "convolve":
+            sky.fft_convolve(qval, exptime)
+
+    for urdn in urdgtis:
+        gti = urdgtis[urdn] & ~overall_gti
+        if gti.exposure == 0:
+            print("urd %d has no individual gti, continue" % urdn)
+            continue
+        print("urd %d, exposure %.1f, progress:" % (urdn, gti.exposure))
+        exptime, qval, locgti = hist_orientation_for_attdata(attdata.for_urdn(urdn), gti, \
+                                                             wcs=None if not hasattr(sky, "locwcs") else sky.locwcs)
+        vmap = make_vignetting_for_urdn(urdn, imgfilters[urdn].filters, brate=brates[urdn], scale=urdweights.get(urdn, 1/7.), vfun=sensitivity_second_order, **kwargs)
+        sky.set_vmap(vmap)
+        if kind == "direct":
+            sky.direct_convolve(qval, exptime)
+        elif kind == "convolve":
+            sky.fft_convolve(qval, exptime)
+        print(" done!")
+    return np.copy(sky.img)
 
 
 def get_sb_distribution(ax, att, filters, urdbkg, wcs=None, photbkgrate=0., urdweights={}, dtcorr={}, illum_filters=None, cspec=None):

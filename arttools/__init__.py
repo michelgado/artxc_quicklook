@@ -14,6 +14,7 @@ from . import arf
 from . import spatialindex
 from . import point_source
 from . import source_detection
+from . import dataindex
 
 __version__ = "0.3.1"
 
