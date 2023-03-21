@@ -174,7 +174,9 @@ def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNU
         mloc = (idx >= 0) & (idx < te.size - 1)
         np.add.at(dtn, idx[mloc], vval[mloc]*dtu[mloc])
     if not illum_filters is None:
-        dtn = dtn - illum_filters.make_exposures(direction, te, attdata, urdfilters, urdweights=urdweights, dtcorr=dtcorr, app=app, cspec=cspec)
+        dtillum = illum_filters.make_exposures(direction, te, attdata, urdfilters, urdweights=urdweights, dtcorr=dtcorr, app=app, cspec=cspec)
+        print("pure vignetted exposure %.1e, illumination cutout %.1e" % (dtn.sum(), dtillum.sum()))
+        dtn = dtn - dtillum
     return te, dtn
 
 

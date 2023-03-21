@@ -59,6 +59,7 @@ class SlerpWithNaiveIndexing(Slerp):
         else:
             return super().__call__(tarr)
 
+
     """
     def __init__(self, times, q):
         if np.asarray(times).size == 0:
@@ -403,13 +404,20 @@ def read_gyro_fits(gyrohdu):
     gyrodata = gyrohdu.data
     quats = np.array([gyrodata["QORT_%d" % i] for i in [1,2,3,0]]).T
     times = gyrodata["TIME"]
+    idx = np.argsort(times)
+    times = times[idx]
+    quats = quats[idx]
     mtime = np.median(times)
     masktimes = (times > mtime - 3.*24.*3600) & (times < mtime + 3.*24.*3600.)
+    #print("diffs", np.sum(np.diff(times) < 1e-8))
+    masktimes[1:] = np.diff(times) > 1e-8
     #masktimes = times > T0
     mask0quats = np.sum(quats**2, axis=1) > 0.
     mask = np.logical_and(masktimes, mask0quats)
+    #print("mask result", mask.size, np.sum(mask))
     times, quats = times[mask], quats[mask]
     ts, uidx = np.unique(times, return_index=True)
+    #print("unique", times.size, ts.size)
     ainit = AttDATA(ts, Rotation(quats[uidx])*qgyro0*get_boresight_by_device("GYRO"))
     return ainit
 
@@ -518,7 +526,10 @@ def get_photons_vectors(urddata, URDN, attdata, subscale=1, randomize=False):
     urdnatt = attdata.for_urdn(URDN)
     qall = urdnatt(np.repeat(urddata["TIME"], subscale*subscale))
     photonvecs = urd_to_vec(urddata, subscale, randomize)
-    phvec = qall.apply(photonvecs)
+    if photonvecs.size == 0:
+        phvec = photonvecs
+    else:
+        phvec = qall.apply(photonvecs)
     return phvec
 
 def add_ra_dec(urddata, urdn, attdata):

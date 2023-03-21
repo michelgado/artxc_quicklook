@@ -17,8 +17,8 @@ cr = np.sum([v for v in urdcrates.values()])
 urdcrates = {urdn: d/cr for urdn, d in urdcrates.items()}
 
 
-def make_detstat_tasks(urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate=0.):
-    bkgrates = {urdn: get_local_bkgrates(urdevt[urdn], bkglc[urdn]) for urdn in URDNS}
+def make_detstat_tasks(urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate=lambda evt, att: 0.):
+    bkgrates = {urdn: get_local_bkgrates(urdevt[urdn], bkglc[urdn]) for urdn in URDNS if urdn in urdevt}
     bkgrates = concat_data_in_order(bkgrates)
 
     print("quats")

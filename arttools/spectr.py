@@ -52,7 +52,7 @@ def get_specweights(imgfilter, ebins=np.array([-np.inf, np.inf]), cspec=None):
         egloc, egaps = imgfilter["ENERGY"].make_tedges(np.unique(np.concatenate([ebins, rgrid["ENERGY"]])))
         ec = (egloc[1:] + egloc[:-1])[egaps]/2.
         cspec = crabspec.integrate_in_bins(np.array([egloc[:-1], egloc[1:]]).T[egaps])
-        cspec = cspec.sum()
+        cspec = cspec/cspec.sum()
         np.add.at(w, np.searchsorted(ebins, ec) - 1, cspec)
     return w
 

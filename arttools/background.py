@@ -8,11 +8,12 @@ from .orientation import get_photons_sky_coord
 from .containers import Urddata
 from .aux import interp1d
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
-from ._det_spatial import DL, dxya, offset_to_vec, vec_to_offset, vec_to_offset_pairs, raw_xy_to_vec, vec_to_offset_pairs
+from ._det_spatial import DL, dxya, offset_to_vec, vec_to_offset, vec_to_offset_pairs, raw_xy_to_vec, vec_to_offset_pairs, offset_to_raw_xy
 from .psf import get_pix_overall_countrate_constbkg_ayut, urddata_to_opaxoffset, photbkg_pix_coeff
 from .mosaic2 import SkyImage
 from .telescope import URDNS
 from functools import reduce
+from scipy.spatial.transform import Rotation
 from multiprocessing import cpu_count, Pool
 from multiprocessing.pool import ThreadPool
 import numpy as np
@@ -160,7 +161,7 @@ def get_background_surface_brigtnress(urdn, filters, fill_value=np.nan, normaliz
     #shmask = filters.apply(np.column_stack([x.ravel(), y.ravel()]).ravel().view([("RAW_X", np.int), ("RAW_Y", np.int)])).reshape(x.shape)
     shmask = filters.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
     profile[~shmask] = fill_value
-    return profile/profile.sum() if normalize else profile
+    return profile/np.sum(profile[~np.isnan(profile)]) if normalize else profile
 
 def get_local_bkgrates(udata, bkglc):
     profile = get_background_surface_brigtnress(udata.urdn, udata.filters, 0., True)
@@ -263,17 +264,21 @@ def get_background_lightcurve(tevts, bkgfilters, timebin, imgfilters=None, dtcor
         urdbkg = {urdn: lc._scale(get_background_bands_ratio(imgfilters[urdn].filters, bkgfilters[urdn].filters)) for urdn, lc in urdbkg.items()}
     return urdbkg
 
-def get_bkg_lightcurve_for_app(urdbkg, filters, att, ax, appsize=120., te=np.array([-np.inf, np.inf]), dtcorr={}, illum_filters=None):
+def get_bkg_lightcurve_for_app(urdbkg, filters, att, ax, app=120., te=np.array([-np.inf, np.inf]), dtcorr={}, locphotbkg=0., urdweights={}, illum_filters=None, cspec=None):
     cgti = att.circ_gti(ax, 25.*60.)
     gti = reduce(lambda a, b: a | b, [f.filters["TIME"] & Intervals(te[[0, -1]]) & cgti for f in filters.values()])
 
     tel, gaps, locgti = make_small_steps_quats(att, gti, tedges=te)
-    tc = (tel[1:] + tel[:-1])[gaps]/2.
 
-    cosa = cos(appsize*pi/180./3600.)
+    cosa = cos(app*pi/180./3600.)
     lcs = np.zeros(te.size - 1, np.double)
     xd, yd = np.mgrid[0:48:1, 0:48:1]
     vecs = raw_xy_to_vec(xd.ravel(), yd.ravel()).reshape((48, 48, 3))
+
+    shiftsize = int(min(app, 300)//45 + 1)
+    print("shiftsize", shiftsize)
+    xc, yc = np.mgrid[-shiftsize: shiftsize + 1: 1, -shiftsize: shiftsize + 1: 1] # size of the pixel is 45 arcsec
+
     for urdn in filters:
         if filters[urdn].filters["TIME"].arr.size == 0:
             continue
@@ -281,29 +286,45 @@ def get_bkg_lightcurve_for_app(urdbkg, filters, att, ax, appsize=120., te=np.arr
         lgti = filters[urdn].filters["TIME"] & locgti
         teu, gaps = lgti.make_tedges(tel)
         tc = (teu[1:] + teu[:-1])[gaps]/2.
-        qval = att.for_urdn(urdn)(tc)
+        dtu = np.diff(teu)[gaps]
+        qlist = att.for_urdn(urdn)(tc)
         idx = np.searchsorted(te, tc) - 1
         shmask = filters[urdn].filters.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
         x, y = xd[shmask], yd[shmask]
-        pr = get_background_surface_brigtnress(urdn, filters[urdn].filters, fill_value=0., normalize=True)[shmask]
-        #rl = urdbkg[urdn].integrate_in_timebins(teu, dtcorr.get(urdn, None))[gaps]
-        print("fill value", urdbkg[urdn].fill_value, lgti.get_interpolation_function().fill_value)
+
+        cbkg = get_background_surface_brigtnress(urdn, filters[urdn].filters, fill_value=0., normalize=True)
         rl = (urdbkg[urdn]*lgti.get_interpolation_function()).integrate_in_intervals(np.array([teu[:-1], teu[1:]]).T[gaps])
-        qlist = qval*get_boresight_by_device(urdn)
-        axvec = qlist.apply(ax, inverse=True)
-        #print("rlsize", rl.size, idx.size, axvec.shape)
-        #vec = raw_xy_to_vec(x, y)
-        for pixnum, (xp, yp, bp, pv) in enumerate(zip(x, y, pr, vecs[shmask])):
-            mask = np.sum(axvec*pv, axis=1) > cosa
-            if not illum_filters is None and np.any(mask):
-                mask[mask] = ~illum_filters.check_pixel_in_illumination(urdn, xp, yp, qlist[mask])
-            #print(lcs.size, idx.size, mask.size, mask.sum())
-            np.add.at(lcs, idx[mask], rl[mask]*bp)
+        pbkg = photbkg_pix_coeff(urdn, filters[urdn].filters, cspec)*urdweights.get(urdn, 1/7.)*locphotbkg
+
+        vsrc = qlist.apply(ax, inverse=True)
+
+        xs, ys = offset_to_raw_xy(*vec_to_offset(vsrc))
+        xs, ys = xs[:, np.newaxis] + xc.ravel()[np.newaxis, :], ys[:, np.newaxis] + yc.ravel()[np.newaxis, :]
+        mask = np.logical_and.reduce([xs > -1, xs < 48, ys > -1, ys < 48])
+        mask[mask] = shmask[xs[mask], ys[mask]]
+        cvals = mask.sum(axis=1)
+        xs, ys = xs[mask], ys[mask]
+        mask = np.sum(vecs.reshape((48, 48, 3))[xs, ys]*np.repeat(vsrc, cvals, axis=0), axis=1) > cosa
+        xs, ys = xs[mask], ys[mask]
+        cu, cc = np.unique(np.repeat(np.arange(cvals.size), cvals)[mask], return_counts=True)
+        cvals[:] = 0
+        cvals[cu] = cc
+
+        qlist = Rotation(np.repeat(qlist.as_quat(), cvals, axis=0))
+        if not illum_filters is None:
+            mask = ~illum_filters.check_pixel_in_illumination(urdn, xs, ys, qlist, vecs.reshape((48, 48, 3))[xs, ys])
+            cu, cc = np.unique(np.repeat(np.arange(cvals.size), cvals)[mask], return_counts=True)
+            cvals[:] = 0
+            cvals[cu] = cc
+            xs, ys = xs[mask], ys[mask]
+
+        if np.sum(cvals) > 0:
+            idx = np.searchsorted(te, np.repeat(tc, cvals)) - 1
+            np.add.at(lcs, idx, np.repeat(dtu, cvals)*pbkg[xs, ys] + np.repeat(rl, cvals)*cbkg[xs, ys])
     return lcs
 
 
-def get_photbkg_lightcurve_for_app(photbkgmap, att, ax, appsize, te, filters, dtcorr={}, urdweights={}, wcs=None, cspec=None, illum_filters=None):
-    xd, yd = np.mgrid[0:48:1, 0:48:1]
+def get_photbkg_lightcurve_for_app(locphotbkg, att, ax, app, te, filters, dtcorr={}, urdweights={}, cspec=None, illum_filters=None):
 
     cgti = att.circ_gti(ax, 25.*60.)
     gti = reduce(lambda a, b: a | b, [f.filters["TIME"] & Intervals(te[[0, -1]]) & cgti for f in filters.values()])
@@ -311,10 +332,18 @@ def get_photbkg_lightcurve_for_app(photbkgmap, att, ax, appsize, te, filters, dt
     tel, gaps, locgti = make_small_steps_quats(att, gti, tedges=te)
     tc = (tel[1:] + tel[:-1])[gaps]/2.
 
-    cosa = cos(appsize*pi/180./3600.)
+    if app is None:
+        app= 300.
+
+    cosa = cos(app*pi/180./3600.)
     lcs = np.zeros(te.size - 1, np.double)
     xd, yd = np.mgrid[0:48:1, 0:48:1]
     vecs = raw_xy_to_vec(xd.ravel(), yd.ravel()).reshape((48, 48, 3))
+
+    shiftsize = int(min(app, 300)//45 + 1)
+    print("shiftsize", shiftsize)
+    xc, yc = np.mgrid[-shiftsize: shiftsize + 1: 1, -shiftsize: shiftsize + 1: 1] # size of the pixel is 45 arcsec
+
     for urdn in filters:
         dtn = np.diff(te)*(dtcorr[urdn](tc) if urdn in dtcorr else 1.) #timecorrection(tc)
         if filters[urdn].filters["TIME"].arr.size == 0:
@@ -324,24 +353,37 @@ def get_photbkg_lightcurve_for_app(photbkgmap, att, ax, appsize, te, filters, dt
         tc = (teu[1:] + teu[:-1])[gaps]/2.
         dtu = np.diff(teu)[gaps]
         idx = np.searchsorted(te, tc) - 1
+
+
+        pr = photbkg_pix_coeff(urdn, filters[urdn].filters, cspec)*urdweights.get(urdn, 1/7.)
+
         shmask = filters[urdn].filters.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
-        x, y = xd[shmask], yd[shmask]
-        pr = photbkg_pix_coeff(urdn, filters[urdn].filters, cspec)[shmask]*urdweights.get(urdn, 1/7.)
-        qlist = att.for_urdn(urdn)(tc)*get_boresight_by_device(urdn)
-        axvec = qlist.apply(ax, inverse=True) #vv = qlist.apply(px)
-        for pixnum, (xp, yp, bp, pv) in enumerate(zip(x, y, pr, vecs[shmask])):
-            mask = np.sum(axvec*pv, axis=1) > cosa
-            if wcs is None:
-                prate = np.full(mask.sum(), photbkgmap)
-            else:
-                ra, dec = vec_to_pol(vv[mask])
-                xl, yl = (wcs.all_world2pix(np.rad2deg([ra, dec]), 0) + 0.5).astype(int)[:, ::-1]
-                prate = photbkgmap[xl, yl]
-            if not illum_filters is None:
-                imask = ~illum_filters.check_pixel_in_illumination(urdn, xp, yp, qlist[mask])
-                prate = prate[imask]
-                mask[mask] = imask
-            np.add.at(lcs, idx[mask], prate*dtu[mask]*bp)
+        vsrc = qlist.apply(ax, inverse=True)
+
+        xs, ys = offset_to_raw_xy(*vec_to_offset(vsrc))
+        xs, ys = xs[:, np.newaxis] + xc.ravel()[np.newaxis, :], ys[:, np.newaxis] + yc.ravel()[np.newaxis, :]
+        mask = np.logical_and.reduce([xs > -1, xs < 48, ys > -1, ys < 48])
+        mask[mask] = shmask[xs[mask], ys[mask]]
+        cvals = mask.sum(axis=1)
+        xs, ys = xs[mask], ys[mask]
+        mask = np.sum(vecs.reshape((48, 48, 3))[xs, ys]*np.repeat(vsrc, cvals, axis=0), axis=1) > cosa
+        xs, ys = xs[mask], ys[mask]
+        cu, cc = np.unique(np.repeat(np.arange(cvals.size), cvals)[mask], return_counts=True)
+        cvals[:] = 0
+        cvals[cu] = cc
+
+        qlist = Rotation(np.repeat(qlist.as_quat(), cvals, axis=0))
+        if not illum_filters is None:
+            mask = ~illum_filters.check_pixel_in_illumination(urdn, xs, ys, qlist, vecs.reshape((48, 48, 3))[xs, ys])
+            cu, cc = np.unique(np.repeat(np.arange(cvals.size), cvals)[mask], return_counts=True)
+            cvals[:] = 0
+            cvals[cu] = cc
+            xs, ys = xs[mask], ys[mask]
+
+        if np.sum(cvals) > 0:
+            idx = np.searchsorted(te, np.repeat(tc, cvals)) - 1
+            dtu = np.repeat(dtu, cvals)
+            np.add.at(lcs, idx, dtu*locphotbkg*pr[xs, ys])
     return lcs
 
 def get_bkg_spec(urdbkg, filters, att, ax, appsize, dtcorr={}, illum_filters=None, mpnum=MPNUM):

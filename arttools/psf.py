@@ -81,16 +81,25 @@ def vec_to_ipsfpix(rawx, rawy, vec, urdn=None):
     yl[m] = -yl[m]
     return unpack_pix_index(i, j), xl, yl
 
-def naive_bispline_interpolation(rawx, rawy, vec, energy=None, urdn=None): #, data=None):
+def naive_bispline_interpolation(rawx, rawy, vec, energy=None, urdn=None, data=None): #imgfilter=None, cspec=None): #, data=None):
     """
     for specified event provides bilinearly interpolated ipsf core values towards defined direction
     """
     iifun = get_ipsf_interpolation_func()
 
     imgmax = np.sum([unpack_inverse_psf_ayut(i, j)[:, 60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)], axis=0)
-
     """
+    if imgfilter is None:
+        imgmax = np.sum([unpack_inverse_psf_ayut(i, j)[:, 60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)], axis=0)
+    else:
+        w = get_specweights(imgfilter, ayutee, None)
+        data = np.sum(get_ayut_inverse_psf_datacube_packed()*w[np.newaxis, :, np.newaxis, np.newaxis], axis=1)
+        imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
+
     if data is None:
+        data = get_ayut_inverse_psf_datacube_packed()
+        imgmax = np.sum([unpack_inverse_psf_ayut(i, j)[:, 60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)], axis=0)
+        data = data/imgmax
     """
     data = get_ayut_inverse_psf_datacube_packed()
 
@@ -100,7 +109,7 @@ def naive_bispline_interpolation(rawx, rawy, vec, energy=None, urdn=None): #, da
     k, xl, yl = k[mask], xl[mask], yl[mask]
     ip = np.searchsorted(iifun.grid[0], xl) - 1
     jp = np.searchsorted(iifun.grid[1], yl) - 1
-    eidx = np.searchsorted(ayutee, energy[mask]) - 1 if energy is np.array else np.searchsorted(ayutee, energy)
+    eidx = np.searchsorted(ayutee, energy[mask]) - 1 if type(energy) is np.ndarray else np.searchsorted(ayutee, energy)
     ishift = 1 - 2*(xl < iifun.grid[0][ip])
     jshift = 1 - 2*(yl < iifun.grid[1][jp])
     #print(ip.size, eidx.size)

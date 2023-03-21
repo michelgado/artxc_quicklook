@@ -10,6 +10,7 @@ from .filters import Intervals
 from .caldb import get_boresight_by_device, get_optical_axis_offset_by_device
 from .psf import xy_to_opaxoffset, unpack_inverse_psf_ayut, unpack_inverse_psf_specweighted_ayut
 from .spectr import get_specweights
+from .background import get_background_surface_brigtnress
 import numpy as np
 from math import log10, pi, sin, cos
 from functools import lru_cache
@@ -56,6 +57,11 @@ def get_energycorr_for_offset(urdn, xo, yo):
     shmask = get_shadowmask_by_urd(urdn)
     x0, y0 = get_optical_axis_offset_by_device(urdn)
 
+def basevignetting_function(ipsf, scale, brate):
+    return ipsf*scale
+
+def sensitivity_second_order(ipsf, scale, brate):
+    return (scale*ipsf)**2./brate
 
 class DetectorVignetting(object):
     def __init__(self, iifun, app=None):
@@ -63,14 +69,26 @@ class DetectorVignetting(object):
         self._set_ipsf_functions(iifun)
         self._img = np.zeros((46*9 + 121 - 9, 46*9 + 121 - 9), np.double)
         self.dpix = np.zeros((48, 48), bool)
+        self.bmap = np.zeros((48, 48), bool)
+        self.vignfun = basevignetting_function
+        self.vignscale = 1.
 
     def _set_ipsf_functions(self, iifun):
         self.iifun = iifun
         self.norm = np.sum([self.iifun(i, j)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
 
+    def set_vignetting_functions(self, vfun):
+        self.vignfun = vfun
+
+    def set_vignscale(self, scale):
+        self.vignscale = scale
+
     def _clean_img(self):
         self._img[:, :] = 0.
         self.dpix[:, :] = False
+
+    def set_bkgratemap(self, bmap):
+        self.bmap = bmap
 
     def _set_app_shmask(self, app):
         if app is None:
@@ -82,7 +100,7 @@ class DetectorVignetting(object):
 
     def add_pix(self, x, y, i, j):
         if ~self.dpix[x, y]:
-            self._img[(x - 1)*9: (x - 1)*9 + 121, (y - 1)*9: (y - 1)*9 + 121] += self.iifun(i, j)
+            self._img[(x - 1)*9: (x - 1)*9 + 121, (y - 1)*9: (y - 1)*9 + 121] += self.vignfun(self.iifun(i, j), self.vignscale, self.bmap[x, y])
             self.dpix[x, y] = True
 
     @property
@@ -106,7 +124,7 @@ class DetectorVignetting(object):
 DEFAULVIGNIFUN = RegularGridInterpolator((np.arange(-262.5, 263, 1)/9.*DL, np.arange(-262.5, 263, 1)/9.*DL), np.zeros((526, 526)), bounds_error=False, fill_value=0.)
 
 
-def make_vignetting_for_urdn(urdn, imgfilter, cspec=None, app=None):
+def make_vignetting_for_urdn(urdn, imgfilter, cspec=None, app=None, brate=None, vfun=None, scale=None):
     """
     for provided urd number  energy or photon index provided 2d interpolation function (RegularGridInterpolator) defining the profile of the effective area depending on offset
 
@@ -137,6 +155,13 @@ def make_vignetting_for_urdn(urdn, imgfilter, cspec=None, app=None):
     #w = get_specweights(imgfilter.filters, ee, cspec)
     iifun = unpack_inverse_psf_specweighted_ayut(imgfilter.filters, cspec=cspec)
     vmap = DetectorVignetting(iifun, app)
+    if not brate is None:
+        vmap.set_bkgratemap(get_background_surface_brigtnress(urdn, imgfilter, normalize=True)*brate)
+    if not scale is None:
+        vmap.set_vignscale(scale)
+    if not vfun is None:
+        vmap.set_vignetting_functions(vfun)
+
     for xl, yl, xo, yo in zip(x1, y1, x2, y2):
         vmap.add_pix(xl, yl, xo, yo)
 

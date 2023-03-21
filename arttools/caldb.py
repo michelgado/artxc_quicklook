@@ -45,6 +45,7 @@ FLATBKG = False
 el = None
 bkggti = None
 imask = None
+usenewquat = False
 
 qbokz0 = Rotation([0., -0.707106781186548,  0., 0.707106781186548])*Rotation([ 1.07307728e-05,  2.94924883e-07, -3.05587484e-05, -9.99999999e-01])
 qgyro0 = Rotation([0., 0., 0., 1.])
@@ -170,8 +171,22 @@ def get_optical_axis_offset_by_device(dev):
     return OPAXOFFSET[dev]
 
 
-@lru_cache(maxsize=7)
+def set_quat_state(usenew):
+    global usenewquat
+    usenewquat = usenew
+
+#@lru_cache(maxsize=7)
 def get_boresight_by_device(dev):
+    global usenewquat
+    print("usenewquat", usenewquat)
+    if dev == 28 and usenewquat:
+        #return Rotation([-9.00361776e-05, -5.77130725e-05,  1.19482282e-05,  9.99999994e-01])
+        return Rotation([7.43509950e-04, -4.22695966e-05, -4.01483537e-06,  9.99999723e-01])
+    if dev == 22 and usenewquat:
+        #return Rotation([-2.47195250e-04, -2.62154574e-05, -8.48821491e-06,  9.99999969e-01])
+        return Rotation([-4.08141862e-04, -4.21216133e-05, -2.19725598e-06,  9.99999916e-01])
+    if dev == 23 and usenewquat:
+        return Rotation([1.28239400e-03, -4.41720522e-05, -2.55864811e-06,  9.99999177e-01])
     return Rotation(fits.getdata(get_caldata("BORESIGH", ANYTHINGTOTELESCOPE.get(dev, dev))[0][0], 1)[0])
 
 
