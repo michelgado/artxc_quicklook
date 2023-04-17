@@ -98,6 +98,17 @@ def mksomething(urddata, hkdata, attdata, gti):
         spectra with different rmf - always use separately ????
 """
 
+
+def get_bokz_timepatches(gti=tGTI):
+    patches = np.loadtxt("/srg/a1/work/andrey/ART-XC/Crab/bokz_time_patches.txt").reshape((-1, 2))
+    return patches[gti.mask_external(patches[:, 0])]
+
+@lru_cache(maxsize=1)
+def get_bokz_gti():
+    bti = GTI(np.loadtxt("/srg/a1/work/andrey/ART-XC/Crab/bokz_btis_patches.txt"))
+    return bti
+
+
 @lru_cache(maxsize=7)
 def get_deadtime_for_dev(dev, gti=None):
     mfile, gti = get_caldata("DEADTIME", ANYTHINGTOURD[dev], gti)[0]
@@ -178,7 +189,14 @@ def set_quat_state(usenew):
 #@lru_cache(maxsize=7)
 def get_boresight_by_device(dev):
     global usenewquat
-    print("usenewquat", usenewquat)
+    #print("usenewquat", usenewquat)
+    if usenewquat and dev in [28, 22, 23, 24, 25, 26, 30]:
+        alpha, beta, angle = pickle.load(open("/srg/a1/work/andrey/ART-XC/Crab/%d_qcorr_lsrc.pkl" % int(dev), "rb")).x
+        return Rotation.from_rotvec([cos(alpha)*cos(beta)*angle, cos(alpha)*sin(beta)*angle, sin(alpha)*angle])
+    if str(dev).lower() == "bokz":
+        return Rotation([ 0.12630457, -0.00162314, -0.00102878,  0.99198965]) # temporal patch, based on the comparison of GYRO and BOKZ from 2020 02 01 (correction presented at 2023 04 04)
+
+    """
     if dev == 28 and usenewquat:
         #return Rotation([-9.00361776e-05, -5.77130725e-05,  1.19482282e-05,  9.99999994e-01])
         return Rotation([7.43509950e-04, -4.22695966e-05, -4.01483537e-06,  9.99999723e-01])
@@ -187,6 +205,7 @@ def get_boresight_by_device(dev):
         return Rotation([-4.08141862e-04, -4.21216133e-05, -2.19725598e-06,  9.99999916e-01])
     if dev == 23 and usenewquat:
         return Rotation([1.28239400e-03, -4.41720522e-05, -2.55864811e-06,  9.99999177e-01])
+    """
     return Rotation(fits.getdata(get_caldata("BORESIGH", ANYTHINGTOTELESCOPE.get(dev, dev))[0][0], 1)[0])
 
 
@@ -251,7 +270,12 @@ def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=in
 
 #temporary solution for time shifts in different device relative to spacecraft time
 def get_device_timeshift(dev):
-    return 0.97 if dev == "gyro" else 0.97
+    dt = 0.
+    if str(dev).lower() == "gyro":
+        dt = 0.97
+    if str(dev).lower() == "bokz":
+        dt = 1.672
+    return dt
 
 def get_background_for_urdn(urdn):
     global el, bkggti
@@ -323,8 +347,8 @@ def get_ayut_inversed_psf_data_packed():
 
 @lru_cache(maxsize=1)
 def get_ayut_inverse_psf_datacube_packed():
-    ipsf = np.copy(get_ayut_inversed_psf_data_packed()[2].data)
-    #ipsf = pickle.load(open("/srg/a1/work/srg/ARTCALDB/caldb_files/iPSF_marshall.pkl", "rb"))
+    #ipsf = np.copy(get_ayut_inversed_psf_data_packed()[2].data)
+    ipsf = pickle.load(open("/srg/a1/work/srg/ARTCALDB/caldb_files/iPSF_marshall.pkl", "rb"))
     return ipsf
 
 def get_arf():

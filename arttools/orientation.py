@@ -4,7 +4,7 @@ from copy import copy
 from math import pi, cos, sin, sqrt
 from ._det_spatial import urd_to_vec, F, DL, raw_xy_to_vec
 from .sphere import ConvexHullonSphere, get_vec_triangle_area, FullSphere, ConvexHullonSphere, CVERTICES, SPHERE
-from .time import get_hdu_times, GTI, tGTI, emptyGTI
+from .time import get_hdu_times, GTI, tGTI, emptyGTI, board_time_to_jyear
 from .vector import vec_to_pol, pol_to_vec, normalize
 from .caldb import T0, get_boresight_by_device, get_device_timeshift, relativistic_corrections_gti, MJDREF
 from .containers import Urddata
@@ -87,7 +87,7 @@ class SlerpWithNaiveIndexing(Slerp):
         # but, one can imagine, that sparse points are completed with more
         idxmix = np.searchsorted(self.times, other.times)
         mask = np.logical_and(idxmix > 0, idxmix < self.times.size)
-        print("quat crossing", mask.sum())
+        #print("quat crossing", mask.sum())
         if np.any(mask):
             if not np.allclose(self(other.times[mask]).as_quat(),
                                other(other.times[mask]).as_quat()):
@@ -184,9 +184,13 @@ class AttDATA(SlerpWithNaiveIndexing):
     def apply_gti(self, gti, **kwargs):
         gti = GTI(gti)
         gti = gti & self.gti
-        ts, mgaps = gti.make_tedges(self.times)
-        quats = self(ts)
-        return self.__class__(ts, quats, gti=gti, **kwargs)
+        if gti.exposure == 0:
+            res = self.__class__([], [], gti=emptyGTI)
+        else:
+            ts, mgaps = gti.make_tedges(self.times)
+            quats = self(ts)
+            res = self.__class__(ts, quats, gti=gti, **kwargs)
+        return res
         """
         print(gti.exposure)
         if gti.exposure == 0.:
@@ -211,7 +215,7 @@ class AttDATA(SlerpWithNaiveIndexing):
         qedges = medges(query(dalphadt)) + [0, -1]
 
 
-        return GTI(tc[qedges] + dt[qedges]*[-0.5, 0.5])
+        return (GTI(tc[qedges] + dt[qedges]*[-0.5, 0.5])) & self.gti
 
     def get_optical_axis_movement_speed(self, ax=OPAX):
         """
@@ -422,7 +426,7 @@ def read_gyro_fits(gyrohdu):
     return ainit
 
 
-def read_bokz_fits(bokzhdu):
+def read_bokz_fits(bokzhdu, perform_time_corrections=True, **kwargs):
     """
     reads bokz quaternion from fits file hdu and returns AttDATA  container
 
@@ -433,22 +437,102 @@ def read_bokz_fits(bokzhdu):
     return:
         AttDATA container, which bares attitude information
     """
-    bokzdata = bokzhdu.data
+    bokzdata = np.copy(bokzhdu.data)
+    md1 = np.ones(bokzdata.size, bool)
+    md1[1:] = bokzdata["TIME"][1:] != bokzdata["TIME"][:-1]
+    bokzdata = bokzdata[md1]
+
     mat = np.array([[bokzdata["MOR%d%d" % (i, j)] for i in range(3)] for j in range(3)])
     mat = np.copy(mat.swapaxes(2, 1).swapaxes(1, 0)) #.astype(np.float16)
-    matn = np.zeros(mat.shape, np.double)
-    matn[:, :, :] = mat
-    mat = matn
-    mask0quats = np.linalg.det(mat) != 0.
-    masktimes = bokzdata["TIME"] > T0
+
+    mna = np.any(np.isnan(mat), axis=(1, 2))
+    mat[mna] = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+
     q = Rotation.from_matrix(mat)
-    #mask = np.logical_and(mask0quats, masktimes)
-    mask = ~np.isnan(np.sum(q.as_rotvec()**2, axis=1))
-    jyear = get_hdu_times(bokzhdu).jyear[mask]
-    qbokz = earth_precession_quat(jyear).inv()*q[mask]*qbokz0*\
+
+    jyear = board_time_to_jyear(bokzdata["TIME"]) # get_hdu_times(bokzhdu).jyear
+    qbokz = earth_precession_quat(jyear).inv()*q*qbokz0*\
             get_boresight_by_device("BOKZ")
-    ts, uidx = np.unique(bokzdata["TIME"][mask], return_index=True)
-    return AttDATA(ts, qbokz[uidx])
+
+
+    #print("return as is")
+    #return AttDATA(bokzdata["TIME"], qbokz)
+    if perform_time_corrections:
+        bokzt = np.copy(bokzdata["T"])
+        dt1 = (np.array([np.diff(bokzt), np.diff(bokzdata["TIME"])]) + 0.5).astype(int).T
+        dt2 = np.lib.stride_tricks.as_strided(dt1, shape=(dt1.shape[0] - 1, 2, 2), strides=(dt1.strides[0], dt1.strides[0], dt1.strides[1]))
+        #ds = np.sum(np.diff(dt2, axis=2), axis=(1, 2))
+        dt3 = np.lib.stride_tricks.as_strided(dt1, shape=(dt1.shape[0] - 2, 3, 2), strides=(dt1.strides[0], dt1.strides[0], dt1.strides[1]))
+        #mpast = np.all(dt2 == np.array([[1, 2], [1, 1]]), axis=(1, 2)) | np.all(dt2 == np.array([[2, 3], [1, 1]]), axis=(1, 2))
+        #mjumps = ds != 0
+        #mpast = np.all(np.diff(dt2, axis=2)[:, :, 0] == [1, 0], axis=1) # == np.array([[1, 2], [1, 1]]), axis=(1, 2)) | np.all(dt2 == np.array([[2, 3], [1, 1]]), axis=(1, 2))
+        #mfutr = np.all(dt3 == [[1, 1], [2, 1], [1, 1]], axis=(1, 2)) | np.all(dt3 == [[1, 1], [3, 2], [1, 1]], axis=(1, 2))
+        mfutr = np.all(np.diff(dt3, axis=2)[:, :, 0] == [0, -1, 0], axis=1) #dt3 == [[1, 1], [2, 1], [1, 1]], axis=(1, 2)) | np.all(dt3 == [[1, 1], [3, 2], [1, 1]], axis=(1, 2))
+        mpast = np.all(np.diff(dt3, axis=2)[:, :, 0] == [0, +1, 0], axis=1)
+        #print("past jumps", np.where(mpast))
+        mskip = np.logical_or.reduce([np.all(dt2 == np.array([[1, 2], [2, 1]]), axis=(1, 2)), np.all(dt2 == np.array([[2, 1], [1, 1]]), axis=(1, 2)) | np.all(dt2 == np.array([[3, 2], [1, 1]]), axis=(1, 2))])
+
+        #mfuturejump = np.all(
+        #mfuturejump = np.concatenate([mfuturejump, [False,]])
+        """
+        print("dt2 shape", dt2.shape, "mask shape", mfuturejump.size)
+        print("future jumps", np.where(mfuturejump))
+        mfuturejump = np.concatenate([mfuturejump, [False,]])
+        """
+
+
+        dtcs = np.diff(bokzdata["TIME"])
+        dtcs[np.where(mpast)[0]] -= 1. # fix jump to the past
+        dtcs[np.where(mfutr)[0]] += 1.
+
+        patches = get_bokz_timepatches(gti=GTI([max(T0, times[0]), times[-1]]))
+        dtcs[np.searchsorted(times, patches[:, 0]] += patches[:, 1]
+
+
+        times = np.full(bokzdata.size, bokzdata["TIME"][0])
+        times[1:] += np.cumsum(dtcs)
+        print(np.where(times[1:] < times[:-1]))
+
+
+        mask0quats = ~np.isnan(np.sum(q.as_rotvec()**2, axis=1)) & ~np.any(np.isnan(mat), axis=(1, 2))
+        masktimes = (bokzdata["TIME"] > T0)
+        maskdubles = np.ones(bokzdata.size, bool)
+        maskdubles[1:] = (np.diff(times) > 0.) & (np.diff(bokzt) > 0.)
+        maskdubles[:-1] = maskdubles[:-1] & (np.diff(bokzt) > -1)
+        maskdubles[np.where(mskip)[0] + 1] = False
+        maskdubles[np.where(np.all(mat[1:,:, :] == mat[:-1, :, :], axis=(1, 2)))[0] + 1] = False
+
+        mask = np.logical_and.reduce([mask0quats, masktimes, maskdubles, ~mna])
+        print("mask", mask.size, mask.sum(), mask0quats.sum(), masktimes.sum(), maskdubles.sum(), mna.sum())
+        if mask.sum() < 2:
+            return AttDATA([], [], gti=emptyGTI)
+
+        qbokz = qbokz[mask]
+        torig = np.copy(times)
+        times = times[mask]
+        print(np.where(times[1:] <= times[:-1]))
+        return AttDATA(times, qbokz, **kwargs)
+
+        dtbokz = np.diff(bokzt[mask])
+        dtssoi = np.diff(times)
+
+        """
+        attb = AttDATA(times, qbokz, check_interpolation = False) #**kwargs) #qbokz[uidx], **kwargs)
+        tc, dt, dalphadt = attb.get_optical_axis_movement_speed()
+        da1 = np.lib.stride_tricks.as_strided(dalphadt, shape=(dalphadt.size - 4, 5), strides=dalphadt.strides*2)
+        dam = np.repeat(np.median(da1, axis=1), [3,] + [1,]*(da1.shape[0] - 2) + [3,])
+        das = np.repeat(np.sort(da1, axis=1)[:, :-1].std(axis=1), [3,] + [1,]*(da1.shape[0] - 2) + [3,])
+        mspeedjump = (dalphadt > dam + das*8.)
+        mspeedjump[mspeedjump] = mspeedjump[mspeedjump] & mfuturejump[np.searchsorted(torig, tc[mspeedjump]) - 1]
+        for idx in np.where(mspeedjump)[0]: #(dalphadt > dam + das*8.) & mfuturejump)[0]: # trying to identify clock future fip
+            print("correct future jump", idx)
+            attb.times[idx + 1:] += int(dtbokz[idx] - dtssoi[idx] + 0.4999)
+        return AttDATA(attb.times, attb(attb.times), **kwargs)
+        """
+    else:
+        return AttDATA(bokzdata["TIME"][~mna], qbokz[~mna], **kwargs)
+
+
 
 
 def read_sed_fits(sedhdu):
@@ -474,7 +558,7 @@ def get_raw_bokz(bokzhdu):
     mat = np.copy(mat.swapaxes(2, 1).swapaxes(1, 0))
     mask0quats = np.linalg.det(mat) != 0.
     masktimes = bokzdata["TIME"] > T0
-    mask = np.logical_and(mask0quats, masktimes)
+    mask = np.logical_and.reduce([mask0quats, masktimes, ~np.any(np.isnan(mat), axis=(1, 2))])
     qbokz = Rotation.from_matrix(mat[mask])*qbokz0
     jyear = get_hdu_times(bokzhdu).jyear[mask]
     return bokzdata["TIME"][mask], earth_precession_quat(jyear).inv()*qbokz
@@ -526,6 +610,7 @@ def get_photons_vectors(urddata, URDN, attdata, subscale=1, randomize=False):
     urdnatt = attdata.for_urdn(URDN)
     qall = urdnatt(np.repeat(urddata["TIME"], subscale*subscale))
     photonvecs = urd_to_vec(urddata, subscale, randomize)
+    print(len(qall), photonvecs.shape)
     if photonvecs.size == 0:
         phvec = photonvecs
     else:
@@ -1018,13 +1103,13 @@ def align_with_z_quat(vec):
 def get_attdata(fname, atshift=0., **kwargs):
     ffile = fits.open(fname)
     if "gyro" in fname:
-        attdata = read_gyro_fits(ffile["ORIENTATION"])
+        attdata = read_gyro_fits(ffile["ORIENTATION"], **kwargs)
         tshift = get_device_timeshift("gyro")
     elif "bokz" in fname:
-        attdata = read_bokz_fits(ffile["ORIENTATION"])
+        attdata = read_bokz_fits(ffile["ORIENTATION"], **kwargs)
         tshift = get_device_timeshift("bokz")
     elif "sed1" in fname:
-        attdata = read_sed_fits(ffile["ORIENTATION"])
+        attdata = read_sed_fits(ffile["ORIENTATION"], **kwargs)
         tshift = 0.
     elif "RA" in ffile[1].data.dtype.names:
         tshift = get_device_timeshift("gyro")
