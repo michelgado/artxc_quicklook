@@ -7,6 +7,7 @@ there are also functions which can be used to create masks on the urd data to ex
 import numpy as np
 from math import pi
 from .aux import cache_single_result_np
+from .vector import normalize
 from scipy.spatial.transform import Rotation
 
 DL = 0.595 # distance between strips in mm
@@ -63,7 +64,7 @@ def raw_xy_to_vec(rawx, rawy, subscale=1, randomize=False):
     returns: vector defining direction on which pixel have to be projected
     """
     if subscale != 1:
-        rawx, rawy = multiply_coord(rawx, rawy)
+        rawx, rawy = multiply_coord(rawx, rawy, subscale)
     if randomize:
         rawx = rawx + np.random.uniform(-1/2./subscale, 1./2./subscale,  rawx.shape)
         rawy = rawy + np.random.uniform(-1/2./subscale, 1./2./subscale,  rawy.shape)
@@ -179,11 +180,39 @@ def get_shadowed_pix_mask_for_urddata(urddata, det_spat_mask):
     return get_shadowed_pix_mask(urddata["RAW_X"], urddata["RAW_Y"], det_spat_mask) #equivalent to [det_spat_mask[i, j] for i, j in zip(rawx, rawy)]
 
 
+def offset_to_qcorr(x, y):
+    vo = offset_to_vec(x, y)
+    v1 = np.array([1., 0., 0.])
+    vrot = normalize(np.cross(v1, vo))
+    qrot = Rotation.from_rotvec(vrot*np.arccos(vo[:, 0])[:, np.newaxis])
+    """
+    if type(x) is np.ndarray:
+        v1 = np.tile(v1, x.shape + (1,))
+    else:
+        x, y = np.array([x,]), np.array([y,])
+    q1 = Rotation.from_rotvec(v1*np.arctan2(y, F)[:, np.newaxis])
+    v1 = q1.apply(np.roll(v1, 1, axis=-1))
+    q2 = Rotation.from_rotvec(v1*np.arctan2(x, F)[:, np.newaxis])
+    return q2*q1
+    """
+    return qrot
+
+
 def rawxy_to_qcorr(x, y):
     """
     for x, y spatical cartesian coordinates produces a quaternion, which moves sphere to put center of coorddinates [1, 0, 0] in the x, y coordinate
 
     it should be noterd, that additional quaternion, which changes  rotates image on pi is applied first
+    """
+    mask = np.logical_and(x == 23.5, y == 23.5)
+    vo = raw_xy_to_vec(x, y)
+    v1 = np.array([1., 0., 0.])
+    vrot = normalize(np.cross(v1, vo))
+    vrot[mask, :] = [0, 0, 1]
+    #qrot = Rotation.from_rotvec(vrot*np.arccos(vo[:, 0])[:, np.newaxis])
+    cad2 = np.sqrt(vo[:, 0]/2. + 0.5)
+    sad2 = np.sqrt(0.5 - vo[:, 0]/2.)
+    qrot = Rotation(np.array([vrot[:, 0]*sad2, vrot[:, 1]*sad2, vrot[:, 2]*sad2, cad2]).T)
     """
     v1 = np.array([0., 1., 0.])
     if type(x) is np.ndarray:
@@ -194,9 +223,12 @@ def rawxy_to_qcorr(x, y):
     v1 = q1.apply(np.roll(v1, 1, axis=-1))
     q2 = Rotation.from_rotvec(v1*np.arctan2(-(23.5 - x)*DL, F)[:, np.newaxis])
     return q2*q1
+    """
+    return qrot
 
 def get_qcorr_for_urddata(udata):
     rawxy, iidx = np.unique(udata[["RAW_X", "RAW_Y"]], return_inverse=True)
+    #print(rawxy)
     #iidx = np.argsort(iidx)
     #css = np.cumsum([0,] + list(cts[:-1]))
     qcorrs = rawxy_to_qcorr(rawxy["RAW_X"], rawxy["RAW_Y"])

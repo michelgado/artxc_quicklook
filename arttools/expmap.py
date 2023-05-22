@@ -77,7 +77,7 @@ def make_expmap_for_attdata(sky, attdata, imgfilters, dtcorr={}, kind="direct", 
     2) wcs is expected to be astropy.wcs.WCS class,
         crpix is expected to be exactly the central pixel of the image
     """
-    urdgtis = {urdn: f.filters["TIME"] for urdn, f in imgfilters.items()}
+    urdgtis = {urdn: f.filters["TIME"] & attdata.gti for urdn, f in imgfilters.items()}
 
 
     if kind not in ["direct", "convolve"]:
@@ -152,13 +152,12 @@ def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNU
     urdgtis = {urdn: f.filters["TIME"] & cgti for urdn, f in urdfilters.items()}
 
     gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
-    print("gti exposure", gti.exposure)
+    #print("gti exposure", gti.exposure)
     tel, gaps, locgti = make_small_steps_quats(attdata, gti=gti, tedges=te)
     tc = (tel[1:] + tel[:-1])[gaps]/2.
     qval = attdata(tc)
 
     dtn = np.zeros(te.size - 1, np.double)
-    x, y = np.mgrid[0:48:1, 0:48:1]
     for urdn in urdgtis:
         if urdgtis[urdn].arr.size == 0:
             continue
@@ -175,7 +174,7 @@ def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNU
         np.add.at(dtn, idx[mloc], vval[mloc]*dtu[mloc])
     if not illum_filters is None:
         dtillum = illum_filters.make_exposures(direction, te, attdata, urdfilters, urdweights=urdweights, dtcorr=dtcorr, app=app, cspec=cspec)
-        print("pure vignetted exposure %.1e, illumination cutout %.1e" % (dtn.sum(), dtillum.sum()))
+        #print("pure vignetted exposure %.1e, illumination cutout %.1e" % (dtn.sum(), dtillum.sum()))
         dtn = dtn - dtillum
     return te, dtn
 

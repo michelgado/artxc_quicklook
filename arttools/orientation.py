@@ -6,7 +6,7 @@ from ._det_spatial import urd_to_vec, F, DL, raw_xy_to_vec
 from .sphere import ConvexHullonSphere, get_vec_triangle_area, FullSphere, ConvexHullonSphere, CVERTICES, SPHERE
 from .time import get_hdu_times, GTI, tGTI, emptyGTI, board_time_to_jyear
 from .vector import vec_to_pol, pol_to_vec, normalize
-from .caldb import T0, get_boresight_by_device, get_device_timeshift, relativistic_corrections_gti, MJDREF
+from .caldb import T0, get_boresight_by_device, get_device_timeshift, relativistic_corrections_gti, MJDREF, get_bokz_timepatches, get_bokz_bti, get_bokz_fjump_bti, get_specific_fileshift
 from .containers import Urddata
 from .telescope import URDNS, OPAX
 from .mask import edges as medges
@@ -186,6 +186,7 @@ class AttDATA(SlerpWithNaiveIndexing):
         gti = gti & self.gti
         if gti.exposure == 0:
             res = self.__class__([], [], gti=emptyGTI)
+            res.times = np.empty(0, float)
         else:
             ts, mgaps = gti.make_tedges(self.times)
             quats = self(ts)
@@ -426,7 +427,7 @@ def read_gyro_fits(gyrohdu):
     return ainit
 
 
-def read_bokz_fits(bokzhdu, perform_time_corrections=True, **kwargs):
+def read_bokz_fits(bokzhdu, perform_time_corrections=True, correct_future_jumps=True, **kwargs):
     """
     reads bokz quaternion from fits file hdu and returns AttDATA  container
 
@@ -437,7 +438,7 @@ def read_bokz_fits(bokzhdu, perform_time_corrections=True, **kwargs):
     return:
         AttDATA container, which bares attitude information
     """
-    bokzdata = np.copy(bokzhdu.data)
+    bokzdata = np.copy(bokzhdu.data[1:-1])
     md1 = np.ones(bokzdata.size, bool)
     md1[1:] = bokzdata["TIME"][1:] != bokzdata["TIME"][:-1]
     bokzdata = bokzdata[md1]
@@ -454,6 +455,8 @@ def read_bokz_fits(bokzhdu, perform_time_corrections=True, **kwargs):
     qbokz = earth_precession_quat(jyear).inv()*q*qbokz0*\
             get_boresight_by_device("BOKZ")
 
+    bti = GTI(get_bokz_bti())
+    mfutbti = GTI(get_bokz_fjump_bti())
 
     #print("return as is")
     #return AttDATA(bokzdata["TIME"], qbokz)
@@ -468,6 +471,7 @@ def read_bokz_fits(bokzhdu, perform_time_corrections=True, **kwargs):
         #mpast = np.all(np.diff(dt2, axis=2)[:, :, 0] == [1, 0], axis=1) # == np.array([[1, 2], [1, 1]]), axis=(1, 2)) | np.all(dt2 == np.array([[2, 3], [1, 1]]), axis=(1, 2))
         #mfutr = np.all(dt3 == [[1, 1], [2, 1], [1, 1]], axis=(1, 2)) | np.all(dt3 == [[1, 1], [3, 2], [1, 1]], axis=(1, 2))
         mfutr = np.all(np.diff(dt3, axis=2)[:, :, 0] == [0, -1, 0], axis=1) #dt3 == [[1, 1], [2, 1], [1, 1]], axis=(1, 2)) | np.all(dt3 == [[1, 1], [3, 2], [1, 1]], axis=(1, 2))
+        mfutr[mfutr] = ~mfutbti.mask_external(bokzdata["TIME"][np.where(mfutr)[0]])
         mpast = np.all(np.diff(dt3, axis=2)[:, :, 0] == [0, +1, 0], axis=1)
         #print("past jumps", np.where(mpast))
         mskip = np.logical_or.reduce([np.all(dt2 == np.array([[1, 2], [2, 1]]), axis=(1, 2)), np.all(dt2 == np.array([[2, 1], [1, 1]]), axis=(1, 2)) | np.all(dt2 == np.array([[3, 2], [1, 1]]), axis=(1, 2))])
@@ -483,10 +487,14 @@ def read_bokz_fits(bokzhdu, perform_time_corrections=True, **kwargs):
 
         dtcs = np.diff(bokzdata["TIME"])
         dtcs[np.where(mpast)[0]] -= 1. # fix jump to the past
-        dtcs[np.where(mfutr)[0]] += 1.
+        if correct_future_jumps:
+            dtcs[np.where(mfutr)[0]] += 1.
 
-        patches = get_bokz_timepatches(gti=GTI([max(T0, times[0]), times[-1]]))
-        dtcs[np.searchsorted(times, patches[:, 0]] += patches[:, 1]
+        patches = get_bokz_timepatches(gti=GTI([max(T0, bokzdata["TIME"][0]), bokzdata["TIME"][-1]]))
+        idx = np.searchsorted(bokzdata["TIME"], patches[:, 0])
+        print("check patches", idx, bokzdata.size)
+        mpatches = (idx > 0) & (idx < bokzdata.size)
+        dtcs[idx[mpatches] - 1] += patches[mpatches, 1]
 
 
         times = np.full(bokzdata.size, bokzdata["TIME"][0])
@@ -505,34 +513,16 @@ def read_bokz_fits(bokzhdu, perform_time_corrections=True, **kwargs):
         mask = np.logical_and.reduce([mask0quats, masktimes, maskdubles, ~mna])
         print("mask", mask.size, mask.sum(), mask0quats.sum(), masktimes.sum(), maskdubles.sum(), mna.sum())
         if mask.sum() < 2:
-            return AttDATA([], [], gti=emptyGTI)
+            res = AttDATA([], [], gti=emptyGTI)
+            res.times = np.empty(0, float)
+            return res
 
         qbokz = qbokz[mask]
         torig = np.copy(times)
         times = times[mask]
-        print(np.where(times[1:] <= times[:-1]))
-        return AttDATA(times, qbokz, **kwargs)
-
-        dtbokz = np.diff(bokzt[mask])
-        dtssoi = np.diff(times)
-
-        """
-        attb = AttDATA(times, qbokz, check_interpolation = False) #**kwargs) #qbokz[uidx], **kwargs)
-        tc, dt, dalphadt = attb.get_optical_axis_movement_speed()
-        da1 = np.lib.stride_tricks.as_strided(dalphadt, shape=(dalphadt.size - 4, 5), strides=dalphadt.strides*2)
-        dam = np.repeat(np.median(da1, axis=1), [3,] + [1,]*(da1.shape[0] - 2) + [3,])
-        das = np.repeat(np.sort(da1, axis=1)[:, :-1].std(axis=1), [3,] + [1,]*(da1.shape[0] - 2) + [3,])
-        mspeedjump = (dalphadt > dam + das*8.)
-        mspeedjump[mspeedjump] = mspeedjump[mspeedjump] & mfuturejump[np.searchsorted(torig, tc[mspeedjump]) - 1]
-        for idx in np.where(mspeedjump)[0]: #(dalphadt > dam + das*8.) & mfuturejump)[0]: # trying to identify clock future fip
-            print("correct future jump", idx)
-            attb.times[idx + 1:] += int(dtbokz[idx] - dtssoi[idx] + 0.4999)
-        return AttDATA(attb.times, attb(attb.times), **kwargs)
-        """
+        return AttDATA(times, qbokz, **kwargs).apply_gti(~bti)
     else:
-        return AttDATA(bokzdata["TIME"][~mna], qbokz[~mna], **kwargs)
-
-
+        return AttDATA(bokzdata["TIME"][~mna], qbokz[~mna], **kwargs).apply_gti(~bti)
 
 
 def read_sed_fits(sedhdu):
@@ -1107,7 +1097,8 @@ def get_attdata(fname, atshift=0., **kwargs):
         tshift = get_device_timeshift("gyro")
     elif "bokz" in fname:
         attdata = read_bokz_fits(ffile["ORIENTATION"], **kwargs)
-        tshift = get_device_timeshift("bokz")
+        print("specific timeshift", get_specific_fileshift(fname))
+        tshift = get_device_timeshift("bokz") - get_specific_fileshift(fname)
     elif "sed1" in fname:
         attdata = read_sed_fits(ffile["ORIENTATION"], **kwargs)
         tshift = 0.
@@ -1118,8 +1109,7 @@ def get_attdata(fname, atshift=0., **kwargs):
 
     attdata.times = attdata.times - tshift + atshift
     attdata.gti.arr = attdata.gti.arr - tshift + atshift
-    if "gyro" in fname:
-        attdata = define_required_correction(attdata)
+    attdata = define_required_correction(attdata)
     return attdata
 
 

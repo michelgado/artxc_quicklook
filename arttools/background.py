@@ -161,6 +161,7 @@ def get_background_surface_brigtnress(urdn, filters, fill_value=np.nan, normaliz
     #shmask = filters.apply(np.column_stack([x.ravel(), y.ravel()]).ravel().view([("RAW_X", np.int), ("RAW_Y", np.int)])).reshape(x.shape)
     shmask = filters.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
     profile[~shmask] = fill_value
+    #profile[shmask] = 1.
     return profile/np.sum(profile[~np.isnan(profile)]) if normalize else profile
 
 def get_local_bkgrates(udata, bkglc):
@@ -261,7 +262,7 @@ def get_background_lightcurve(tevts, bkgfilters, timebin, imgfilters=None, dtcor
     estimated mean background rate for background in the desired parameters space (energy, grade, coordinates)
     """
     if not imgfilters is None:
-        urdbkg = {urdn: lc._scale(get_background_bands_ratio(imgfilters[urdn].filters, bkgfilters[urdn].filters)) for urdn, lc in urdbkg.items()}
+        urdbkg = {urdn: lc._scale(get_background_bands_ratio(imgfilters[urdn].filters, bkgfilters[urdn].filters)) for urdn, lc in urdbkg.items() if urdn in imgfilters}
     return urdbkg
 
 def get_bkg_lightcurve_for_app(urdbkg, filters, att, ax, app=120., te=np.array([-np.inf, np.inf]), dtcorr={}, locphotbkg=0., urdweights={}, illum_filters=None, cspec=None):

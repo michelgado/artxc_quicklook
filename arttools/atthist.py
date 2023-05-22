@@ -101,11 +101,13 @@ def make_small_steps_quats(attdata, gti=tGTI, tedges=None, dlin=DELTASKY, drot=D
     return te, gaps, locgti
 
 
-def make_wcs_steps_quats(wcs, attdata, gti=tGTI, timecorrection=lambda x: 1., tedges=None, ax=OPAX):
+def make_wcs_steps_quats(wcs, attdata, gti=tGTI, tedges=None, ax=OPAX):
     if (gti & attdata.gti).exposure != attdata.gti.exposure:
         attloc = attdata.apply_gti(gti)
     else:
         attloc = attdata
+    if attloc.gti.exposure == 0:
+        return np.empty(0, float), np.empty(0, bool), attloc.gti
     radec = np.rad2deg(vec_to_pol(attloc(attloc.times).apply(ax)))
     xy = wcs.all_world2pix(radec.T, 1).T
     gaps = gti.mask_external((attloc.times[1:] + attloc.times[:-1])/2.)
@@ -128,11 +130,11 @@ def hist_orientation_for_attdata(attdata, gti=tGTI, timecorrection=lambda x:1., 
 
     """
     if wcs is None:
-        print("small steps")
-        te, gaps, locgti = make_small_steps_quats(attdata, gti, timecorrection)
+        print("small steps", gti.length)
+        te, gaps, locgti = make_small_steps_quats(attdata, gti)
     else:
         print("wcs steps")
-        te, gaps, locgti = make_wcs_steps_quats(wcs, attdata, gti, timecorrection)
+        te, gaps, locgti = make_wcs_steps_quats(wcs, attdata, gti)
     tc = (te[1:] + te[:-1])[gaps]/2.
     dtn = np.diff(te)[gaps]*timecorrection(tc)
     exptime, qhist = hist_orientation(attdata(tc), dtn)

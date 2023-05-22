@@ -267,6 +267,7 @@ class WCSSky(SkyInterpolator):
 
         lroll = rolls - np.repeat(wcs_roll(self.locwcs, Rotation(q0.as_quat().reshape((-1, 4)))), np.asarray(rolls).size)
         q0 = ra_dec_roll_to_quat(*np.array([np.full(lroll.size, ra, float), np.full(lroll.size, dec, float), np.rad2deg(lroll)]))
+        q0 = Rotation(q0.as_quat().reshape((-1, 4)))
         y, x = np.concatenate([self._get_vmap_edges(q) for q in q0], axis=1)
 
         xsize = int(np.max(np.abs(x - self.locwcs.wcs.crpix[1])) + 0.5)

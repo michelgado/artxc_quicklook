@@ -317,17 +317,21 @@ def get_wcs_roll_for_qval(wcs, qval, axlist=np.array([1, 0, 0])):
     vtop = pol_to_vec(r2*pi/180., d2*pi/180.)
     vimgyax = vtop - vbot
     vimgyax = qval.apply(vimgyax, inverse=True)
-    return np.arctan2(vimgyax[:, 1], vimgyax[:, 2])
+    return -np.arctan2(vimgyax[:, 1], vimgyax[:, 2])
 
 def wcs_roll(wcs, qvals, axlist=np.array([1, 0, 0]), noffset=np.array([0., 0., 0.01])):
     ax1 = qvals.apply(axlist)
     radec = np.rad2deg(vec_to_pol(ax1)).T
     xy = wcs.all_world2pix(radec, 1)
     ax2 = pol_to_vec(*np.deg2rad(wcs.all_pix2world(xy + [0, 1], 1)).T)
+    """
     qalign = make_align_quat(ax1, ax2, zeroax=np.array([1, 0, 0]))
     rvec = (qalign*qvals).as_rotvec()
     addpart = np.zeros(rvec.shape[0], np.double)
     return np.sqrt(np.sum(rvec**2., axis=-1))*np.sign(np.sum(rvec*ax1, axis=-1))
+    """
+    ax2 = qvals.apply(ax2, inverse=True) - axlist
+    return np.arctan2(ax2[:, 1], ax2[:, 2])
 
 def make_quat_for_wcs(wcs, x, y, roll):
     """

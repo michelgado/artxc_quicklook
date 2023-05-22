@@ -99,13 +99,19 @@ def mksomething(urddata, hkdata, attdata, gti):
 """
 
 
-def get_bokz_timepatches(gti=tGTI):
+def get_bokz_timepatches(gti=None):
     patches = np.loadtxt("/srg/a1/work/andrey/ART-XC/Crab/bokz_time_patches.txt").reshape((-1, 2))
-    return patches[gti.mask_external(patches[:, 0])]
+    return patches if gti is None else patches[gti.mask_external(patches[:, 0])]
 
 @lru_cache(maxsize=1)
-def get_bokz_gti():
-    bti = GTI(np.loadtxt("/srg/a1/work/andrey/ART-XC/Crab/bokz_btis_patches.txt"))
+def get_bokz_bti():
+    bti = np.loadtxt("/srg/a1/work/andrey/ART-XC/Crab/bokz_btis_patches.txt")
+    return bti
+
+
+@lru_cache(maxsize=1)
+def get_bokz_fjump_bti():
+    bti = np.loadtxt("/srg/a1/work/andrey/ART-XC/Crab/bad_future_jumps.txt")
     return bti
 
 
@@ -186,16 +192,30 @@ def set_quat_state(usenew):
     global usenewquat
     usenewquat = usenew
 
+boresight = {dev: Rotation(fits.getdata(get_caldata("BORESIGH", ANYTHINGTOTELESCOPE.get(dev, dev))[0][0], 1)[0]) for dev in [28, 22, 23, 24, 25, 26, 30, "GYRO", "BOKZ"]}
+def set_boresight(dev, qset):
+    global boresight
+    boresight[dev] = qset
+
 #@lru_cache(maxsize=7)
 def get_boresight_by_device(dev):
+    #return boresight[dev]
     global usenewquat
     #print("usenewquat", usenewquat)
-    if usenewquat and dev in [28, 22, 23, 24, 25, 26, 30]:
-        alpha, beta, angle = pickle.load(open("/srg/a1/work/andrey/ART-XC/Crab/%d_qcorr_lsrc.pkl" % int(dev), "rb")).x
+    """
+    if int(dev) == 28:
+        alpha, beta, angle = 5.95739460e+00, -1.40807804e+00,  1.85982924e-04
         return Rotation.from_rotvec([cos(alpha)*cos(beta)*angle, cos(alpha)*sin(beta)*angle, sin(alpha)*angle])
+        #return pickle.load(open("/srg/a1/work/andrey/ART-XC/Crab/qc28.pkl", "rb"))
+    if usenewquat and dev in [28, 22, 23, 24, 25, 26, 30]:
+        #alpha, beta, angle = pickle.load(open("/srg/a1/work/andrey/ART-XC/Crab/%d_qcorr_lsrc.pkl" % int(dev), "rb")).x
+        alpha, beta, angle = pickle.load(open("/srg/a1/work/andrey/ART-XC/Crab/%d_qcorr_bokz_slow.pkl" % int(dev), "rb")).x
+        return Rotation.from_rotvec([cos(alpha)*cos(beta)*angle, cos(alpha)*sin(beta)*angle, sin(alpha)*angle])
+        return pickle.load(open("/srg/a1/work/andrey/ART-XC/Crab/%d_qcorr_bokz_new.pkl" % dev, "rb"))
     if str(dev).lower() == "bokz":
-        return Rotation([ 0.12630457, -0.00162314, -0.00102878,  0.99198965]) # temporal patch, based on the comparison of GYRO and BOKZ from 2020 02 01 (correction presented at 2023 04 04)
-
+        #return Rotation([ 0.12630457, -0.00162314, -0.00102878,  0.99198965]) # temporal patch, based on the comparison of GYRO and BOKZ from 2020 02 01 (correction presented at 2023 04 04)
+        return Rotation([ 0.12632717, -0.00164866, -0.00102702,  0.99198673])# temporal patch, based on the comparison of GYRO and BOKZ from 2020 02 01 (correction presented at 2023 04 04)
+    """
     """
     if dev == 28 and usenewquat:
         #return Rotation([-9.00361776e-05, -5.77130725e-05,  1.19482282e-05,  9.99999994e-01])
@@ -206,6 +226,9 @@ def get_boresight_by_device(dev):
     if dev == 23 and usenewquat:
         return Rotation([1.28239400e-03, -4.41720522e-05, -2.55864811e-06,  9.99999177e-01])
     """
+
+    if str(dev).lower() == "bokz":
+        return Rotation([ 0.12632717, -0.00164866, -0.00102702,  0.99198673])# temporal patch, based on the comparison of GYRO and BOKZ from 2020 02 01 (correction presented at 2023 04 04)
     return Rotation(fits.getdata(get_caldata("BORESIGH", ANYTHINGTOTELESCOPE.get(dev, dev))[0][0], 1)[0])
 
 
@@ -277,6 +300,14 @@ def get_device_timeshift(dev):
         dt = 1.672
     return dt
 
+
+fshifts = [l.rstrip().rsplit() for l in open('/srg/a1/work/andrey/ART-XC/att_compressed/bokz_shifts.list')]
+fshifts = {os.path.basename(name): int(k) for name, k in fshifts}
+def get_specific_fileshift(fname):
+    return fshifts.get(os.path.basename(fname), 0.)
+
+
+
 def get_background_for_urdn(urdn):
     global el, bkggti
     x = np.arange(48)
@@ -342,13 +373,21 @@ def default_background_events_filter(energy=None, grade=None):
 
 
 def get_ayut_inversed_psf_data_packed():
-    ipsf = fits.open(os.path.join(ARTCALDBPATH, "iPSF_ayut.fits"))
+    """
+    ipsf1 = fits.open(os.path.join(ARTCALDBPATH, "iPSF_ayut.fits"))
+    mm = np.zeros((121, 121), float)
+    mm[56:65, 56:65] = 1.
+    ipsf = fits.HDUList([ipsf1[0], ipsf1[1], fits.ImageHDU(np.tile(mm, (ipsf1[2].data.shape[0], ipsf1[2].data.shape[1], 1, 1)))])
+    """
+    ipsf = fits.open(os.path.join(ARTCALDBPATH, "marchall_ipsf.fits.gz"))
+    #ipsf = fits.open(os.path.join(ARTCALDBPATH, "iPSF_hybrid.fits.gz"))
     return ipsf
 
 @lru_cache(maxsize=1)
 def get_ayut_inverse_psf_datacube_packed():
-    #ipsf = np.copy(get_ayut_inversed_psf_data_packed()[2].data)
-    ipsf = pickle.load(open("/srg/a1/work/srg/ARTCALDB/caldb_files/iPSF_marshall.pkl", "rb"))
+    ipsf = np.copy(get_ayut_inversed_psf_data_packed()[2].data)
+    #ipsf = fits.getdata(os.path.join(ARTCALDBPATH, "iPSF_hybrid.fits.gz"), 2)
+    #ipsf = pickle.load(open("/srg/a1/work/srg/ARTCALDB/caldb_files/iPSF_marshall.pkl", "rb"))
     return ipsf
 
 def get_arf():

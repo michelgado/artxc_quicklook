@@ -89,6 +89,11 @@ class GTI(Intervals):
 tGTI = GTI([-np.inf, np.inf])
 emptyGTI = GTI(np.empty((0, 2)))
 
+
+def board_time_to_jyear(timeseries):
+    return 2000. + (timeseries - 54005.152032)/31557600.0
+
+
 def get_gti(ffile, gtiextname=None, excludebki=True, merge_interval_dt=None, usehkgti=True):
     if not gtiextname is None:
         try:
