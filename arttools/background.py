@@ -161,7 +161,6 @@ def get_background_surface_brigtnress(urdn, filters, fill_value=np.nan, normaliz
     #shmask = filters.apply(np.column_stack([x.ravel(), y.ravel()]).ravel().view([("RAW_X", np.int), ("RAW_Y", np.int)])).reshape(x.shape)
     shmask = filters.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
     profile[~shmask] = fill_value
-    #profile[shmask] = 1.
     return profile/np.sum(profile[~np.isnan(profile)]) if normalize else profile
 
 def get_local_bkgrates(udata, bkglc):
