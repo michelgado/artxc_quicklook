@@ -12,11 +12,11 @@ def xy_to_opaxoffset(x, y, urdn):
     x0, y0 = (24, 24) if urdn is None else get_optical_axis_offset_by_device(urdn)
     return np.round(x + 0.5 - x0).astype(np.int), np.round(y + 0.5 - y0).astype(np.int)
 
-def rawxy_to_opaxoffset(rawx, rawy, urdn):
+def rawxy_to_opaxoffset(rawx, rawy, urdn=None):
     """
     returns i and j coordinate of the pixel relative to the pixel 0, 0 which we assume that contain optical axis in its center
     """
-    x0, y0 = (24, 24) if urdn is None else get_optical_axis_offset_by_device(urdn)
+    x0, y0 = (0.6, 0.6) if urdn is None else get_optical_axis_offset_by_device(urdn)
     return np.round(rawx + 0.5 - x0).astype(np.int), np.round(rawy + 0.5 - y0).astype(np.int)
 
 def urddata_to_opaxoffset(urddata, urdn):
@@ -68,17 +68,15 @@ def unpack_pix_index(i, j):
 
 
 def vec_to_ipsfpix(rawx, rawy, vec, urdn=None):
-    #i, j = opaxoffset_to_pix(xo/DL, yo/DL)
     i, j = rawxy_to_opaxoffset(rawx, rawy, urdn)
-    x, y = get_optical_axis_offset_by_device(urdn)
-    xof, yof = raw_xy_to_offset(rawx, rawy)
+    xof, yof = (0., 0) if urdn is None else raw_xy_to_offset(rawx, rawy)
     xo, yo = vec_to_offset(vec)
     xl, yl = xo - xof, yo - yof   #considering, that 2nd order components are still small on the offsets < 0.5arcdeg scale, we have in detectors plane
-    m = np.abs(j) < np.abs(i)
+    m = np.abs(j) > np.abs(i)
     xl[m], yl[m] = yl[m], xl[m]
-    m = i < 0
-    xl[m] = -xl[m]
     m = j < 0
+    xl[m] = -xl[m]
+    m = i < 0
     yl[m] = -yl[m]
     return unpack_pix_index(i, j), xl, yl
 
