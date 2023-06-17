@@ -792,17 +792,15 @@ def make_spec_and_arf(flist, outname, ra, dec, usergti=None):
     urddata, urdhk = arttools.containers.read_urdfiles(urdfiles, {urdn: arttools.filters.IndependentFilters({"TIME": attdata.gti}) for urdn in arttools.telescope.URDNS}) #[f.replace("L0", "L1b") for f in urdfiles])
 
     urddtc = {urdn: arttools.time.deadtime_correction(hk) for urdn, hk in urdhk.items()}
+    bkgevts = {urdn: d.apply_filters(bkgfilters) for urdn, d in urddata.items()}
 
-    bkgtimes = np.sort(np.concatenate([d.apply_filters(bkgfilters)["TIME"] for d in urddata.values()]))
-    urdbkg = arttools.background.get_background_lightcurve(bkgtimes, {urdn: imgfilters[urdn]["TIME"] for urdn in imgfilters}, bkgfilters, 1000., imgfilters, dtcorr=urddtc)
+    bkgtimes = np.sort(np.concatenate([d["TIME"] for d in urddata.values()]))
+    urdbkg = arttools.background.get_background_lightcurve(bkgtimes, {urdn: d.filters for urdn, d in bkgevts.items()}, 1000., imgfilters, dtcorr=urddtc)
 
     tgti = reduce(lambda a, b: a|b, [f["TIME"] for f in imgfilters.values()])
 
-
-
     arf = arttools.arf.make_correcrted_arf(attdata, srcvec, imgfilters, urddtc)
     arf.writeto(outname + ".arf")
-
 
     eeo = np.concatenate([arf[1].data["ENERG_LO"], arf[1].data["ENERG_HI"][-1:]])
     bspec = arttools.background.get_bkg_spec(urdbkg, imgfilters, attdata, srcvec, 120.) #, urddtc)

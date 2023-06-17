@@ -65,19 +65,17 @@ def unpack_pix_index(i, j):
     k = (ia + 1)*ia//2 + ja
     return k
 
-
-
 def vec_to_ipsfpix(rawx, rawy, vec, urdn=None):
     i, j = rawxy_to_opaxoffset(rawx, rawy, urdn)
     xof, yof = (0., 0) if urdn is None else raw_xy_to_offset(rawx, rawy)
     xo, yo = vec_to_offset(vec)
     xl, yl = xo - xof, yo - yof   #considering, that 2nd order components are still small on the offsets < 0.5arcdeg scale, we have in detectors plane
+    m = i < 0
+    xl[m] = -xl[m]
+    m = j < 0
+    yl[m] = -yl[m]
     m = np.abs(j) > np.abs(i)
     xl[m], yl[m] = yl[m], xl[m]
-    m = j < 0
-    xl[m] = -xl[m]
-    m = i < 0
-    yl[m] = -yl[m]
     return unpack_pix_index(i, j), xl, yl
 
 def naive_bispline_interpolation(rawx, rawy, vec, energy=None, urdn=None, data=None): #imgfilter=None, cspec=None): #, data=None):
@@ -149,20 +147,20 @@ def naive_bispline_interpolation_specweight(rawx, rawy, vec, data, urdn=None, cs
     return mask, s
 
 
-
-
 def offset_to_psfcoord(i, j, xo, yo, energy=None):
     iifun = get_ipsf_interpolation_func()
     xi, yi = np.searchsorted(iifun.grid[0], xo), np.searchsorted(iifun.grid[1], yo)
     mask = np.all([xi > 0, xi < iifun.grid[0].size,  yi > 0, yi < iifun.grid[1].size], axis=0)
     xi, yi = xi[mask], yi[mask]
     k = unpack_pix_index(i[mask], j[mask])
+    """
     m = np.abs(j) < np.abs(i)
     xi[m], yi[m] = yi[m], xi[m]
-    m = i < 0
-    xi[m] = iifun.grid[0].size - 1 - xi[m]
     m = j < 0
+    xi[m] = iifun.grid[0].size - 1 - xi[m]
+    m = i < 0
     yi[m] = iifun.grid[1].size - 1 - yi[m]
+    """
     if energy is None:
         return mask, k, xi, yi
     else:

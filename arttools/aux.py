@@ -224,6 +224,10 @@ class DistributedObj(object):
                 imap = tqdm(self._pool.imap_unordered(self.perform_staticmethod_for_each_argument, zip(args, repeat(method), repeat(kwargs))))
             return imap if not join else list(imap)
 
+    def __del__(self,):
+        if not self._pool is None:
+            self._pool.close()
+
 
 def init_local_object(cls, barrier, args, kwargs):
     global localcopy

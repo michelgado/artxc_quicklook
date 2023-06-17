@@ -9,7 +9,6 @@ from threading import Thread
 from multiprocessing import Process, Queue
 import numpy as np
 
-
 def read_attdata(qin, qout):
     while True:
         fname = qin.get()
@@ -25,12 +24,10 @@ class DataReader(object):
         self.executor = Process(target=read_attdata, args=(self.qin, self.qout))
         self.executor.start()
 
-
     def __iter__(self):
         self.current = 0
         self.qin.put(self.flist[0])
         return self
-
 
     def __next__(self):
         att = self.qout.get()
@@ -39,7 +36,6 @@ class DataReader(object):
             raise StopItteration
         self.qin.put(self.flist[self.current])
         return att
-
 
 def make_attdata_spatial_index(flist, chull=None, callback=None, mpnum=2):
     if chull is None:

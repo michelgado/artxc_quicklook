@@ -13,7 +13,7 @@ urdcrates = {urdn: d/cr for urdn, d in urdcrates.items()}
 
 def make_correcrted_arf(attdata, srcvec, filters, urddtc={}):
     psf = get_highres_vign_model()
-    arf = fits.open("/srg/a1/work/srg/ARTCALDB/caldb_files/artxc_arf_v000.fits")
+    arf = fits.open("/srg/a1/work/andrey/ART-XC/ARTCALDB/artxc_arf_v000.fits")
     xoff, _ = vec_to_offset(np.array([np.ones(502), np.tan(np.arange(-50.1, 50.2, 0.2)*pi/180/60.), np.zeros(502)]).T)
     _, yoff = vec_to_offset(np.array([np.ones(502), np.zeros(502), np.tan(np.arange(-50.1, 50.2, 0.2)*pi/180/60.)[::-1]]).T)
     print(xoff.shape, yoff.shape, xoff[0])

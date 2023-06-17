@@ -86,7 +86,7 @@ def make_theta_2nd_order_overall_profile(imgfilters, brates, urdweights={}, subg
     newvmap = np.zeros(shape, np.double)
     vecs = offset_to_vec(np.ravel(x), np.ravel(y))
 
-    for urdn in URDNS:
+    for urdn in imgfilters:
         vmap = make_vignetting_for_urdn(urdn, imgfilters[urdn].filters, brate=brates[urdn], scale=urdweights.get(urdn, 1./7.), vfun=sensitivity_second_order)
         quat = get_boresight_by_device(urdn)
         newvmap += vmap(vec_to_offset_pairs(quat.apply(vecs, inverse=True))).reshape(shape)

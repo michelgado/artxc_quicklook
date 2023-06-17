@@ -423,7 +423,10 @@ def read_gyro_fits(gyrohdu):
     times, quats = times[mask], quats[mask]
     ts, uidx = np.unique(times, return_index=True)
     #print("unique", times.size, ts.size)
-    ainit = AttDATA(ts, Rotation(quats[uidx])*qgyro0*get_boresight_by_device("GYRO"))
+    if not "CALDBVER" in gyrohdu.header:
+        ainit = AttDATA(ts, Rotation(quats[uidx])*qgyro0*get_boresight_by_device("GYRO"))
+    else:
+        ainit = AttDATA(ts, Rotation(quats[uidx])) #*qgyro0*get_boresight_by_device("GYRO"))
     return ainit
 
 
@@ -1103,9 +1106,10 @@ def get_attdata(fname, atshift=0., **kwargs):
         attdata = read_sed_fits(ffile["ORIENTATION"], **kwargs)
         tshift = 0.
     elif "RA" in ffile[1].data.dtype.names:
-        tshift = get_device_timeshift("gyro")
+        #tshift = get_device_timeshift("gyro")
+        tshift = 0.
         d = ffile[1].data
-        attdata = AttDATA(d["TIME"], ra_dec_roll_to_quat(d["RA"], d["DEC"], d["ROLL"])*get_boresight_by_device("GYRO"))
+        attdata = AttDATA(d["TIME"], ra_dec_roll_to_quat(d["RA"], d["DEC"], d["ROLL"])) #*get_boresight_by_device("GYRO"))
 
     attdata.times = attdata.times - tshift + atshift
     attdata.gti.arr = attdata.gti.arr - tshift + atshift
@@ -1255,6 +1259,8 @@ class ChullGTI(ConvexHullonSphere):
         if self.parent != self:
             self.parent.update_parent_gti()
 
+    def get_gti(self):
+        return reduce(lambda a, b: a | b, [ch.gti for ch in self.all_hairs])
 
 class FullSphereChullGTI(ChullGTI):
     def __init__(self):

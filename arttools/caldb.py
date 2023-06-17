@@ -380,6 +380,7 @@ def get_ayut_inversed_psf_data_packed():
     ipsf = fits.HDUList([ipsf1[0], ipsf1[1], fits.ImageHDU(np.tile(mm, (ipsf1[2].data.shape[0], ipsf1[2].data.shape[1], 1, 1)))])
     """
     ipsf = fits.open(os.path.join(ARTCALDBPATH, "marchall_ipsf.fits.gz"))
+    #ipsf = fits.open(os.path.join(ARTCALDBPATH, "iPSF_ayut.fits"))
     #ipsf = fits.open(os.path.join(ARTCALDBPATH, "iPSF_hybrid.fits.gz"))
     return ipsf
 
