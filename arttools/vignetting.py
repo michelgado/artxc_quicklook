@@ -10,7 +10,6 @@ from .filters import Intervals
 from .caldb import get_boresight_by_device, get_optical_axis_offset_by_device
 from .psf import xy_to_opaxoffset, unpack_inverse_psf_ayut, unpack_inverse_psf_specweighted_ayut
 from .spectr import get_specweights
-from .background import get_background_surface_brigtnress
 import numpy as np
 from math import log10, pi, sin, cos
 from functools import lru_cache
@@ -96,7 +95,7 @@ class DetectorVignetting(object):
         else:
             x, y = np.mgrid[-60:61:1, -60:61:1]
             self.psfmask = x**2. + y**2. > app**2./25.
-        self.app = app
+            self.app = app
 
     def add_pix(self, x, y, i, j):
         if ~self.dpix[x, y]:

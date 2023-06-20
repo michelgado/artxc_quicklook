@@ -1109,7 +1109,7 @@ def get_attdata(fname, atshift=0., **kwargs):
         #tshift = get_device_timeshift("gyro")
         tshift = 0.
         d = ffile[1].data
-        attdata = AttDATA(d["TIME"], ra_dec_roll_to_quat(d["RA"], d["DEC"], d["ROLL"])) #*get_boresight_by_device("GYRO"))
+        attdata = AttDATA(d["TIME"], ra_dec_roll_to_quat(d["RA"], d["DEC"], -180 - d["ROLL"])) #*get_boresight_by_device("GYRO"))
 
     attdata.times = attdata.times - tshift + atshift
     attdata.gti.arr = attdata.gti.arr - tshift + atshift

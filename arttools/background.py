@@ -4,10 +4,12 @@ from .caldb import get_boresight_by_device, get_shadowmask_by_urd, \
 from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttWCSHistmean, AttWCSHistinteg, convolve_profile, AttInvHist, make_small_steps_quats, make_wcs_steps_quats
 from .energy  import get_arf_energy_function
 from .filters import Intervals
-from .orientation import get_photons_sky_coord
+from .orientation import get_photons_sky_coord, quat_to_pol_and_roll, ra_dec_roll_to_quat
 from .containers import Urddata
+from .vector import vec_to_pol, pol_to_vec
 from .aux import interp1d
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
+from .vignetting import make_vignetting_for_urdn
 from ._det_spatial import DL, dxya, offset_to_vec, vec_to_offset, vec_to_offset_pairs, raw_xy_to_vec, vec_to_offset_pairs, offset_to_raw_xy
 from .psf import get_pix_overall_countrate_constbkg_ayut, urddata_to_opaxoffset, photbkg_pix_coeff
 from .mosaic2 import SkyImage
@@ -201,6 +203,38 @@ def get_particle_and_photon_templates(filters, cspec=None):
     specb = (specb/np.diff(gridb["ENERGY"])[:, np.newaxis])/specb.sum()
     return gridp, specp, specb
 
+
+def get_full_photbkgrate(wcs, photbkgmap, imgfilters, attdata, te):
+    from scipy.signal import convolve
+    #import matplotlib.pyplot as plt
+    ra, dec, roll = quat_to_pol_and_roll(attdata(attdata.times))
+    roll = np.median(roll)
+
+    qc = ra_dec_roll_to_quat(*np.array([wcs.wcs.crval[0], wcs.wcs.crval[1], roll*pi/180.]).reshape((3, 1)))
+    lclist = {}
+    for urdn in imgfilters:
+        vmap = make_vignetting_for_urdn(urdn, imgfilters[urdn])
+        vlist = offset_to_vec(vmap.grid[0][[0, 0, -1, -1]], vmap.grid[1][[0, -1, -1, 0]])
+        xy = (wcs.all_world2pix(np.rad2deg(vec_to_pol(qc.apply(vlist))).T, 0) + 0.5).astype(int)
+        xmin, xmax, ymin, ymax = np.sort(xy, axis=0)[[0, -1, 0, -1], [0, 0, 1, 1]]
+        xm, ym = np.mgrid[xmin:xmax:1, ymin:ymax:1]
+        rdm = wcs.all_pix2world(np.array([xm.ravel(), ym.ravel()]).T, 0)
+        rdm = pol_to_vec(*np.deg2rad(rdm).T)
+        core = vmap(vec_to_offset(qc.apply(rdm, inverse=True))).reshape((xmax - xmin, ymax - ymin))
+
+        cmap = convolve(photbkgmap, core)
+        #return cmap
+        tel, gaps, locgti = make_small_steps_quats(attdata, imgfilters[urdn].filters['TIME'] & GTI(te[[0, -1]]))
+        dte = np.diff(tel)[gaps]
+        tcl = (tel[1:] + tel[:-1])[gaps]/2.
+        xy = (wcs.all_world2pix(np.rad2deg(vec_to_pol(attdata.for_urdn(urdn)(tcl).apply([1, 0, 0]))).T, 0) + 0.5).astype(int)[:, ::-1]
+        cs = np.zeros(te.size - 1, float)
+        dts = np.zeros(te.size - 1, float)
+        idx = np.searchsorted(te, tcl) - 1
+        np.add.at(cs, idx, cmap[xy[:, 0], xy[:, 1]]*dte)
+        np.add.at(dts, idx, dte)
+        lclist[urdn] = cs/dts
+    return lclist
 
 
 def get_photon_to_particle_rate_ratio(urddata, cspec=None):

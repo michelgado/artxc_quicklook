@@ -14,7 +14,7 @@ from .planwcs import ConvexHullonSphere, convexhull_to_wcs
 from .psf import xy_to_opaxoffset, unpack_inverse_psf_ayut, unpack_inverse_psf_ayut, unpack_inverse_psf_with_weights, get_ipsf_interpolation_func, naive_bispline_interpolation, photbkg_pix_coeff
 from .mosaic2 import SkyImage
 from .spectr import get_filtered_crab_spectrum, Spec
-from .vignetting import get_blank_vignetting_interpolation_func, sensitivity_second_order, make_vignetting_for_urdn
+from .vignetting import get_blank_vignetting_interpolation_func, sensitivity_second_order, make_vignetting_for_urdn, DetectorVignetting
 from .illumination import DataDistributer
 from scipy.optimize import minimize, root
 
@@ -45,6 +45,25 @@ ln(1 + rs/b)*(rs + b) = \sum_k (-1)^{k+1)/r (rs/b)^k (rs + b) = \
 therefore, the logarithm can be presented as a Teylor sequenc
 
 """
+
+def sensitivity_second_order(ipsf, scale, brate):
+    return (scale*ipsf)**2./brate
+
+class DetectorSensitivityTaylorSeies(DetectorVignetting):
+    def __init__(self, *args, **kwargs):
+        self.bmap = np.zeros((48, 48), bool)
+        super().__init__(*args, **kwargs)
+        self.vignfun = sensitivity_second_order
+
+    def add_pix(self, x, y, i, j):
+        if ~self.dpix[x, y]:
+            self._img[(x - 1)*9: (x - 1)*9 + 121, (y - 1)*9: (y - 1)*9 + 121] += self.vignfun(self.iifun(i, j), self.vignscale, self.bmap[x, y])
+            self.dpix[x, y] = True
+
+    def set_bkgratemap(self, bmap):
+        self.bmap = bmap
+
+
 def make_theta_2nd_order_overall_profile(imgfilters, brates, urdweights={}, subgrid=10, **kwargs):
     """
     produces combined effective area of seven detector as projected on sky
