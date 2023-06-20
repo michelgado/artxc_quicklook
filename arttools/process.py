@@ -5,6 +5,7 @@ from arttools.planwcs import make_wcs_for_attdata, split_survey_mode
 from arttools.time import tGTI, get_gti, GTI, emptyGTI, deadtime_correction
 from arttools.expmap import make_expmap_for_wcs
 from arttools.background import make_bkgmap_for_wcs
+import tqdm
 from arttools.telescope import URDNS
 import arttools
 import sys
@@ -16,6 +17,7 @@ import numpy as np
 from astropy.io import fits
 from functools import reduce
 from itertools import repeat
+import re
 from scipy.interpolate import interp1d
 from copy import copy
 from scipy.spatial.transform import Rotation
@@ -537,9 +539,10 @@ def analyze_survey(fpath, pastday=None):
                                       usedtcorr=False)
 
 def make_img(flist, outputname, usergti=tGTI, emin=4., emax=12., make_detmap=False, ra=None, dec=None):
+    tfpat = re.compile(".*T\d{1}_cl.evt")
     allfiles = [l.rstrip() for l in open(flist)]
-    attfiles = [l for l in allfiles if "gyro.fits" in l]
-    urdfiles = [l for l in allfiles if "urd.fits" == l[-8:]]
+    attfiles = [l for l in allfiles if "gyro.fits" in l or "att" in l]
+    urdfiles = [l for l in allfiles if "urd.fits" == l[-8:] or tfpat.match(l)]
 
     attdata = arttools.orientation.AttDATA.concatenate([arttools.orientation.get_attdata(gf) for gf in attfiles])
     attdata = attdata.apply_gti(usergti + [-3, 3])
@@ -557,7 +560,7 @@ def make_img(flist, outputname, usergti=tGTI, emin=4., emax=12., make_detmap=Fal
 
     urddata, urdhk = arttools.containers.read_urdfiles(urdfiles, {urdn: arttools.filters.IndependentFilters({"TIME": attdata.gti}) for urdn in arttools.telescope.URDNS}) #[f.replace("L0", "L1b") for f in urdfiles])
     for urdn in urddata:
-        if not "ENERGY" in urddata[urdn]:
+        if not "ENERGY" in urddata[urdn].data.dtype.names:
             urddata[urdn] = arttools.energy.add_energies_and_grades(urddata[urdn], urdhk[urdn], arttools.caldb.get_energycal_by_urd(urdn), arttools.caldb.get_escale_by_urd(urdn))
     bkgdata = {urdn: d.apply_filters(bkgfilters) for urdn, d in urddata.items()}
     bkgtimes = np.sort(np.concatenate([d["TIME"] for d in bkgdata.values()]))
@@ -585,8 +588,21 @@ def make_img(flist, outputname, usergti=tGTI, emin=4., emax=12., make_detmap=Fal
     femap = arttools.expmap.make_expmap_for_wcs(lwcs, attdata, imgf, urdweights=urdcrates, kind="convolve")#, dtcorr=urddtc) #, urdweights=urdcrates) #emin=4., emax=12., phot_index=1.9)
     if make_detmap:
         emap = femap
+        """
         bkgrates = {urdn: arttools.background.get_local_bkgrates(urdevt[urdn], urdbkg[urdn]) for urdn in arttools.telescope.URDNS}
         bkgrates = arttools.telescope.concat_data_in_order(bkgrates)
+        """
+
+        tit = arttools.source_detection.create_neighbouring_blocks_tasks(lwcs, emap, urdevt, attdata, urdbkg) #, photbkgrate=get_photbkg_rate)
+        bs = arttools.source_detection.BlockEstimator(lwcs, mpnum=10)
+
+        ctot, pmap = np.zeros(emap.shape, float), np.zeros(emap.shape, float)
+
+        for x, y, c, th in tqdm.tqdm(bs.get_nphot_and_theta(tit)):
+            ctot[x, y] = c
+            pmap[x, y] = th
+
+        """
 
         urdns = arttools.telescope.URDNS
         qlist = [Rotation(np.empty((0, 4), np.double)) if urdevt[urdn].size == 0 else arttools.orientation.get_events_quats(urdevt[urdn], urdn, attdata)*arttools._det_spatial.get_qcorr_for_urddata(urdevt[urdn]) for urdn in arttools.telescope.URDNS if urdn in urdevt]
@@ -603,7 +619,8 @@ def make_img(flist, outputname, usergti=tGTI, emin=4., emax=12., make_detmap=Fal
         vmap = arttools.psf.get_ipsf_interpolation_func()
         pkoef = photprob/bkgrates
 
-        ije, sidx, ss, sc = arttools.psf.select_psf_grups(i, j, eenergy)
+
+        ije, sidx, ss, sc = arttools.psf.select_psf_groups(i, j, eenergy)
         tasks = [(qlist[sidx[s:s+c]], pkoef[sidx[s:s+c]], np.copy(arttools.psf.unpack_inverse_psf_ayut(ic, jc)[eidx])) for (ic, jc, eidx), s, c in zip(ije.T, ss, sc)]
 
         mask = emap > 1.
@@ -623,8 +640,9 @@ def make_img(flist, outputname, usergti=tGTI, emin=4., emax=12., make_detmap=Fal
         sky.set_rmap(ctot/np.maximum(emap, 1.), join=True)
         sky.img[:, :] = 0.
         sky.rmap_convolve_multicore(tasks, total=len(tasks))
+        """
 
-        prob = (-sky.img - ctot)/log(10.)
+        prob = (pmap - ctot)/log(10.)
         fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(img1, header=lwcs.to_header(), name='PHOT'),
                                                 fits.ImageHDU(ctot/emap, header=lwcs.to_header(), name="rate"),
                                                 fits.ImageHDU(prob, header=lwcs.to_header(), name="prob"),
