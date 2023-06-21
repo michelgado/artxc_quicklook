@@ -459,6 +459,7 @@ class WCSSkyWithIllumination(WCSSky, IlluminationSources): #, IlluminationSource
 
     def get_expmap(self, attdata, urdfilters, urdweights={}, dtcorr={}):
         urdgtis = {urdn: f.filters["TIME"] for urdn, f in urdfilters.items()}
+        self.clean_image()
         self.update_filters({urdn: f.filters for urdn, f in urdfilters.items()})
 
         for urdn in urdgtis:

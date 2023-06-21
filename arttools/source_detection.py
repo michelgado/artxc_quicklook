@@ -19,11 +19,10 @@ cr = np.sum([v for v in urdcrates.values()])
 urdcrates = {urdn: d/cr for urdn, d in urdcrates.items()}
 
 
-def make_detstat_tasks(urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate=lambda evt, att: 0., return_aux=False):
+def make_unipix_data(urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate=lambda evt, att: 0.):
     bkgrates = {urdn: get_local_bkgrates(urdevt[urdn], bkglc[urdn]) for urdn in URDNS if urdn in urdevt}
     bkgrates = concat_data_in_order(bkgrates)
 
-    print("quats")
     qlist = [Rotation(np.empty((0, 4), np.double)) if urdevt[urdn].size == 0 else get_events_quats(urdevt[urdn], urdn, attdata)*get_qcorr_for_urddata(urdevt[urdn]) for urdn in URDNS if urdn in urdevt]
     qlist = Rotation.from_quat(np.concatenate([q.as_quat() for q in qlist], axis=0))
 
@@ -42,13 +41,15 @@ def make_detstat_tasks(urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate
     pbkgrate = concat_data_in_order(pbkgrate)
 
     pkoef = photprob/(bkgrates + pbkgrate*photprob)
+    return i, j, qlist, pkoef, eenergy
+
+
+def make_detstat_tasks(urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate=lambda evt, att: 0.):
+    i, j, qlist, pkoef, eenergy = make_unipix_data(urdevt, attdata, bkglc, urdweights, photbkgrate)
 
     ije, sidx, ss, sc = select_psf_groups(i, j, eenergy)
     tasks = [(qlist[sidx[s:s+c]], pkoef[sidx[s:s+c]], np.copy(unpack_inverse_psf_ayut(ic, jc)[eidx])) for (ic, jc, eidx), s, c in zip(ije.T, ss, sc)]
-    if return_aux:
-        return tasks, i, j, qlist, pkoef, eenergy, sidx, ss, sc
-    else:
-        return tasks
+    return tasks
 
 
 class Single_position_estimator(object):
@@ -220,13 +221,12 @@ def make_detmap_with_conv(locwcs, emap, urde, attdata, bkglc, mpnum=20, maxit=10
 
 
 def create_neighbouring_blocks_tasks(locwcs, emap, urde, attdata, bkglc, photbkgrate=lambda evt, att: 0., urdweights=urdcrates):
-    tasks, i, j, qtot, pk, ee, sidx, ss, sc = make_detstat_tasks(urde, attdata, bkglc, photbkgrate=photbkgrate, urdweights=urdweights, return_aux=True)
+    i, j, qtot, pk, ee = make_unipix_data(urde, attdata, bkglc, photbkgrate=photbkgrate, urdweights=urdweights)
     vmap = get_ipsf_interpolation_func()
     sizex = int(np.arctan(max(np.max(np.abs(vmap.grid[0][[0, -1]])), np.max(np.abs(vmap.grid[1][[0, -1]])))/F)*180/pi/np.min(locwcs.wcs.cdelt[1])*sqrt(2.)) + 2
     sizey = int(np.arctan(max(np.max(np.abs(vmap.grid[0][[0, -1]])), np.max(np.abs(vmap.grid[1][[0, -1]])))/F)*180/pi/np.min(locwcs.wcs.cdelt[0])*sqrt(2.)) + 2
     xy = (locwcs.all_world2pix(np.rad2deg(vec_to_pol(qtot.apply([1, 0, 0]))).T, 0) + 0.5).astype(int)[:, ::-1]
     mx = (emap.shape[0] + sizex - 1)//sizex
-    print(sizex, sizey, mx)
     srcidx = xy[:, 0]//sizex + mx*(xy[:, 1]//sizey)
     sidx = np.argsort(srcidx)
     i, j, qtot, pk, ee, srcidx = i[sidx], j[sidx], qtot[sidx], pk[sidx], ee[sidx], srcidx[sidx]
@@ -261,14 +261,13 @@ def create_neighbouring_blocks_tasks(locwcs, emap, urde, attdata, bkglc, photbkg
     idxg = np.concatenate([np.arange(sus[nl], sue[nl]) for nl in nsl])
     for k, n in enumerate(piu[1:]):
         yield x, y, exp, i[idxg], j[idxg], ee[idxg], pk[idxg], qtot[idxg] #, srcidx[idxg]
-        x, y = ii[pus[k + 1]:pue[k+ 1]], jj[pus[k + 1]:pue[k + 1]],
+        x, y = ii[pus[k + 1]:pue[k+ 1]], jj[pus[k + 1]:pue[k + 1]]
         exp = emap[x, y]
         nsl = n + ishift
         #print(piu[k], nsl)
         nsl = np.searchsorted(siu, nsl[np.isin(nsl, siu, assume_unique=True)], sorter=ssorter)
         idxg = np.concatenate([np.arange(sus[nl], sue[nl]) for nl in nsl])
     yield x, y, exp, i[idxg], j[idxg], ee[idxg], pk[idxg], qtot[idxg] #, srcidx[idxg]
-
 
 class BlockEstimator(DistributedObj):
     def __init__(self, locwcs, mpnum=4, barrier=None):
@@ -332,7 +331,7 @@ def estimate_rate_for_direction_iterate(locwcs, x, y, exposure, i, j, ee, pk, qt
         explc = expl[mtot]
         #print("before check", bw.size, csc.sum(), csc.size, nc.size, explc.size)
         for _ in range(200):
-            cres = np.cumsum(1./(1. + np.repeat(explc, csc)/bwc/np.repeat(nc, csc)))
+            cres = np.cumsum(1./(1. + np.repeat(explc/nc, csc)/bwc))
             nn[1:] = np.diff(cres[css])
             nn[0] = cres[css[0]]
             nphot[mtot] = nn
@@ -349,26 +348,7 @@ def estimate_rate_for_direction_iterate(locwcs, x, y, exposure, i, j, ee, pk, qt
         t = np.cumsum(np.log(bw*np.repeat(nphot/expl, cs) + 1))
         qest[1:] = np.diff(t[np.cumsum(cs) - 1])
         qest[0] = t[cs[0] - 1]
-        qest[cs < 0.5] == 0.
-
-        """
-        bww = np.zeros(ic.size, float)
-        bww[m] = bw
-        bww = bww.reshape((nphot.size, -1))*pk[np.newaxis, :]
-        bww = np.sort(bww, axis=1)
-        bww = bww[:, np.any(bww > 0, axis=0)]
-        nphot[:] = np.sum(bww > 0, axis=1).astype(float)
-        mdone = np.ones(bww.shape[0], bool)
-        for _ in range(100):
-            #npnew = np.sum(bww[mdone, :]*nphot[mdone, np.newaxis]/(bww[mdone, :]*nphot[mdone, np.newaxis] + exposure[mdone, np.newaxis]), axis=1)
-            npnew = np.sum(1./(1. + expl[mdone, np.newaxis]/bww[mdone, :]/nphot[mdone, np.newaxis]), axis=1)
-            mred = ~((npnew < nphot[mdone]) & (npnew < 1.))
-            nphot[mdone] = npnew
-            if ~np.any(mred):
-                break
-            mdone[mdone] = mred
-        qest[:] = np.sum(np.log(bww*(nphot/expl)[:, np.newaxis] + 1.), axis=1)
-        """
+        qest[(cs == 0) | (nphot < 0.5)] == 0.
     return x, y, ntot, thet
 
 
