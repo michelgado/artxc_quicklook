@@ -41,7 +41,7 @@ def weigt_time_intervals(gtis, scales={}, defaultscale=1):
 
 def sum_lcs(tes, lcs, gaps=None, sigmas=None):
     if gaps is None:
-        gaps = [np.ones(l.size, np.bool) for l in lcs]
+        gaps = [np.ones(l.size, bool) for l in lcs]
     if sigmas is None:
         sigmas = [np.ones(l.size) for l in lcs]
     tetot = np.unique(np.concatenate(tes))
@@ -176,7 +176,7 @@ def make_constantcounts_timeedges(times, gti, cts=1000):
     cidx = np.cumsum(csize[:-1] + 1)
     dtl[cidx] = gti.arr[1:, 0] - gti.arr[:-1, 1]
     dtl[0] = 0.
-    mgaps = np.zeros(dtl.size, np.bool)
+    mgaps = np.zeros(dtl.size, bool)
     mgaps[cidx - 1] = False
     return gti.arr[0, 0] + dtl.cumsum(), mgaps
 

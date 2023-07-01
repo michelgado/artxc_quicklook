@@ -35,7 +35,7 @@ def convexhull_to_wcs(chull, alpha=None, cax=None, pixsize=10./3600., maxsize=Fa
     if alpha is None:
         alpha = minimize(lambda a: ConvexHullonSphere(chull.get_containing_rectangle(a, cax)).area, [0.,], method="Nelder-Mead").x[0]
     locwcs = make_tan_wcs(ra, dec, pixsize=pixsize)
-    xy = locwcs.all_world2pix(np.rad2deg(vec_to_pol(chull.vertices)).T, 1).astype(np.int)
+    xy = locwcs.all_world2pix(np.rad2deg(vec_to_pol(chull.vertices)).T, 1).astype(int)
     #print(xy.shape)
     if maxsize:
         locwcs.wcs.crpix = (np.max(xy, axis=0) - np.min(xy, axis=0) + 1)//2 + [1, 1]

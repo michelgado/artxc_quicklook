@@ -77,7 +77,7 @@ def get_specprate(emin, emax, cspec):
 
 def get_events_crab_weights(grid, spec, udata):
     #grid, spec = get_background_spectrum(filters)
-    gidx = np.zeros(grid["GRADE"].max() + 1, np.int)
+    gidx = np.zeros(grid["GRADE"].max() + 1, int)
     gidx[grid["GRADE"]] = np.arange(grid["GRADE"].size)
     idxe = np.searchsorted(grid["ENERGY"], udata["ENERGY"]) - 1
     idxg = gidx[udata["GRADE"]]

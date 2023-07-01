@@ -250,12 +250,12 @@ def get_shadowmask_by_urd(urdn):
     """
     urdtobit = {28:2, 22:4, 23:8, 24:10, 25:20, 26:40, 30:80}
     fpath = os.path.join(ARTCALDBPATH, "artxc_detmask_%s_20200414_v001.fits" % URDTOTEL[urdn])
-    #mask = np.logical_not(fits.getdata(fpath, 1).astype(np.bool))
+    #mask = np.logical_not(fits.getdata(fpath, 1).astype(bool))
     """
     #print("urdn", urdn, ANYTHINGTOTELESCOPE[urdn])
     fpath = get_caldata("DETMASK", ANYTHINGTOTELESCOPE.get(urdn, urdn))[0][0]
     #print("fpath!!!", fpath)
-    mask = np.copy(fits.getdata(fpath, 1)).astype(np.bool)
+    mask = np.copy(fits.getdata(fpath, 1)).astype(bool)
     #mask = np.ones((48, 48), bool)
     if not CUTAPP is None:
         x, y = np.mgrid[0:48:1, 0:48:1] + 0.5

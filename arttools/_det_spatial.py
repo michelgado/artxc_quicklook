@@ -48,7 +48,7 @@ def offset_to_raw_xy(x, y):
     """
     x = x/DL + 24
     y = y/DL + 24
-    return x.astype(np.int) - (x < 0), y.astype(np.int) - (y < 0)
+    return x.astype(int) - (x < 0), y.astype(int) - (y < 0)
 
 #@cache_single_result_np
 def raw_xy_to_vec(rawx, rawy, subscale=1, randomize=False):

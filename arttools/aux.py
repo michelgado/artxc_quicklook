@@ -170,6 +170,7 @@ class DistributedObj(object):
     def perform_for_each_argument(vals):
         args, method, kwargs = vals
         global localcopy
+        #print(args, method, kwargs)
         return localcopy.__getattribute__(method)(*args, **kwargs)
 
     @staticmethod

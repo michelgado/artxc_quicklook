@@ -152,6 +152,8 @@ def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNU
     urdgtis = {urdn: f.filters["TIME"] & cgti for urdn, f in urdfilters.items()}
 
     gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
+    if gti.length == 0:
+        return te, np.zeros(te.size - 1)
     #print("gti exposure", gti.exposure)
     tel, gaps, locgti = make_small_steps_quats(attdata, gti=gti, tedges=te)
     tc = (tel[1:] + tel[:-1])[gaps]/2.

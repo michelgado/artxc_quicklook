@@ -68,7 +68,7 @@ class GTI(Intervals):
         eidx = np.searchsorted(te, self.arr)
         mempty = eidx[:, 0] != eidx[:, 1]
         sidx = np.searchsorted(te, self.arr[mempty, 0])
-        m1 = np.ones(te.size, np.bool)
+        m1 = np.ones(te.size, bool)
         m1[sidx] = te[sidx] - self.arr[mempty, 0] > dt*joinsize
         #print(np.array([self.arr[mempty, 0], te[sidx], self.arr[mempty, 1], te[sidx] - self.arr[mempty, 0], np.array(m1, dtype=np.double)]).T)
         te = te[m1]
@@ -76,7 +76,7 @@ class GTI(Intervals):
         eidx = np.searchsorted(te, self.arr)
         mempty = eidx[:, 0] != eidx[:, 1]
         sidx = np.searchsorted(te, self.arr[mempty, 1]) - 1
-        m1 = np.ones(te.size, np.bool)
+        m1 = np.ones(te.size, bool)
         m1[sidx] = self.arr[mempty, 1] - te[sidx] > dt*joinsize
         te = te[m1]
 
@@ -131,7 +131,7 @@ def make_bki_gti(ffile):
         bkigti = GTI(ffile["HK"].data["TIME"][bkiedges]) + [-10, 10]
     else:
         dt = np.diff(ffile["HK"].data["TIME"], 1)
-        rate = np.diff(ffile["HK"].data["EVENTS"].astype(np.int), 1)/dt
+        rate = np.diff(ffile["HK"].data["EVENTS"].astype(int), 1)/dt
         bkigti = GTI(ffile["HK"].data["TIME"][maskedges(rate > 200) + [1, 0]]) + [-10, 10]
     return bkigti
 
@@ -246,7 +246,7 @@ def gti_union(gti):
     gti = gti[np.argsort(gti[:, 0])]
     idx = np.argsort(np.ravel(gti))
     gtis = np.ravel(gti)[idx]
-    mask = np.zeros(gtis.size, np.bool)
+    mask = np.zeros(gtis.size, bool)
     mask[::2] = idx[::2] == np.arange(0, idx.size, 2)
     mask[1::2] = np.roll(mask[::2], -1)
     return gtis[mask].reshape((-1, 2))
@@ -290,7 +290,7 @@ def gti_difference(gti1, gti2):
     return gti_intersection(gti2, gti3)
 
 def mkgtimask(time, gti):
-    mask = np.zeros(time.size, np.bool)
+    mask = np.zeros(time.size, bool)
     idx = np.searchsorted(time, gti)
     for s, e in idx:
         mask[s:e] = True
@@ -305,14 +305,14 @@ def make_ingti_times(time, ggti, stick_frac=0.5):
     gti = gti_intersection(np.array([time[[0, -1]],]), ggti)
     idx = np.searchsorted(time, gti)
     tnew = np.empty(np.sum(idx[:,1] - idx[:,0]) + 2*idx.shape[0], np.double)
-    cidx = np.empty(idx.shape[0] + 1, np.int)
+    cidx = np.empty(idx.shape[0] + 1, int)
     cidx[1:] = np.cumsum(idx[:,1] - idx[:,0] + 2)
     cidx[0] = 0
     for i in range(idx.shape[0]):
         tnew[cidx[i]+1: cidx[i+1]-1] = time[idx[i,0]:idx[i,1]]
         tnew[cidx[i]] = gti[i, 0]
         tnew[cidx[i + 1] - 1] = gti[i, 1]
-    maskgaps = np.ones(max(tnew.size - 1, 0), np.bool)
+    maskgaps = np.ones(max(tnew.size - 1, 0), bool)
     maskgaps[cidx[1:-1] - 1] = False
     return tnew, maskgaps
 

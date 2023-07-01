@@ -391,7 +391,7 @@ class ConvexHullonSphere(object):
     @property
     def area(self):
         if self.vertices.shape[0] > 2:
-            return get_vec_triangle_area(self.vertices[np.zeros(self.vertices.shape[0] - 2).astype(np.int)],
+            return get_vec_triangle_area(self.vertices[np.zeros(self.vertices.shape[0] - 2).astype(int)],
                                      self.vertices[1:-1],
                                      self.vertices[2:]).sum()*(180./pi)**2.
         else:

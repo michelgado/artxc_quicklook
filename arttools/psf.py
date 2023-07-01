@@ -10,14 +10,14 @@ from functools import lru_cache
 
 def xy_to_opaxoffset(x, y, urdn):
     x0, y0 = (24, 24) if urdn is None else get_optical_axis_offset_by_device(urdn)
-    return np.round(x + 0.5 - x0).astype(np.int), np.round(y + 0.5 - y0).astype(np.int)
+    return np.round(x + 0.5 - x0).astype(int), np.round(y + 0.5 - y0).astype(int)
 
 def rawxy_to_opaxoffset(rawx, rawy, urdn=None):
     """
     returns i and j coordinate of the pixel relative to the pixel 0, 0 which we assume that contain optical axis in its center
     """
     x0, y0 = (0.6, 0.6) if urdn is None else get_optical_axis_offset_by_device(urdn)
-    return np.round(rawx + 0.5 - x0).astype(np.int), np.round(rawy + 0.5 - y0).astype(np.int)
+    return np.round(rawx + 0.5 - x0).astype(int), np.round(rawy + 0.5 - y0).astype(int)
 
 def urddata_to_opaxoffset(urddata, urdn):
     return rawxy_to_opaxoffset(urddata["RAW_X"], urddata["RAW_Y"], urdn)
@@ -26,11 +26,11 @@ def urddata_to_opaxoffset(urddata, urdn):
 def get_urddata_opaxofset_map(urdn):
     x, y = get_optical_axis_offset_by_device(urdn)
     X, Y = np.arange(48), np.arange(48)
-    return np.round(X + 0.5 - x).astype(np.int), np.round(Y + 0.5 - y).astype(np.int)
+    return np.round(X + 0.5 - x).astype(int), np.round(Y + 0.5 - y).astype(int)
 
 def opaxoffset_to_pix(x, y, urdn=None):
     x0, y0 = (0, 0) if urdn is None else get_optical_axis_offset_by_device(urdn)
-    return np.round(x0 + 0.5 + x).astype(np.int), np.round(y + 0.5 + y0).astype(np.int)
+    return np.round(x0 + 0.5 + x).astype(int), np.round(y + 0.5 + y0).astype(int)
 
 def get_inversed_psf_profiles(xshift, yshift):
     ipsf = get_inversed_psf_profiles()

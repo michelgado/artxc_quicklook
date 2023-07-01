@@ -1,13 +1,16 @@
 from .telescope import URDNS, concat_data_in_order
 from ._det_spatial import vec_to_offset, get_qcorr_for_urddata, F
 from math import pi, sin, cos, sqrt, log10
-from .background import get_local_bkgrates, get_photon_vs_particle_prob
+from .background import get_local_bkgrates, get_photon_vs_particle_prob, get_photon_and_particles_rates
 from .psf import urddata_to_opaxoffset, unpack_inverse_psf_ayut, get_ipsf_interpolation_func, select_psf_groups, photbkg_pix_coeff, naive_bispline_interpolation
 from .aux import DistributedObj
+from .containers import Urddata
 from .caldb import get_telescope_crabrates
+from .planwcs import make_tan_wcs
 from .vector import normalize, pol_to_vec, vec_to_pol
+from .expmap import make_exposures, make_expmap_for_wcs
 from .mosaic2 import WCSSky, get_source_photon_probability, get_zerosource_photstat
-from .orientation import get_events_quats
+from .orientation import get_events_quats, get_photons_vectors
 from scipy.spatial.transform import Rotation
 from scipy.optimize import minimize, root
 from multiprocessing.pool import ThreadPool
@@ -19,7 +22,7 @@ cr = np.sum([v for v in urdcrates.values()])
 urdcrates = {urdn: d/cr for urdn, d in urdcrates.items()}
 
 
-def make_unipix_data(urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate=lambda evt, att: 0.):
+def make_unipix_data(urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate=lambda evt, att: 0., cspec=None):
     bkgrates = {urdn: get_local_bkgrates(urdevt[urdn], bkglc[urdn]) for urdn in URDNS if urdn in urdevt}
     bkgrates = concat_data_in_order(bkgrates)
 
@@ -31,21 +34,32 @@ def make_unipix_data(urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate=l
 
     eenergy = concat_data_in_order({urdn: d["ENERGY"] for urdn, d in urdevt.items()})
 
+    prate, brate = {}, {}
+    for urdn in urdevt:
+        p, b = get_photon_and_particles_rates(urdevt[urdn], cspec)
+        prate[urdn] = p*urdweights.get(urdn, 1./7.)
+        brate[urdn] = b
+
+    prate = concat_data_in_order(prate)
+    brate = concat_data_in_order(brate)
+    """
     photprob = get_photon_vs_particle_prob(urdevt, urdweights=urdcrates)
     photprob = concat_data_in_order(photprob)
+    """
 
     pbkgrate = {}
     for urdn in urdevt:
         profile = photbkg_pix_coeff(urdn, urdevt[urdn].filters)
         pbkgrate[urdn] = profile[urdevt[urdn]["RAW_X"], urdevt[urdn]["RAW_Y"]]*photbkgrate(urdevt[urdn], attdata) #attdata, urdevt)
-    pbkgrate = concat_data_in_order(pbkgrate)
+    pbkgrate = concat_data_in_order(pbkgrate) # this is overall photon background rate (without spectarl information)# to add spectral info multiply by prate
 
-    pkoef = photprob/(bkgrates + pbkgrate*photprob)
-    return i, j, qlist, pkoef, eenergy
+    #pkoef = photprob/(bkgrates + pbkgrate*photprob)
+    return i, j, qlist, prate, bkgrates*brate + pbkgrate*prate, eenergy
 
 
 def make_detstat_tasks(urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate=lambda evt, att: 0.):
-    i, j, qlist, pkoef, eenergy = make_unipix_data(urdevt, attdata, bkglc, urdweights, photbkgrate)
+    i, j, qlist, prate, brate, eenergy = make_unipix_data(urdevt, attdata, bkglc, urdweights, photbkgrate)
+    pkoef = prate/brate
 
     ije, sidx, ss, sc = select_psf_groups(i, j, eenergy)
     tasks = [(qlist[sidx[s:s+c]], pkoef[sidx[s:s+c]], np.copy(unpack_inverse_psf_ayut(ic, jc)[eidx])) for (ic, jc, eidx), s, c in zip(ije.T, ss, sc)]
@@ -220,8 +234,9 @@ def make_detmap_with_conv(locwcs, emap, urde, attdata, bkglc, mpnum=20, maxit=10
     return ctot, np.copy(sky.img)
 
 
-def create_neighbouring_blocks_tasks(locwcs, emap, urde, attdata, bkglc, photbkgrate=lambda evt, att: 0., urdweights=urdcrates):
-    i, j, qtot, pk, ee = make_unipix_data(urde, attdata, bkglc, photbkgrate=photbkgrate, urdweights=urdweights)
+def create_neighbouring_blocks_tasks(locwcs, emap, urde, attdata, bkglc, photbkgrate=lambda evt, att: 0., urdweights=urdcrates, cspec=None):
+    i, j, qtot, prate, brate, ee = make_unipix_data(urde, attdata, bkglc, photbkgrate=photbkgrate, urdweights=urdweights, cspec=cspec)
+    pk = prate/brate
     vmap = get_ipsf_interpolation_func()
     sizex = int(np.arctan(max(np.max(np.abs(vmap.grid[0][[0, -1]])), np.max(np.abs(vmap.grid[1][[0, -1]])))/F)*180/pi/np.min(locwcs.wcs.cdelt[1])*sqrt(2.)) + 2
     sizey = int(np.arctan(max(np.max(np.abs(vmap.grid[0][[0, -1]])), np.max(np.abs(vmap.grid[1][[0, -1]])))/F)*180/pi/np.min(locwcs.wcs.cdelt[0])*sqrt(2.)) + 2
@@ -384,18 +399,35 @@ def get_nosource_likelihood_ratio_for_direction(srcvec, exposure, tasks):
     rate, svals = estimate_rate_for_direction(srcvec, exposure, tasks)
     return np.sum(np.log(svals*rate + 1.) - exp*rate)
 
-def get_local_maxima(urdevt, bkglc, expmap, urdweights=urdcrates):
+
+def get_nearest_local_maxima(ra0, dec0, urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate=lambda evt, att: 0., cspec=None, rsearcharound=10.):
     """
     expmap is expected to be a function, which returns real exposure corresponding to events, stored in tasks
     """
-    tasks = make_detstat_tasks(urdevt, bkglc, urdweights)
-    def prepare_likelihood_estimation(ra, dec):
-        exposure = expmap(ra, dec)
-        srcvec = pol_to_vec(*np.deg2rad([ra, dec]).reshape((2, -1)))[0]
-        return get_nosource_likelihood_ratio_for_direction(srcvec, exposure, tasks)
+    ax0 = pol_to_vec(ra0*pi/180., dec0*pi/180.)
+    u1 = {urdn: Urddata(d.data[np.sum(get_photons_vectors(d, urdn, attdata)*ax0, axis=1) > cos(pi/180.*rsearcharound/60.)], urdn, d.filters) for urdn, d in urdevt.items()}
+    i, j, qtot, prate, brate, ee = make_unipix_data(u1, attdata, bkglc, urdweights, photbkgrate)
+    attloc = attdata.apply_gti(attdata.circ_gti(ax0, 1800 + rsearcharound*60.))
+    sx = int(rsearcharound*60.)
+    sx = sx + sx*2 - 1
+    lwcs = make_tan_wcs(ra0, dec0, sizex=sx, sizey=sx, pixsize=1./3600.)
+    eml = make_expmap_for_wcs(lwcs, attloc, urdevt, urdweights=urdweights)
+    def lklfun(var):
+        print(var)
+        ax = pol_to_vec(*var)
+        yl, xl = lwcs.all_world2pix([[var[0]*180/pi, var[1]*180/pi],], 0)
+        expl = eml[int(xl + 0.5), int(yl + 0.5)]
+        #expl = make_exposures(ax, np.array([-np.inf, np.inf]), attloc, {urdn: d.filters for urdn, d in urdevt.items()}, urdweights=urdcrates)[1] #, illum_filters=ifilters)
+        mask, w = naive_bispline_interpolation(i, j, qtot.apply(ax, inverse=True), ee)
+        pk = w*prate[mask]/brate[mask]
+        res = root(lambda x: np.sum(1./(x + 1./pk)) - expl, 1.)
+        return expl*res.x[0] - np.sum(np.log(res.x[0]*pk + 1.))
 
-    mvec = normalize(np.sum(np.concatenate([q.apply([1, 0, 0]) for q, _, _ in tasks], axis=0)))
-    guess = np.rad2deg(vec_to_pol(mvec))
-    likelihood = minimize(lambda x: -prepare_likelihood_estimation(ra, dec), guess)
-    srcvec = pol_to_vec(*np.deg2rad(likelihood.x).reshape((2, -1)))[0]
-    return likelihood, estimate_rate_for_direction(srcvec, expmap(*likelihood.x), tasks)
+    likelihood = minimize(lklfun, [ra0*pi/180, dec0*pi/180.], method="Nelder-Mead")
+    ax = pol_to_vec(*likelihood.x)
+    yl, xl = lwcs.all_world2pix([[likelihood.x[0]*180/pi, likelihood.x[1]*180/pi],], 0)
+    expl = eml[int(xl + 0.5), int(yl + 0.5)]
+    #expl = make_exposures(ax, np.array([-np.inf, np.inf]), attdata, {urdn: d.filters for urdn, d in urdevt.items()}, urdweights=urdcrates)[1] #, illum_filters=ifilters)
+    mask, w = naive_bispline_interpolation(i, j, qtot.apply(ax, inverse=True), ee)
+    res = root(lambda x: np.sum(1./(x + brate[mask]/(w*prate[mask]))) - expl, 1.)
+    return likelihood, exp, res

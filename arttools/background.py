@@ -182,7 +182,7 @@ def get_background_spectrum(filters):
 
 def get_background_events_weight(filters, udata):
     grid, spec = get_background_spectrum(filters)
-    gidx = np.zeros(30, np.int)
+    gidx = np.zeros(30, int)
     gidx[grid["GRADE"]] = np.arange(grid["GRADE"].size)
     idxe = np.searchsorted(grid["ENERGY"], udata["ENERGY"]) - 1
     idxg = gidx[udata["GRADE"]]
@@ -237,7 +237,7 @@ def get_full_photbkgrate(wcs, photbkgmap, imgfilters, attdata, te):
     return lclist
 
 
-def get_photon_to_particle_rate_ratio(urddata, cspec=None):
+def get_photon_and_particles_rates(urddata, cspec=None):
     """
     if cspec is not provided returns a ratio between particle and crab shaped spectrum for each grade and energy
     """
@@ -255,14 +255,18 @@ def get_photon_to_particle_rate_ratio(urddata, cspec=None):
     specb = (specb/np.diff(gridb["ENERGY"])[:, np.newaxis])/specb.sum()
 
     eidx = np.searchsorted(gridb["ENERGY"], urddata["ENERGY"]) - 1
-    gidx = np.zeros(30, np.int)
+    gidx = np.zeros(30, int)
     gidx[gridb["GRADE"]] = np.arange(gridb["GRADE"].size)
     bweights = specb[eidx, gidx[urddata["GRADE"]]]
 
     eidx = np.searchsorted(gridp["ENERGY"], urddata["ENERGY"]) - 1
-    gidx = np.zeros(30, np.int)
+    gidx = np.zeros(30, int)
     gidx[gridp["GRADE"]] = np.arange(gridb["GRADE"].size)
-    return specp[eidx, gidx[urddata["GRADE"]]]/bweights
+    return specp[eidx, gidx[urddata["GRADE"]]], bweights
+
+def get_photon_to_particle_rate_ratio(urddata, cspec=None):
+    prate, brate = get_photon_and_particles_rates(urddata, cspec)
+    return prate/brate
 
 def get_photon_vs_particle_prob(udata, urdweights={}, cspec=None):
     pweights = {}

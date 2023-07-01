@@ -43,10 +43,10 @@ def hist_quat(quat):
     return: unique sets of ra, dec, roll values, indices and inverse indeces of quats for corresponding set (see np.unique)
     """
     ra, dec, roll = quat_to_pol_and_roll(quat)
-    orhist = np.empty((ra.size, 3), np.int)
-    orhist[:, 0] = np.asarray((dec + pi/2.)/DELTASKY, np.int)
-    orhist[:, 1] = np.asarray(np.cos(dec - dec%DELTASKY)*ra/DELTASKY, np.int)
-    orhist[:, 2] = np.asarray(roll/DELTAROLL, np.int)
+    orhist = np.empty((ra.size, 3), int)
+    orhist[:, 0] = np.asarray((dec + pi/2.)/DELTASKY, int)
+    orhist[:, 1] = np.asarray(np.cos(dec - dec%DELTASKY)*ra/DELTASKY, int)
+    orhist[:, 2] = np.asarray(roll/DELTAROLL, int)
     return np.unique(orhist, return_index=True, return_inverse=True, axis=0)
 
 def hist_orientation(qval, dt):
@@ -268,7 +268,7 @@ class AttWCSHist(AttHist):
     def put_vmap_on_sky(self, quat, exp):
         vec_fk5 = quat.apply(self.vecs)
         r, d = vec_to_pol(vec_fk5)
-        x, y = (self.wcs.all_world2pix(np.rad2deg(np.array([r, d]).T), 1) - 0.5).T.astype(np.int)
+        x, y = (self.wcs.all_world2pix(np.rad2deg(np.array([r, d]).T), 1) - 0.5).T.astype(int)
         u, idx = np.unique(np.array([x, y]), return_index=True, axis=1)
         mask = np.all([u[0] > -1, u[1] > -1, u[0] < self.img.shape[1], u[1] < self.img.shape[0]], axis=0)
         u, idx = u[:, mask], idx[mask]
@@ -287,7 +287,7 @@ class AttWCSHistmean(AttWCSHist):
     def put_vmap_on_sky(self, quat, exp):
         vec_fk5 = quat.apply(self.vecs)
         r, d = vec_to_pol(vec_fk5)
-        x, y = (self.wcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1) - 0.5).T.astype(np.int)
+        x, y = (self.wcs.all_world2pix(np.array([r*180./pi, d*180./pi]).T, 1) - 0.5).T.astype(int)
         mask = np.all([x > -1, y > -1, x < self.img.shape[1], y < self.img.shape[0]], axis=0)
         x, y, vmap = x[mask], y[mask], self.vmap[mask]
         u, idx, cts = np.unique(np.array([x, y]), return_inverse=True, return_counts=True, axis=1)
@@ -300,7 +300,7 @@ class AttWCSHistinteg(AttWCSHist):
     def put_vmap_on_sky(self, quat, exp):
         vec_fk5 = quat.apply(self.vecs)
         r, d = vec_to_pol(vec_fk5)
-        x, y = (self.wcs.all_world2pix(np.rad2deg(np.array([r, d]).T), 1) - 0.5).T.astype(np.int)
+        x, y = (self.wcs.all_world2pix(np.rad2deg(np.array([r, d]).T), 1) - 0.5).T.astype(int)
         np.add.at(self.img, (y, x), self.vmap*exp)
 
 

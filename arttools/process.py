@@ -29,7 +29,7 @@ from scipy.stats import poisson
 from scipy.special import gamma, gammainc
 from scipy.ndimage import gaussian_filter
 import time
-import pymc3
+#import pymc3
 from astropy.table import Table, QTable
 from astropy import units as au
 import pandas
@@ -383,6 +383,7 @@ def make_spec(ra, dec, survey=None, flist=None, usergti=tGTI):
             report.write("estimated count rate: %.3f \n " % mrate.x[0])
             report.write("crab count rate: %.3f \n" % arttools.spectr.get_crabrate(imgfilters))
 
+            """
             with pymc3.Model() as mo:
                 rate = pymc3.Uniform("rate", lower=0., upper=1000) #min(abs(mrate.x[0])*4.5, 30))
                 o = np.ones(slr.size, np.int)
@@ -390,6 +391,7 @@ def make_spec(ra, dec, survey=None, flist=None, usergti=tGTI):
                 o, blr, slr = o[slr > 0], blr[slr > 0], slr[slr > 0]
                 obs = pymc3.Poisson("obs", mu=blr + slr*rate, observed=o)
                 trace = pymc3.sample(4096)
+            """
 
             #pickle.dump([trace["rate"], slr, blr, tgti.exposure], open("tracetest.pkl", "wb"))
             #pause
@@ -901,10 +903,12 @@ def estimate_rate(flist, outname, ra, dec, usergti=None, emin=4., emax=12., app=
 
     mrate = minimize(lambda rate: -poisson.logpmf(cs, rate*dtn + lcs).sum(), [max(cs.sum() - lcs.sum(), 1)/dtn.sum(),], method="Nelder-Mead")
 
+    """
     with pymc3.Model() as mo:
         rate = pymc3.Uniform("rate", lower=0., upper=1000) #min(abs(mrate.x[0])*4.5, 30))
         obs = pymc3.Poisson("obs", mu=rate*dtn + lcs, observed=cs)
         tracelc = pymc3.sample(4096)
+    """
 
 
 
@@ -942,6 +946,7 @@ def estimate_rate(flist, outname, ra, dec, usergti=None, emin=4., emax=12., app=
     blr[1:] = bkgrates
     mrate = minimize(lambda rate: slr[0]*rate + np.sum(np.log(blr[1:]/(slr[1:]*rate + blr[1:]))), [max(i.size - lcs.sum(), 1)/slr[0],], method="Nelder-Mead")
 
+    """
     with pymc3.Model() as mo:
         rate = pymc3.Uniform("rate", lower=0., upper=1000) #min(abs(mrate.x[0])*4.5, 30))
         o = np.ones(slr.size, np.int)
@@ -949,6 +954,7 @@ def estimate_rate(flist, outname, ra, dec, usergti=None, emin=4., emax=12., app=
         o, blr, slr = o[slr > 0], blr[slr > 0], slr[slr > 0]
         obs = pymc3.Poisson("obs", mu=blr + slr*rate, observed=o)
         traceph = pymc3.sample(4096)
+    """
 
     cl, ch = mprob_quantiles(traceph["rate"], mrate.x[0])[0]
     report += "\nrate estimation from psf:\n %.2e (%.2e, %.2e)" % (mrate.x[0]*4.21e-11, cl*4.21e-11, ch*4.21e-11)

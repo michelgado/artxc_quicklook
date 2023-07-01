@@ -143,7 +143,7 @@ def make_skyimage_for_urdset_by_gti(urdflist, attflist, outctsname, gti=tGTI, ph
     locwcs = make_wcs_for_attdata(attdata, tgti, pixsize)
     xsize, ysize = int(locwcs.wcs.crpix[0]*2 + 1), int(locwcs.wcs.crpix[1]*2 + 1)
     img = np.zeros((ysize, xsize), np.double)
-    y, x = (locwcs.all_world2pix(np.array([ra, dec]).T, 1) - 0.5).astype(np.int).T
+    y, x = (locwcs.all_world2pix(np.array([ra, dec]).T, 1) - 0.5).astype(int).T
     u, uc = np.unique(np.array([x, y]), axis=1, return_counts=True)
     img[u[0], u[1]] = uc
     fits.PrimaryHDU(data=img, header=locwcs.to_header()).writeto(outctsname)

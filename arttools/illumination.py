@@ -314,9 +314,9 @@ class IlluminationSources(object):
         if not filters is None:
             self.set_urdn_data_filters(filters)
 
-    def set_urdn_data_filters(self, filters, scales=None, brates=None, vfun=None):
+    def set_urdn_data_filters(self, filters, scales=None, brates=None, vfun=None, cspec=None):
         self.filters = filters
-        self.detmap = {urdn: DetectorVignetting(unpack_inverse_psf_specweighted_ayut(f.filters)) for urdn, f in filters.items()}
+        self.detmap = {urdn: DetectorVignetting(unpack_inverse_psf_specweighted_ayut(f.filters, cspec=cspec)) for urdn, f in filters.items()}
         self.shmasks = {urdn: f.filters.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)]) for urdn, f in filters.items()}
         if not brates is None:
             for urdn in self.detmap:
@@ -457,10 +457,10 @@ class WCSSkyWithIllumination(WCSSky, IlluminationSources): #, IlluminationSource
         img += self.action(vm, scale, rmap)
         return np.any(vm > 0.)
 
-    def get_expmap(self, attdata, urdfilters, urdweights={}, dtcorr={}):
+    def get_expmap(self, attdata, urdfilters, urdweights={}, dtcorr={}, cspec=None):
         urdgtis = {urdn: f.filters["TIME"] for urdn, f in urdfilters.items()}
         self.clean_image()
-        self.update_filters({urdn: f.filters for urdn, f in urdfilters.items()})
+        self.update_filters({urdn: f.filters for urdn, f in urdfilters.items()}, cspec=cspec)
 
         for urdn in urdgtis:
             self.set_urdn(urdn)

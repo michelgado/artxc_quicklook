@@ -49,7 +49,7 @@ class Intervals(object):
         arr = arrn
         idx = np.argsort(np.ravel(arr))
         arr = np.ravel(arr)[idx]
-        mask = np.zeros(arr.size, np.bool)
+        mask = np.zeros(arr.size, bool)
         mask[::2] = idx[::2] == np.arange(0, idx.size, 2)
         mask[1::2] = np.roll(mask[::2], -1)
         arr = np.asarray(arr[mask].reshape((-1, 2)))
@@ -139,7 +139,7 @@ class Intervals(object):
         #both self.arr and other.arr already regularized
         tt = np.concatenate([self.arr.ravel(), other.arr.ravel()])
         #in this set of edges all even are starts and odd and ends, but not ordered
-        ms = np.ones(tt.size, np.int8)
+        ms = np.ones(tt.size, int)
         #mark all starts with 1 and stops with -1
         ms[1::2] = -1
         #sort all edges but store their position
@@ -165,7 +165,7 @@ class Intervals(object):
         two different (stored in different memory cells) but equal float values can randomly
         be greater or lesser to each other
         """
-        mask = np.ones(self.arr.shape[0] + 1, np.bool)
+        mask = np.ones(self.arr.shape[0] + 1, bool)
         mask[1:-1] = self.arr[1:, 0] != self.arr[:-1, 1]
         mask = np.lib.stride_tricks.as_strided(mask, (mask.size - 1, 2), mask.strides*2)
         self.arr = self.arr[mask].reshape((-1, 2))
@@ -265,7 +265,7 @@ class Intervals(object):
         if open_bounds:
             idxb = np.where(mask[1:] & ~mask[:-1])[0]
             mask[idxb] = self.arr.ravel()[idx[idxb]] == ts[idxb]
-        res = np.empty(mask.size, np.bool)
+        res = np.empty(mask.size, bool)
         res[idxs] = mask[:]
         return res
 
@@ -295,7 +295,7 @@ class Intervals(object):
         ts = ts[gtloc.mask_external(ts)]
         newts = np.unique(np.concatenate([ts, gtloc.arr.ravel()]))
         idxgaps = newts.searchsorted((gtloc.arr[:-1, 1] + gtloc.arr[1:, 0])/2.)
-        maskgaps = np.ones(newts.size - 1 if newts.size else 0, np.bool)
+        maskgaps = np.ones(newts.size - 1 if newts.size else 0, bool)
         maskgaps[idxgaps - 1] = False
         #print(ts[:3] - ts[0], ts[-3:] - ts[0])
         #print(newts[:3] - ts[0], ts[-3:] - ts[0])
@@ -306,7 +306,7 @@ class Intervals(object):
         #join time intervals at the edges of the gti, if they are two short
         dt = np.diff(newts, 1)
         dtmed = np.median(dt)
-        maskshort = np.ones(newts.size, np.bool)
+        maskshort = np.ones(newts.size, bool)
         maskshort[idxgaps + 1] = dt[idxgaps] > dtmed*joinsize
         maskshort[idxgaps - 2] = dt[idxgaps - 2] > dtmed*joinsize
         return newts[maskshort], maskgaps[maskshort[:-1]]
@@ -353,14 +353,14 @@ class Intervals(object):
         eidx = np.searchsorted(te, self.arr)
         mempty = eidx[:, 0] != eidx[:, 1]
         sidx = np.searchsorted(te, self.arr[mempty, 0])
-        m1 = np.ones(te.size, np.bool)
+        m1 = np.ones(te.size, bool)
         m1[sidx] = te[sidx] - self.arr[mempty, 0] > dt*joinsize
         te = te[m1]
 
         eidx = np.searchsorted(te, self.arr)
         mempty = eidx[:, 0] != eidx[:, 1]
         sidx = np.searchsorted(te, self.arr[mempty, 1]) - 1
-        m1 = np.ones(te.size, np.bool)
+        m1 = np.ones(te.size, bool)
         m1[sidx] = self.arr[mempty, 1] - te[sidx] > dt*joinsize
         te = te[m1]
 
@@ -575,7 +575,7 @@ class InversedIndexMask(OrderedDict):
         ud = np.meshgrid(*[self[name](arrays[name]) for name in keys])
         shape = ud[0].shape
         data = np.column_stack([a.ravel() for a in ud[::-1]]).ravel().view(
-                                    [(name, np.int) for name in keys[::-1]]).reshape(shape)
+                                    [(name, int) for name in keys[::-1]]).reshape(shape)
 
         return self.apply(data)
 
@@ -629,7 +629,7 @@ class IndependentFilters(dict):
         return np.prod([f.volume for f in self.values()])
 
     def apply(self, valsset):
-        mask = np.ones(valsset.size, np.bool)
+        mask = np.ones(valsset.size, bool)
         for k, f in self.items():
             if type(f) == InversedIndexMask:
                 mask[mask] = f.apply(valsset[mask])

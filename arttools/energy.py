@@ -24,7 +24,7 @@ def filter_edge_strips(events):
     return np.all((events["RAW_X"] > 0, events["RAW_X"] < 47, events["RAW_Y"] > 0, events["RAW_Y"] < 47), axis=0)
 
 def mkeventindex(strip):
-    coord = np.empty((3, strip.size), np.int) #(strip, (3, 1))
+    coord = np.empty((3, strip.size), int) #(strip, (3, 1))
     coord[0, :] = strip - 1
     coord[1, :] = strip
     coord[2, :] = strip + 1
@@ -34,7 +34,7 @@ def mkeventindex(strip):
 
 def bitmask_to_grade(bitmask):
     maskint = np.packbits(bitmask, axis=0)[0]
-    return GRADESI[maskint].astype(np.int)
+    return GRADESI[maskint].astype(int)
 
 
 def get_bot_energy(eventlist, hkdata, caldb, randomize=True, set_central_strip_triggered=True):
@@ -105,7 +105,7 @@ def get_events_energy(eventlist, hkdata, caldb, escalecaldb=None, set_central_st
     """
     print("total events", eventlist.size)
     emean = np.zeros(eventlist.size, np.double)
-    bitmask = np.zeros((8, emean.size), np.bool)
+    bitmask = np.zeros((8, emean.size), bool)
 
     T = interp1d(hkdata["TIME"], hkdata["TD1"],
             bounds_error=False, kind="linear",

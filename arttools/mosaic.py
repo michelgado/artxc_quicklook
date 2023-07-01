@@ -137,7 +137,7 @@ class SkyImage(DistributedObj):
 
     def _get_vmap_edges(self, qval):
         radec = vec_to_pol(qval.apply(self.corners.vertices))
-        return self.locwcs.all_world2pix(np.rad2deg(radec).T, 0).T.astype(np.int)
+        return self.locwcs.all_world2pix(np.rad2deg(radec).T, 0).T.astype(int)
 
 
     def _get_quat_rectangle(self, qval):

@@ -144,7 +144,7 @@ class AttDATA(SlerpWithNaiveIndexing):
         if self.gti.exposure == 0. or self.times.size == 2:
             return emptyGTI
         mgap = self.gti.mask_external((self.times[1:] + self.times[:-1])/2.)
-        mgap2 = np.zeros(mgap.size + 1, np.bool)
+        mgap2 = np.zeros(mgap.size + 1, bool)
         mgap2[1:] = ~mgap
         mgap2[:-1] = mgap2[:-1] | ~mgap
         dt = np.diff(self.times, 1)
@@ -154,8 +154,8 @@ class AttDATA(SlerpWithNaiveIndexing):
         q = rot[1:]*rot[:-1].inv()
         qfov = Rotation.from_rotvec(q[:-1].as_rotvec()*(dt2/dt[:-1])[:, np.newaxis])*rot[:-2]
         qbak = Rotation.from_rotvec(-q[1:].as_rotvec()*(dt2/dt[1:])[:, np.newaxis])*rot[2:]
-        mfov = np.zeros(self.times.size, np.bool)
-        mbak = np.zeros(self.times.size, np.bool)
+        mfov = np.zeros(self.times.size, bool)
+        mbak = np.zeros(self.times.size, bool)
         mfov[2:] = np.sum(rot[2:].apply(OPAX)*qfov.apply(OPAX), axis=-1) < cos(pi/180.*10./3600.)
         mfov[2:] = mfov[2:] & mgap[1:]
         mbak[:-2] = np.sum(rot[:-2].apply(OPAX)*qbak.apply(OPAX), axis=-1) < cos(pi/180.*10./3600.)
@@ -961,7 +961,7 @@ def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
     after that we want to find which part of the trajectorie of vector offvec in rotation defined by interpolation slerp, will fall inside circular aperture around vector loc
     """
     if mask is None:
-        mask = np.ones(slerp.timedelta.size, np.bool)
+        mask = np.ones(slerp.timedelta.size, bool)
 
     offvec = normalize(np.asarray(offvec))
     """
