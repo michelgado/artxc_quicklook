@@ -415,7 +415,7 @@ def read_gyro_fits(gyrohdu):
     mtime = np.median(times)
     masktimes = (times > mtime - 3.*24.*3600) & (times < mtime + 3.*24.*3600.)
     #print("diffs", np.sum(np.diff(times) < 1e-8))
-    masktimes[1:] = np.diff(times) > 1e-8
+    masktimes[1:] = masktimes[1:] & (np.diff(times) > 1e-8)
     #masktimes = times > T0
     mask0quats = np.sum(quats**2, axis=1) > 0.
     mask = np.logical_and(masktimes, mask0quats)
@@ -1100,7 +1100,7 @@ def get_attdata(fname, atshift=0., **kwargs):
         tshift = get_device_timeshift("gyro")
     elif "bokz" in fname:
         attdata = read_bokz_fits(ffile["ORIENTATION"], **kwargs)
-        print("specific timeshift", get_specific_fileshift(fname))
+        #print("specific timeshift", get_specific_fileshift(fname))
         tshift = get_device_timeshift("bokz") - get_specific_fileshift(fname)
     elif "sed1" in fname:
         attdata = read_sed_fits(ffile["ORIENTATION"], **kwargs)

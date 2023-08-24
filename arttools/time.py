@@ -141,6 +141,11 @@ def get_filtered_table(tabledata, gti):
     """
     return tabledata[gti.mask_external(tabledata["TIME"])]
 
+
+def observed_countrate_to_dtk(rate, deadtime):
+    return (1. - rate*deadtime)
+
+
 def deadtime_correction(urdhk, urdn=None): #deadtime=ARTDEADTIME):
     """
     produces effectivenesess of the events registration depending on overall countrate

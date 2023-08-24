@@ -10,8 +10,8 @@ from .vector import vec_to_pol, pol_to_vec
 from .aux import interp1d
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from .vignetting import make_vignetting_for_urdn
-from ._det_spatial import DL, dxya, offset_to_vec, vec_to_offset, vec_to_offset_pairs, raw_xy_to_vec, vec_to_offset_pairs, offset_to_raw_xy
-from .psf import get_pix_overall_countrate_constbkg_ayut, urddata_to_opaxoffset, photbkg_pix_coeff
+from ._det_spatial import DL, dxya, offset_to_vec, vec_to_offset, vec_to_offset_pairs, raw_xy_to_vec, vec_to_offset_pairs, offset_to_raw_xy, rawxy_to_qcorr
+from .psf import get_pix_overall_countrate_constbkg_ayut, urddata_to_opaxoffset, photbkg_pix_coeff, xy_to_opaxoffset
 from .mosaic2 import SkyImage
 from .telescope import URDNS
 from functools import reduce
@@ -482,8 +482,48 @@ def get_background_bands_ratio(filters1, filters2):
     grid2, spec2 = get_background_spectrum(filters2)
     return np.sum(spec1)/np.sum(spec2)
 
+def make_mock_photbkg(urdn, filters, attdata, photbkg, randomize=True):
+    pfun = get_pix_overall_countrate_constbkg_ayut(filters.filters) #, False)
+    shmask = filters.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
+    x, y = np.mgrid[0:48:1, 0:48:1]
+    x, y = x[shmask], y[shmask]
+    te, gaps, lgti = make_small_steps_quats(attdata.for_urdn(urdn))
+    tc = (te[1:] + te[:-1])[gaps]/2.
+    dt = np.diff(te)[gaps]
+    print(tc.min(), tc.max(), dt.min())
+    qloc = attdata.for_urdn(urdn)(tc)
 
-def make_mock_data(urdn, bkglc, imgfilter, cspec=None):
+    gridp, specp = get_crabspec_for_filters(filters)
+    rat, dect = [], []
+    qcorr = rawxy_to_qcorr(x, y)
+
+    for xp, yp, qpix in zip(x, y, qcorr):
+        i, j = xy_to_opaxoffset(xp, yp, urdn)
+        #print("ij", i, j)
+        ploc = pfun(i, j)
+        ra, dec = np.rad2deg(vec_to_pol((qloc*qpix).apply([1, 0, 0])))
+        #print(ra, dec)
+        prates = photbkg(ra, dec)
+        #print(prates, prates*ploc*dt)
+        #print(np.random.poisson(prates*ploc*dt))
+        time = np.repeat(tc, np.random.poisson(prates*ploc*dt))
+        #print(time.min(), time.max(), time.size)
+        if time.size == 0:
+            continue
+        if randomize:
+            xpix, ypix = np.random.uniform(-0.5, 0.5, (2, time.size)) + 23.5
+            ra, dec = np.rad2deg(vec_to_pol((attdata.for_urdn(urdn)(time)*qpix).apply(raw_xy_to_vec(xpix, ypix))))
+        else:
+            ra, dec = np.rad2deg(vec_to_pol((attdata.for_urdn(urdn)(time)*qpix).apply([1, 0, 0])))
+        rat.append(ra)
+        dect.append(dec)
+    ra = np.concatenate(rat)
+    dec = np.concatenate(dect)
+    return ra, dec
+
+
+def make_mock_data(urdn, bkglc, imgfilter, cspec=None, photbkgrate=None):
+
     gti = imgfilter["TIME"]
     te, gaps = gti.make_tedges(bkglc.x)
     tc = (te[1:] + te[:-1])[gaps]/2.
@@ -493,10 +533,8 @@ def make_mock_data(urdn, bkglc, imgfilter, cspec=None):
     phase = np.meshgrid(*[grid[k] if k != "ENERGY" else (grid[k][1:] + grid[k][:-1])/2. for k in keys])
     m = imgfilter.meshgrid(keys, [grid[k] if k != "ENERGY" else (grid[k][1:] + grid[k][:-1])/2. for k in keys])
     positions = {k:a[m[:, :, :, :]] for k, a in zip(keys, phase)}
-    print({k: p.size for k, p in positions.items()})
     data = datacube[m[:, :, :, :]]
     dvol = data.cumsum()
-    print(dvol.size)
     totevents = np.random.poisson(totcts.sum())
     position = np.random.uniform(0., dvol[-1], totevents)
     time = np.random.uniform(0., totcts.sum(), totevents)

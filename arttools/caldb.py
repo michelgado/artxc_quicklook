@@ -117,8 +117,9 @@ def get_bokz_fjump_bti():
 
 @lru_cache(maxsize=7)
 def get_deadtime_for_dev(dev, gti=None):
+    urd = ANYTHINGTOURD[dev]
     mfile, gti = get_caldata("DEADTIME", ANYTHINGTOURD[dev], gti)[0]
-    return fits.getdata(mfile, 1)["DEADTIME"][0]*1e-3
+    return fits.getdata(mfile, 1)["DEADTIME"][0]*1e-3 if urd != 26 else 1.06e-3
 
 
 def get_obt_timecorr_calib():
@@ -306,6 +307,11 @@ fshifts = {os.path.basename(name): int(k) for name, k in fshifts}
 def get_specific_fileshift(fname):
     return fshifts.get(os.path.basename(fname), 0.)
 
+
+def get_totevt_during_bkg(urdn):
+    tevt = pickle.load(open("/srg/work/andrey/ART-XC/crab_calibration/total_events_in_bkg.pkl", "rb"))
+    g, e = tevt[urdn]
+    return e/g.length
 
 
 def get_background_for_urdn(urdn):

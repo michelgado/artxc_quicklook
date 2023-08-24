@@ -2,7 +2,7 @@ from .telescope import URDNS, concat_data_in_order
 from ._det_spatial import vec_to_offset, get_qcorr_for_urddata, F
 from math import pi, sin, cos, sqrt, log10
 from .background import get_local_bkgrates, get_photon_vs_particle_prob, get_photon_and_particles_rates
-from .psf import urddata_to_opaxoffset, unpack_inverse_psf_ayut, get_ipsf_interpolation_func, select_psf_groups, photbkg_pix_coeff, naive_bispline_interpolation
+from .psf import urddata_to_opaxoffset, unpack_inverse_psf_ayut, get_ipsf_interpolation_func, select_psf_groups, photbkg_pix_coeff, naive_bispline_interpolation, psf_nearest_value, unpack_pix_index
 from .aux import DistributedObj
 from .containers import Urddata
 from .caldb import get_telescope_crabrates
@@ -16,13 +16,16 @@ from scipy.optimize import minimize, root
 from multiprocessing.pool import ThreadPool
 from threading import Thread, Lock
 import numpy as np
+from .src_rate_solvers import get_phc_solution, get_brent_solution
+from time import time
+
 
 urdcrates = get_telescope_crabrates()
 cr = np.sum([v for v in urdcrates.values()])
 urdcrates = {urdn: d/cr for urdn, d in urdcrates.items()}
 
 
-def make_unipix_data(urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate=lambda evt, att: 0., cspec=None):
+def make_unipix_data(urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate=lambda evt, att: 0., cspec=None, urddtc={}):
     bkgrates = {urdn: get_local_bkgrates(urdevt[urdn], bkglc[urdn]) for urdn in URDNS if urdn in urdevt}
     bkgrates = concat_data_in_order(bkgrates)
 
@@ -42,6 +45,14 @@ def make_unipix_data(urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate=l
 
     prate = concat_data_in_order(prate)
     brate = concat_data_in_order(brate)
+
+    dtc = {}
+    for urdn in urdevt:
+        dtloc = urddtc.get(urdn, lambda x: np.ones(x.size, float))
+        dtc[urdn] = dtloc(urdevt[urdn]["TIME"])
+    dtc = concat_data_in_order(dtc)
+    prate = prate*dtc
+
     """
     photprob = get_photon_vs_particle_prob(urdevt, urdweights=urdcrates)
     photprob = concat_data_in_order(photprob)
@@ -248,12 +259,11 @@ def create_neighbouring_blocks_tasks(locwcs, emap, urde, attdata, bkglc, photbkg
 
     siu, sus, suc = np.unique(srcidx, return_index=True, return_counts=True)
     ssorter = np.arange(siu.size)
-    #print("unique blocks", siu.size)
+    print("unique blocks", siu.size, "check events conservation", suc.sum(), i.size, "mx stride", mx, "individual blocks ids", siu)
     sue = sus + suc
 
     mask = emap > 1.
     ii, jj = np.mgrid[0:mask.shape[0]:1, 0:mask.shape[1]:1]
-    #jj, ii = np.mgrid[0:mask.shape[0]:1, 0:mask.shape[1]:1]
     ii, jj = ii[mask], jj[mask]
     ipix = ii//sizex + mx*(jj//sizey)
     sidx = np.argsort(ipix)
@@ -263,18 +273,19 @@ def create_neighbouring_blocks_tasks(locwcs, emap, urde, attdata, bkglc, photbkg
 
     mask = np.logical_or.reduce([np.isin(piu + s, siu) for s in ishift])
     piu, pus, puc = piu[mask], pus[mask], puc[mask]
-    print("number of wcs blocks to solve", piu.size)
+    #print("number of wcs blocks to solve", piu.size)
     pue = pus + puc
     #print("upix and uevts", piu, siu)
     #no = np.searchsorted(siu, piu)
 
-    x, y = ii[pus[0]:pue[0]], jj[pus[0]:pue[0]],
+    x, y = ii[pus[0]:pue[0]], jj[pus[0]:pue[0]]
     exp = emap[x, y]
     nsl = piu[0] + ishift
     #print(piu[k], nsl)
     nsl = np.searchsorted(siu, nsl[np.isin(nsl, siu, assume_unique=True)], sorter=ssorter)
     idxg = np.concatenate([np.arange(sus[nl], sue[nl]) for nl in nsl])
-    for k, n in enumerate(piu[1:]):
+    #print("idxg", idxg, idxg.size)
+    for k, n in enumerate(piu[-100:]):
         yield x, y, exp, i[idxg], j[idxg], ee[idxg], pk[idxg], qtot[idxg] #, srcidx[idxg]
         x, y = ii[pus[k + 1]:pue[k+ 1]], jj[pus[k + 1]:pue[k + 1]]
         exp = emap[x, y]
@@ -284,6 +295,44 @@ def create_neighbouring_blocks_tasks(locwcs, emap, urde, attdata, bkglc, photbkg
         idxg = np.concatenate([np.arange(sus[nl], sue[nl]) for nl in nsl])
     yield x, y, exp, i[idxg], j[idxg], ee[idxg], pk[idxg], qtot[idxg] #, srcidx[idxg]
 
+def iterative_rate_update(x2, function):
+    mflag = np.ones(x0.size, bool)
+    xconv = np.empty(x2.size, float)
+
+    for _ in range(200):
+        fx0 = function(x0)
+        fx1 = function(x1)
+        fx2 = function(x2)
+
+        m = (fx0 != fx2) & (fx1 != fx2)
+        n = np.empty(fx0.size, float)
+
+        L0 = (x0*fx1*fx2)/((fx0 - fx1)*(fx0 - fx2))
+        L1 = (x1*fx0*fx2)/((fx1 - fx0)*(fx1 - fx2))
+        L2 = (x2*fx1*fx0)/((fx2 - fx0)*(fx2 - fx1))
+        n[m] = L0[m] + L1[m] + L2[m]
+        n[~m] = x1[~m] - ((fx1[~m]*(x1[~m] - x0[~m]))/(fx1[~m] - fx0[~m]))
+        mflag = np.logical_or.reduce([n < (3*x0 + x1)/4., n > x1, mflag & (np.abs(n - x1) >= np.abs(x1 - x2)/2.), ~mflag & (np.abs(n - x1) >= np.abs(x2 - d)/2.), mflag & (np.abs(x1 - x2) < tol), ~mflag & (np.abs(x2 - d) < tol)])
+        fn = function(n)
+        d, x2 = x2, x1
+        mn = fx0*fn < 0
+        x1[mn] = n[mn]
+        x0[~mn] = n[~mn]
+        mf = np.abs(fx0) < np.abs(fx1)
+        x0[mf], x1[mf] = x1[mf], x0[mf]
+
+
+    """
+    f = function(rates)
+    s = x + f
+    sf = function(s)
+    y = x - f**2/(sf - f)
+    yf = function(y)
+    z = y - (x - y)*(x - s)*(y - s)*fy/((y - s)**2.*f + (x - s)*(x - 2*y + s)*yf - (x - y)**2.*sf)
+    """
+
+
+
 class BlockEstimator(DistributedObj):
     def __init__(self, locwcs, mpnum=4, barrier=None):
         self.locwcs = locwcs
@@ -292,7 +341,38 @@ class BlockEstimator(DistributedObj):
 
     @DistributedObj.for_each_argument
     def get_nphot_and_theta(self, x, y, exp, i, j, ee, pk, qtot):
-        return estimate_rate_for_direction_iterate(self.locwcs, x, y, exp, i, j, ee, pk, qtot)
+        #return estimate_rate_for_direction_iterate(self.locwcs, x, y, exp, i, j, ee, pk, qtot)
+        return estimate_rate_for_direction_c(self.locwcs, x, y, exp, i, j, ee, pk, qtot)
+
+    @DistributedObj.for_each_argument
+    def get_nbkg_in_s_step(self, x, y, exp, i, j, ee, pk, qtot):
+        vt = pol_to_vec(*np.deg2rad(self.locwcs.all_pix2world(np.array([y, x]).T, 0)).T)
+        ssize = 2000000 # number of event for split
+        csplit = (x.size*i.size)//2000000 + 1
+        csize = x.size//csplit + 1
+        csplit = x.size//csize + (1 if x.size%csize > 0 else 0)
+        ic = np.tile(i, csize)
+        jc = np.tile(j, csize)
+        eec = np.tile(ee, csize)
+        #pkc =mmp.tile(pk, csize)
+        qtotc = Rotation(np.tile(qtot.as_quat(), (csize, 1)))
+        ntot = np.zeros(x.size, float)
+
+        for sl in range(csplit):
+            v = vt[sl*csize: x.size if sl == csplit - 1 else (sl + 1)*csize]
+            nphot = ntot[sl*csize: x.size if sl == csplit -1 else (sl + 1)*csize]
+            if ic.size != nphot.size*i.size:
+                ic = ic[:nphot.size*i.size] #np.tile(i, nphot.size)
+                jc = jc[:ic.size] #np.tile(i, nphot.size)
+                eec = eec[:ic.size] #np.tile(i, nphot.size)
+                #pkc = pkc[:ic.size] #np.tile(i, nphot.size)
+                qtotc = qtotc[:ic.size]
+
+            vr = np.repeat(v, ic.size//nphot.size, axis=0)
+            m, bw = naive_bispline_interpolation(ic, jc, qtotc.apply(vr, inverse=True), eec)
+            nphot[:] = m.reshape((nphot.size, -1)).sum(axis=1)
+        return x, y, ntot
+
 
 
 def estimate_rate_for_direction_fast(vec, exposure, i, j, ee, pk, qtot):
@@ -301,42 +381,7 @@ def estimate_rate_for_direction_fast(vec, exposure, i, j, ee, pk, qtot):
     guess = np.sum(svals/(svals*m.sum()/exposure + 1.))/exposure
     return root(lambda x: np.sum(svals/(svals*x + 1.)) - exposure, guess).x[0]
 
-
-def estimate_rate_for_direction_iterate(locwcs, x, y, exposure, i, j, ee, pk, qtot):
-    vt = pol_to_vec(*np.deg2rad(locwcs.all_pix2world(np.array([y, x]).T, 0)).T)
-    ssize = 2000000 # number of event for split
-    csplit = (x.size*i.size)//2000000 + 1
-    csize = x.size//csplit
-    csplit = x.size//csize + (1 if x.size%csize > 0 else 0)
-    ntot = np.zeros(x.size, float)
-    thet = np.zeros(x.size, float)
-    ic = np.tile(i, csize)
-    jc = np.tile(j, csize)
-    eec = np.tile(ee, csize)
-    pkc = np.tile(pk, csize)
-    qtotc = Rotation(np.tile(qtot.as_quat(), (csize, 1)))
-
-    for sl in range(csplit):
-        v = vt[sl*csize: x.size if sl == csplit - 1 else (sl + 1)*csize]
-        nphot = ntot[sl*csize: x.size if sl == csplit -1 else (sl + 1)*csize]
-        qest = thet[sl*csize: x.size if sl == csplit -1 else (sl + 1)*csize]
-        expl = exposure[sl*csize: x.size if sl == csplit -1 else (sl + 1)*csize]
-        if ic.size != nphot.size*i.size:
-            ic = ic[:nphot.size*i.size] #np.tile(i, nphot.size)
-            jc = jc[:ic.size] #np.tile(i, nphot.size)
-            eec = eec[:ic.size] #np.tile(i, nphot.size)
-            pkc = pkc[:ic.size] #np.tile(i, nphot.size)
-            qtotc = qtotc[:ic.size]
-
-        vr = np.repeat(v, ic.size//nphot.size, axis=0)
-
-        m, bw = naive_bispline_interpolation(ic, jc, qtotc.apply(vr, inverse=True), eec)
-        if m.sum() == 0:
-            continue
-        #print("bw.size", bw.size)
-        cs = m.reshape((nphot.size, -1)).sum(axis=1)
-        #print(cs.size, bw.size, np.sum(cs > 0), np.sum(cs))
-        bw = bw*pkc[m]
+def ppsolver(nphot, bw, cs, expl):
         bwc = np.copy(bw)
         mtot = cs > 0
         csc = cs[mtot]
@@ -350,7 +395,7 @@ def estimate_rate_for_direction_iterate(locwcs, x, y, exposure, i, j, ee, pk, qt
             nn[1:] = np.diff(cres[css])
             nn[0] = cres[css[0]]
             nphot[mtot] = nn
-            mnotdone = ~np.logical_or((nn <= nc) & (nn < 1.), np.abs(nn - nc) < 1e-3)
+            mnotdone = ~np.logical_or((nn <= nc) & (nn < 1.), np.abs(nn - nc) < 1e-5)
             #print("converg", mnotdone.sum())
             if ~np.any(mnotdone):
                 break
@@ -360,11 +405,140 @@ def estimate_rate_for_direction_iterate(locwcs, x, y, exposure, i, j, ee, pk, qt
             css = np.cumsum(csc) - 1
             explc = explc[mnotdone]
             nc, nn = nn[mnotdone], nc[mnotdone]
-        t = np.cumsum(np.log(bw*np.repeat(nphot/expl, cs) + 1))
+        return
+
+
+
+def estimate_rate_for_direction_iterate(locwcs, x, y, exposure, i, j, ee, pk, qtot, ratesolver="python"):
+    data, mask = None, None
+    vt = pol_to_vec(*np.deg2rad(locwcs.all_pix2world(np.array([y, x]).T, 0)).T)
+    ssize = 2000000 # number of event for split
+    csplit = (x.size*i.size)//2000000 + 1
+    csize = x.size//csplit
+    csplit = x.size//csize + (1 if x.size%csize > 0 else 0)
+    ntot = np.zeros(x.size, float)
+    thet = np.zeros(x.size, float)
+    ic = np.tile(i, csize)
+    jc = np.tile(j, csize)
+    eec = np.tile(ee, csize)
+    pkc = np.tile(pk, csize)
+    mrot = qtot.inv().as_matrix()
+    #qtotc = Rotation(np.tile(qtot.as_quat(), (csize, 1)))
+
+    for sl in range(csplit):
+        v = vt[sl*csize: x.size if sl == csplit - 1 else (sl + 1)*csize]
+        nphot = ntot[sl*csize: x.size if sl == csplit -1 else (sl + 1)*csize]
+        qest = thet[sl*csize: x.size if sl == csplit -1 else (sl + 1)*csize]
+        expl = exposure[sl*csize: x.size if sl == csplit -1 else (sl + 1)*csize]
+        if ic.size != nphot.size*i.size:
+            ic = ic[:nphot.size*i.size] #np.tile(i, nphot.size)
+            jc = jc[:ic.size] #np.tile(i, nphot.size)
+            eec = eec[:ic.size] #np.tile(i, nphot.size)
+            pkc = pkc[:ic.size] #np.tile(i, nphot.size)
+            #qtotc = qtotc[:ic.size]
+
+        vr = np.repeat(v, ic.size//nphot.size, axis=0)
+
+        #m, bw = naive_bispline_interpolation(ic, jc, qtotc.apply(vr, inverse=True), eec)
+        m, bw = naive_bispline_interpolation(ic, jc, np.einsum("kj,mij->kmi", v, mrot).reshape((-1, 3)), eec)
+
+        if m.sum() == 0:
+            continue
+
+        cs = m.reshape((nphot.size, -1)).sum(axis=1)
+        bw = bw*pkc[m]
+        rates = np.maximum(cs.astype(float)/2., 1.)/expl
+        b = np.ones(bw.size, float)
+        tstart = time()
+        if ratesolver == "python":
+            ppsolver(nphot, bw, cs, expl)
+            rates = nphot/expl
+        if ratesolver == "c":
+            get_phc_solution(bw, b, rates, expl, cs)
+            nphot[:] = rates*expl
+        if ratesolver == "brent":
+            get_brent_solution(bw, b, rates, expl, cs)
+            nphot[:] = rates*expl
+        #print("executed in", time() - tstart)
+
+        cc = np.cumsum(bw/(bw*np.repeat(rates, cs) + 1.))
+        ch = np.empty(expl.size, float)
+        ch[1:] = np.diff(cc[np.cumsum(cs) - 1]) - expl[1:]
+        ch[0] = cc[cs[0] - 1]- expl[0]
+
+        t = np.cumsum(np.log(bw*np.repeat(rates, cs) + 1))
         qest[1:] = np.diff(t[np.cumsum(cs) - 1])
-        qest[0] = t[cs[0] - 1]
+        qest[:1] = t[cs[0] - 1]
         qest[(cs == 0) | (nphot < 0.5)] == 0.
     return x, y, ntot, thet
+
+
+def estimate_rate_for_direction_c(locwcs, x, y, exposure, i, j, ee, pk, qtot, ratesolver="c"):
+    data, mask = None, None
+    vt = pol_to_vec(*np.deg2rad(locwcs.all_pix2world(np.array([y, x]).T, 0)).T)
+    ssize = 2000000 # number of event for split
+    csplit = (x.size*i.size)//2000000 + 1
+    csize = x.size//csplit
+    csplit = x.size//csize + (1 if x.size%csize > 0 else 0)
+    ntot = np.zeros(x.size, float)
+    thet = np.zeros(x.size, float)
+    mrot = qtot.inv().as_matrix()
+    k = unpack_pix_index(i, j)
+
+    ic = np.tile(i, csize)
+    jc = np.tile(j, csize)
+    kc = np.tile(k, csize)
+    eec = np.tile(ee, csize)
+    pkc = np.tile(pk, csize)
+
+    for sl in range(csplit):
+        v = vt[sl*csize: x.size if sl == csplit - 1 else (sl + 1)*csize]
+
+        nphot = ntot[sl*csize: x.size if sl == csplit -1 else (sl + 1)*csize]
+        qest = thet[sl*csize: x.size if sl == csplit -1 else (sl + 1)*csize]
+        expl = exposure[sl*csize: x.size if sl == csplit -1 else (sl + 1)*csize]
+        if ic.size != nphot.size*i.size:
+            ic = ic[:nphot.size*i.size] #np.tile(i, nphot.size)
+            jc = jc[:ic.size] #np.tile(i, nphot.size)
+            kc = kc[:ic.size] #np.tile(i, nphot.size)
+            eec = eec[:ic.size] #np.tile(i, nphot.size)
+            pkc = pkc[:ic.size] #np.tile(i, nphot.size)
+            #qtotc = qtotc[:ic.size]
+
+        vr = np.einsum("kj,mij->kmi", v, mrot).reshape((-1, 3))
+        #m, bw = naive_bispline_interpolation(ic, jc, qtotc.apply(vr, inverse=True), eec)
+        m, bw, data, mask = psf_nearest_value(ic, jc, vr, kc, energy=eec, data=data, mask=mask)
+        if m.sum() == 0:
+            continue
+
+        cs = m.reshape((nphot.size, -1)).sum(axis=1)
+        bw = bw*pkc[m]
+        rates = np.maximum(cs.astype(float)/2., 1.)/expl
+        b = np.ones(bw.size, float)
+        tstart = time()
+        if ratesolver == "python":
+            ppsolver(nphot, bw, cs, expl)
+            rates = nphot/expl
+        if ratesolver == "c":
+            get_phc_solution(bw, b, rates, expl, cs)
+            nphot[:] = rates*expl
+        if ratesolver == "brent":
+            get_brent_solution(bw, b, rates, expl, cs)
+            nphot[:] = rates*expl
+        #print("executed in", time() - tstart)
+
+        cc = np.cumsum(bw/(bw*np.repeat(rates, cs) + 1.))
+        ch = np.empty(expl.size, float)
+        ch[1:] = np.diff(cc[np.cumsum(cs) - 1]) - expl[1:]
+        ch[0] = cc[cs[0] - 1]- expl[0]
+        t = np.cumsum(np.log(bw*np.repeat(rates, cs) + 1))
+        qest[1:] = np.diff(t[np.cumsum(cs) - 1])
+        qest[:1] = t[cs[0] - 1]
+        #qest[(cs == 0) | (nphot < 0.5)] == 0.
+        qest[(cs == 0) | (nphot < 0.5)] == 0.
+    return x, y, ntot, thet
+
+
 
 
 
@@ -410,12 +584,14 @@ def get_nearest_local_maxima(ra0, dec0, urdevt, attdata, bkglc, urdweights=urdcr
     attloc = attdata.apply_gti(attdata.circ_gti(ax0, 1800 + rsearcharound*60.))
     sx = int(rsearcharound*60.)
     sx = sx + sx*2 - 1
-    lwcs = make_tan_wcs(ra0, dec0, sizex=sx, sizey=sx, pixsize=1./3600.)
+    lwcs = make_tan_wcs(ra0*pi/180., dec0*pi/180., sizex=sx, sizey=sx, pixsize=1./3600.)
     eml = make_expmap_for_wcs(lwcs, attloc, urdevt, urdweights=urdweights)
     def lklfun(var):
         print(var)
         ax = pol_to_vec(*var)
-        yl, xl = lwcs.all_world2pix([[var[0]*180/pi, var[1]*180/pi],], 0)
+        yl, xl = lwcs.all_world2pix([[var[0]*180/pi, var[1]*180/pi],], 0).T
+        if yl < 0 or xl < 0 or xl > eml.shape[0] - 1 or yl > eml.shape[1] - 1:
+            return 0
         expl = eml[int(xl + 0.5), int(yl + 0.5)]
         #expl = make_exposures(ax, np.array([-np.inf, np.inf]), attloc, {urdn: d.filters for urdn, d in urdevt.items()}, urdweights=urdcrates)[1] #, illum_filters=ifilters)
         mask, w = naive_bispline_interpolation(i, j, qtot.apply(ax, inverse=True), ee)
@@ -425,9 +601,9 @@ def get_nearest_local_maxima(ra0, dec0, urdevt, attdata, bkglc, urdweights=urdcr
 
     likelihood = minimize(lklfun, [ra0*pi/180, dec0*pi/180.], method="Nelder-Mead")
     ax = pol_to_vec(*likelihood.x)
-    yl, xl = lwcs.all_world2pix([[likelihood.x[0]*180/pi, likelihood.x[1]*180/pi],], 0)
+    yl, xl = lwcs.all_world2pix([[likelihood.x[0]*180/pi, likelihood.x[1]*180/pi],], 0).T
     expl = eml[int(xl + 0.5), int(yl + 0.5)]
     #expl = make_exposures(ax, np.array([-np.inf, np.inf]), attdata, {urdn: d.filters for urdn, d in urdevt.items()}, urdweights=urdcrates)[1] #, illum_filters=ifilters)
     mask, w = naive_bispline_interpolation(i, j, qtot.apply(ax, inverse=True), ee)
     res = root(lambda x: np.sum(1./(x + brate[mask]/(w*prate[mask]))) - expl, 1.)
-    return likelihood, exp, res
+    return likelihood, expl, res

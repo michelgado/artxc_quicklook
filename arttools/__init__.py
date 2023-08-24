@@ -15,6 +15,8 @@ from . import spatialindex
 from . import point_source
 from . import source_detection
 from . import dataindex
+from . import src_rate_solvers
+from . import psf_functions
 
 __version__ = "0.3.1"
 

@@ -28,6 +28,9 @@ def put_stright_on(core, scale, rmap):
     """
     return core*scale
 
+def count_reach_mask(core, scale, rmap):
+    return (core > 0).astype(int)
+
 def get_source_photon_probability(core, scale, rate):
     """
     core (is expected to be inversed psf) is multiplied by the current ratemap, individual energy and grade based photon probability and background rate to produce probability of individual event to be relevant to the  source at corresponding possiotion

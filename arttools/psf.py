@@ -7,6 +7,7 @@ from math import sin, cos, pi, sqrt
 from scipy.interpolate import RegularGridInterpolator
 from scipy.integrate import quad
 from functools import lru_cache
+from .psf_functions import get_unipix_fast_index
 
 def xy_to_opaxoffset(x, y, urdn):
     x0, y0 = (24, 24) if urdn is None else get_optical_axis_offset_by_device(urdn)
@@ -118,6 +119,31 @@ def naive_bispline_interpolation(rawx, rawy, vec, energy=None, urdn=None, data=N
         data[k, eidx, ip+ishift, jp+jshift]*(xl - xg[ip])*(yl - yg[jp]))
     mask[mask] = s > 0.
     return mask, (s/imgmax[eidx])[s > 0.]
+
+
+def psf_nearest_value(rawx, rawy, vec, k=None, energy=None, data=None, mask=None):
+    """
+    for specified event provides nearest point of PSF
+    """
+    iifun = get_ipsf_interpolation_func()
+
+    if data is None:
+        imgmax = np.sum([unpack_inverse_psf_ayut(i, j)[:, 60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)], axis=0)
+        data = get_ayut_inverse_psf_datacube_packed()
+        mask = data[:, 0, :, :] > 1e-10
+    if mask is None:
+        mask = data[:, 0, :, :] > 1e-10
+
+    imask, ip, jp, ms = get_unipix_fast_index(rawx, rawy, vec, (iifun.grid[0][1] - iifun.grid[0][0]), iifun.grid[0].size, (iifun.grid[1][1] - iifun.grid[1][0]), iifun.grid[1].size)
+    if k is None:
+        k = unpack_pix_index(rawx[imask], rawy[imask])
+    else:
+        k = k[imask]
+    mnew = mask[k, ip, jp]
+    imask[imask] = mnew
+    ip, jp, k = ip[mnew], jp[mnew], k[mnew]
+    eidx = np.searchsorted(ayutee, energy[imask]) - 1 if type(energy) is np.ndarray else np.searchsorted(ayutee, energy)
+    return imask, data[k, eidx, ip, jp], data, mask
 
 def naive_bispline_interpolation_specweight(rawx, rawy, vec, data, urdn=None, cspec=None):
     """
@@ -272,7 +298,7 @@ def unpack_inverse_psf_specweighted_ayut(imgfilter, cspec=None, app=None):
         return d
     return newfunc
 
-def get_pix_overall_countrate_constbkg_ayut(imgfilter, cspec=None, app=None):
+def get_pix_overall_countrate_constbkg_ayut(imgfilter, cspec=None, app=None, fold_energy=True):
     """
     return integral over effectiveness on sky area (integral in radians)
     """
@@ -290,14 +316,21 @@ def get_pix_overall_countrate_constbkg_ayut(imgfilter, cspec=None, app=None):
     sarea = np.mean(sarea)*2.
     #print("psf fun pix area", sarea)
     w = get_specweights(imgfilter, ayutee, cspec)
-    data = np.sum(get_ayut_inverse_psf_datacube_packed()*w[np.newaxis, :, np.newaxis, np.newaxis], axis=1)
+    data = get_ayut_inverse_psf_datacube_packed()
+
     imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
     data = data/imgmax
     #print(sarea.shape, data.shape, appmask.shape)
-    data = (data*appmask[np.newaxis, :, :]).sum(axis=(1, 2))*sarea
+    data = (data*appmask[np.newaxis, np.newaxis, :, :]).sum(axis=(2, 3))*sarea
+    if fold_energy:
+        data = np.sum(data*w[np.newaxis, :], axis=1)
+
     def newfunc(i, j):
         return data[unpack_pix_index(i, j)]
-    return newfunc
+    if fold_energy:
+        return newfunc
+    else:
+        return newfunc, ayutee
 
 def photbkg_pix_coeff(urdn, imgfilter, cspec=None):
     x, y = np.mgrid[0:48:1, 0:48:1]
