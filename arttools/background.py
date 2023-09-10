@@ -3,7 +3,7 @@ from .caldb import get_boresight_by_device, get_shadowmask_by_urd, \
                     get_crabspec_for_filters, get_optical_axis_offset_by_device, get_arf
 from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttWCSHistmean, AttWCSHistinteg, convolve_profile, AttInvHist, make_small_steps_quats, make_wcs_steps_quats
 from .energy  import get_arf_energy_function
-from .filters import Intervals
+from .filters import Intervals, IndependentFilters, RationalSet
 from .orientation import get_photons_sky_coord, quat_to_pol_and_roll, ra_dec_roll_to_quat
 from .containers import Urddata
 from .vector import vec_to_pol, pol_to_vec
@@ -477,7 +477,7 @@ def get_bkg_spec(urdbkg, filters, att, ax, appsize, dtcorr={}, illum_filters=Non
     return ee, gaps, bspec
 
 
-def get_background_bands_ratio(filters1, filters2):
+def get_background_bands_ratio(filters1, filters2=IndependentFilters({"ENERGY": Intervals([0, np.inf]), "GRADE": RationalSet(range(16))})):
     grid1, spec1 = get_background_spectrum(filters1)
     grid2, spec2 = get_background_spectrum(filters2)
     return np.sum(spec1)/np.sum(spec2)

@@ -136,14 +136,17 @@ def psf_nearest_value(rawx, rawy, vec, k=None, energy=None, data=None, mask=None
 
     imask, ip, jp, ms = get_unipix_fast_index(rawx, rawy, vec, (iifun.grid[0][1] - iifun.grid[0][0]), iifun.grid[0].size, (iifun.grid[1][1] - iifun.grid[1][0]), iifun.grid[1].size)
     if k is None:
-        k = unpack_pix_index(rawx[imask], rawy[imask])
+        k = np.tile(unpack_pix_index(rawx, rawy), vec.shape[0]//rawx.size)[imask]
     else:
-        k = k[imask]
+        k = np.tile(k, vec.shape[0]//rawx.size)[imask]
     mnew = mask[k, ip, jp]
     imask[imask] = mnew
     ip, jp, k = ip[mnew], jp[mnew], k[mnew]
-    eidx = np.searchsorted(ayutee, energy[imask]) - 1 if type(energy) is np.ndarray else np.searchsorted(ayutee, energy)
-    return imask, data[k, eidx, ip, jp], data, mask
+
+    cs = imask.reshape((vec.shape[0]//rawx.size, -1)).sum(axis=1)
+    eidx = np.tile(np.searchsorted(ayutee, energy), vec.shape[0]//rawx.size)[imask]
+
+    return imask, data[k, eidx, ip, jp], cs, data, mask
 
 def naive_bispline_interpolation_specweight(rawx, rawy, vec, data, urdn=None, cspec=None):
     """

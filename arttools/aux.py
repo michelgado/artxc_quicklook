@@ -114,6 +114,7 @@ class interp1d(i1d):
         kind = self._kind if self.IORDER[self._kind] > self.IORDER[other._kind] else other._kind
         xx = np.unique(np.concatenate([self.x, other.x]))
         yy = self(xx)*other(xx)
+        print(yy.min(), yy.max(), yy.size, self(xx).max(), self(xx).min(), other(xx).max(), other(xx).min())
         bounds_error=self.bounds_error
         if not self.fill_value is None and not other.fill_value is None:
             fill_value = tuple(np.asarray(self.fill_value)*np.asarray(other.fill_value))
@@ -150,20 +151,26 @@ class DistributedObj(object):
         super().__init__(**kwargs)
     """
     @classmethod
-    def initizlie_local_obj(cls, kwargs):
+    def initizlie_local_obj(cls, barrier, kwargs):
         global localcopy
-        localcopy = cls(**kwargs)
+        localcopy = cls.__new__(cls)
+        localcopy.mpnum = 0
+        localcopy.barrier = barrier
+        localcopy._pool = None
+        print(kwargs)
+        try:
+            localcopy.__init__(**kwargs)
+        except:
+            pass
 
 
     def __init__(self, mpnum=0, barrier=None, **kwargs):
         if barrier is None and mpnum > 0:
             self.barrier = Barrier(mpnum)
-            kwargs["barrier"] = self.barrier
-            kwargs["mpnum"] = 0
-            self._pool = Pool(mpnum, initializer=self.initizlie_local_obj, initargs=(kwargs,))
+            self._pool = Pool(mpnum, initializer=self.initizlie_local_obj, initargs=(self.barrier, kwargs,))
         else:
             self.barrier = barrier
-            self._pool = None
+            self._pool = None #ThreadPool(threads_per_lcopy)
         #super().__init__(**kwargs)
 
     @staticmethod

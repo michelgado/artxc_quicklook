@@ -17,6 +17,7 @@ from . import source_detection
 from . import dataindex
 from . import src_rate_solvers
 from . import psf_functions
+from . import deadtime
 
 __version__ = "0.3.1"
 

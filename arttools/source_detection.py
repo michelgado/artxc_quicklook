@@ -2,16 +2,19 @@ from .telescope import URDNS, concat_data_in_order
 from ._det_spatial import vec_to_offset, get_qcorr_for_urddata, F
 from math import pi, sin, cos, sqrt, log10
 from .background import get_local_bkgrates, get_photon_vs_particle_prob, get_photon_and_particles_rates
-from .psf import urddata_to_opaxoffset, unpack_inverse_psf_ayut, get_ipsf_interpolation_func, select_psf_groups, photbkg_pix_coeff, naive_bispline_interpolation, psf_nearest_value, unpack_pix_index
+from .psf import urddata_to_opaxoffset, unpack_inverse_psf_ayut, get_ipsf_interpolation_func, select_psf_groups, photbkg_pix_coeff, naive_bispline_interpolation, psf_nearest_value, unpack_pix_index, ayutee
 from .aux import DistributedObj
 from .containers import Urddata
-from .caldb import get_telescope_crabrates
+from .caldb import get_telescope_crabrates, get_ayut_inverse_psf_datacube_packed
 from .planwcs import make_tan_wcs
 from .vector import normalize, pol_to_vec, vec_to_pol
 from .expmap import make_exposures, make_expmap_for_wcs
 from .mosaic2 import WCSSky, get_source_photon_probability, get_zerosource_photstat
 from .orientation import get_events_quats, get_photons_vectors
+from .psf_functions import solve_for_locations
 from scipy.spatial.transform import Rotation
+import tqdm
+
 from scipy.optimize import minimize, root
 from multiprocessing.pool import ThreadPool
 from threading import Thread, Lock
@@ -245,9 +248,9 @@ def make_detmap_with_conv(locwcs, emap, urde, attdata, bkglc, mpnum=20, maxit=10
     return ctot, np.copy(sky.img)
 
 
-def create_neighbouring_blocks_tasks(locwcs, emap, urde, attdata, bkglc, photbkgrate=lambda evt, att: 0., urdweights=urdcrates, cspec=None):
-    i, j, qtot, prate, brate, ee = make_unipix_data(urde, attdata, bkglc, photbkgrate=photbkgrate, urdweights=urdweights, cspec=cspec)
-    pk = prate/brate
+
+
+def create_neighboring_blocks(locwcs, emap, i, j, qtot, pk, ee):
     vmap = get_ipsf_interpolation_func()
     sizex = int(np.arctan(max(np.max(np.abs(vmap.grid[0][[0, -1]])), np.max(np.abs(vmap.grid[1][[0, -1]])))/F)*180/pi/np.min(locwcs.wcs.cdelt[1])*sqrt(2.)) + 2
     sizey = int(np.arctan(max(np.max(np.abs(vmap.grid[0][[0, -1]])), np.max(np.abs(vmap.grid[1][[0, -1]])))/F)*180/pi/np.min(locwcs.wcs.cdelt[0])*sqrt(2.)) + 2
@@ -259,7 +262,6 @@ def create_neighbouring_blocks_tasks(locwcs, emap, urde, attdata, bkglc, photbkg
 
     siu, sus, suc = np.unique(srcidx, return_index=True, return_counts=True)
     ssorter = np.arange(siu.size)
-    print("unique blocks", siu.size, "check events conservation", suc.sum(), i.size, "mx stride", mx, "individual blocks ids", siu)
     sue = sus + suc
 
     mask = emap > 1.
@@ -273,27 +275,18 @@ def create_neighbouring_blocks_tasks(locwcs, emap, urde, attdata, bkglc, photbkg
 
     mask = np.logical_or.reduce([np.isin(piu + s, siu) for s in ishift])
     piu, pus, puc = piu[mask], pus[mask], puc[mask]
-    #print("number of wcs blocks to solve", piu.size)
     pue = pus + puc
-    #print("upix and uevts", piu, siu)
-    #no = np.searchsorted(siu, piu)
 
-    x, y = ii[pus[0]:pue[0]], jj[pus[0]:pue[0]]
-    exp = emap[x, y]
-    nsl = piu[0] + ishift
-    #print(piu[k], nsl)
-    nsl = np.searchsorted(siu, nsl[np.isin(nsl, siu, assume_unique=True)], sorter=ssorter)
-    idxg = np.concatenate([np.arange(sus[nl], sue[nl]) for nl in nsl])
-    #print("idxg", idxg, idxg.size)
-    for k, n in enumerate(piu[-100:]):
-        yield x, y, exp, i[idxg], j[idxg], ee[idxg], pk[idxg], qtot[idxg] #, srcidx[idxg]
-        x, y = ii[pus[k + 1]:pue[k+ 1]], jj[pus[k + 1]:pue[k + 1]]
+    def get_idxg_vals(k):
+        x, y = ii[pus[k]:pue[k]], jj[pus[k]:pue[k]]
         exp = emap[x, y]
-        nsl = n + ishift
-        #print(piu[k], nsl)
+        nsl = piu[k] + ishift
         nsl = np.searchsorted(siu, nsl[np.isin(nsl, siu, assume_unique=True)], sorter=ssorter)
         idxg = np.concatenate([np.arange(sus[nl], sue[nl]) for nl in nsl])
-    yield x, y, exp, i[idxg], j[idxg], ee[idxg], pk[idxg], qtot[idxg] #, srcidx[idxg]
+        return x, y, exp, i[idxg], j[idxg], ee[idxg], pk[idxg], qtot[idxg]
+
+    return pus.size, get_idxg_vals
+
 
 def iterative_rate_update(x2, function):
     mflag = np.ones(x0.size, bool)
@@ -320,17 +313,6 @@ def iterative_rate_update(x2, function):
         x0[~mn] = n[~mn]
         mf = np.abs(fx0) < np.abs(fx1)
         x0[mf], x1[mf] = x1[mf], x0[mf]
-
-
-    """
-    f = function(rates)
-    s = x + f
-    sf = function(s)
-    y = x - f**2/(sf - f)
-    yf = function(y)
-    z = y - (x - y)*(x - s)*(y - s)*fy/((y - s)**2.*f + (x - s)*(x - 2*y + s)*yf - (x - y)**2.*sf)
-    """
-
 
 
 class BlockEstimator(DistributedObj):
@@ -365,13 +347,168 @@ class BlockEstimator(DistributedObj):
                 ic = ic[:nphot.size*i.size] #np.tile(i, nphot.size)
                 jc = jc[:ic.size] #np.tile(i, nphot.size)
                 eec = eec[:ic.size] #np.tile(i, nphot.size)
-                #pkc = pkc[:ic.size] #np.tile(i, nphot.size)
                 qtotc = qtotc[:ic.size]
 
             vr = np.repeat(v, ic.size//nphot.size, axis=0)
             m, bw = naive_bispline_interpolation(ic, jc, qtotc.apply(vr, inverse=True), eec)
             nphot[:] = m.reshape((nphot.size, -1)).sum(axis=1)
         return x, y, ntot
+
+def make_srccount_and_detmap(locwcs, emap, urde, attdata, bkglc, photbkgrate=lambda evt, att: 0., urdweights=urdcrates, cspec=None):
+    i, j, qtot, prate, brate, ee = make_unipix_data(urde, attdata, bkglc, photbkgrate=photbkgrate, urdweights=urdweights, cspec=cspec)
+    cmap = np.zeros(emap.shape, float)
+    pmap = np.zeros(emap.shape, float)
+    pk = prate/brate
+
+    psfdata = get_ayut_inverse_psf_datacube_packed()
+    ntasks, feeder = create_neighboring_blocks(locwcs, emap, i, j, qtot, pk, ee)
+    iifun = get_ipsf_interpolation_func()
+    dx = iifun.grid[0][1] - iifun.grid[0][0]
+    dy = iifun.grid[1][1] - iifun.grid[1][0]
+    xsize = iifun.grid[0].size
+    ysize = iifun.grid[1].size
+    #import pickle
+    #pickle.dump([locwcs, feeder(999), feeder(1000)], open("/srg/a1/work/andrey/ART-XC/lp20/test_feeder.pkl", "wb"))
+    #pause
+
+    def worker(args):
+        x, y, exp, i, j, ee, pk, qtot = args
+        eidx = np.searchsorted(ayutee, ee) - 1
+        rmat = qtot.as_matrix()
+        vt = pol_to_vec(*np.deg2rad(locwcs.all_pix2world(np.array([y, x]).T, 0)).T)
+        return x, y, solve_for_locations(i,j,eidx,rmat,pk,vt,exp,psfdata,dx,xsize,dy,ysize)
+        cmap[x, y] = cl
+        pmap[x, y] = pl
+        return None
+
+    """
+    for i in range(ntasks):
+        x, y, exp, i, j, ee, pk, qtot = feeder(i)
+        if (2440 < y.mean() < 2520) and  (1307 < x.mean() < 1391):
+            import pickle
+            pickle.dump([locwcs, x, y, exp, i, j, ee, pk, qtot], open("test_feeder2.pkl", "wb"))
+    pause
+    """
+
+    pool = ThreadPool(12)
+    for x, y, (cl, pl) in tqdm.tqdm(pool.imap_unordered(worker, (feeder(i) for i in range(ntasks))), total=ntasks):
+        cmap[x, y] = cl
+        pmap[x, y] = pl
+    return cmap, pmap
+    """
+    for args in tqdm.tqdm(range(ntasks), total=ntasks):
+        x, y, exp, i, j, ee, pk, qtot = feeder(args)
+        eidx = np.searchsorted(ayutee, ee) - 1
+        rmat = qtot.as_matrix()
+        vt = pol_to_vec(*np.deg2rad(self.locwcs.all_pix2world(np.array([y, x]).T, 0)).T)
+        cl, pl = solve_for_locations(i,j,eidx,rmat,pk,vt,exp,psfdata,dx,xsize,dy,ysize)
+        cmap[x, y] = cl
+        pmap[x, y] = pl
+    """
+
+
+
+    """
+    #best = BlockEstimatorLcopy(locwcs, emap, i, j, ee, pk, qtot, barrier=None, mpnum=0)
+    #x, y, exp, i, j, ee, pk, qtot = best.feeder(800)
+    #vt = pol_to_vec(*np.deg2rad(locwcs.all_pix2world(np.array([y, x]).T, 0)).T)
+    #import pickle
+    iifun = get_ipsf_interpolation_func()
+    data = get_ayut_inverse_psf_datacube_packed()
+    eidx = np.searchsorted(ayutee, ee) - 1
+
+    pickle.dump([i, j, eidx, qtot.as_matrix(), pk, vt, exp, iifun.grid[0][1] - iifun.grid[0][0], iifun.grid[0].size, iifun.grid[1][1] - iifun.grid[1][0], iifun.grid[1].size], open("/srg/a1/work/andrey/ART-XC/tcase.pkl", "wb"))
+    pause
+
+    #for x, y, c, th in tqdm.tqdm((best.get_nbkg_in_s_step(i) for i in range(best.ntasks)), total=best.ntasks):
+    best = BlockEstimatorLcopy(locwcs, emap, i, j, ee, pk, qtot) #, barrier=None, mpnum=0)
+    for x, y, c, th in tqdm.tqdm(best.get_nbkg_in_s_step(((i,) for i in range(best.ntasks))), total=best.ntasks):
+        cmap[x, y] = c
+        pmap[x, y] = th
+    """
+    return cmap, pmap
+
+
+
+class BlockEstimatorLcopy(DistributedObj):
+    def __init__(self, locwcs, emap, i, j, ee, pk, qtot, threadsperloop=4, mpnum=4, barrier=None):
+        super().__init__(mpnum, barrier)
+        ntasks = self.setupobject(locwcs, emap, i, j, ee, pk, qtot, threadsperloop)
+        if mpnum !=0 and not np.all([n == ntasks[0] for n in ntasks]):
+            raise ValueError("block estimator has initialized with errors")
+        self.ntasks = ntasks if mpnum==0 else  ntasks[0]
+
+    @DistributedObj.for_each_process
+    def setupobject(self, locwcs, emap, i, j, ee, pk, qtot, threadsperloop):
+        ntasks, self.feeder = create_neighboring_blocks(locwcs, emap, i, j, qtot, pk, ee)
+        self.data = None
+        self.mask = None
+        self.lthreads = threadsperloop
+        self.locwcs = locwcs
+        self.psfdata = arttools.caldb.get_photon_vs_particle_prob
+        return ntasks
+
+
+    @DistributedObj.for_each_argument
+    def get_nbkg_in_s_step(self, k, ratesolver="c"):
+        x, y, exp, i, j, ee, pk, qtot = self.feeder(k)
+        cmap, pmap = psf_functions.solve_for_locations(i,j,eidx,rmat,pk,vt,emap,psfmat, dx,xsize,dy,ysize)
+        k = unpack_pix_index(i, j)
+        vt = pol_to_vec(*np.deg2rad(self.locwcs.all_pix2world(np.array([y, x]).T, 0)).T)
+        ssize = 1000000 # number of event for split
+        csplit = (x.size*i.size)//1000000 + 1
+        csize = x.size//csplit + 1
+        csplit = x.size//csize + (1 if x.size%csize > 0 else 0)
+        mrot = qtot.inv().as_matrix()
+
+        ntot = np.zeros(x.size, float)
+        thet = np.zeros(x.size, float)
+
+        def worker(sl):
+            vl = vt[sl*csize: min(sl*csize + csize, vt.shape[0]), :]
+
+            nphot = ntot[sl*csize: x.size if sl == csplit -1 else (sl + 1)*csize]
+            qest = thet[sl*csize: x.size if sl == csplit -1 else (sl + 1)*csize]
+            expl = exp[sl*csize: x.size if sl == csplit -1 else (sl + 1)*csize]
+
+
+            vr = np.einsum("kj,mij->kmi", vl, mrot).reshape((-1, 3))
+            #import pickle
+            #pickle.dump([i, j, vr, k, ee], open("/srg/a1/work/andrey/ART-XC/test_nearest.pkl", "wb"))
+            m, bw, cs, data, mask = psf_nearest_value(i, j, vr, k, energy=ee, data=self.data, mask=self.mask)
+            if cs.sum() == 0:
+                return None
+
+            self.data = data
+            self.mask = mask
+            bw = bw*np.tile(pk, vr.shape[0]//i.size)[m]
+            rates = np.maximum(cs.astype(float)/2., 1.)/expl
+            b = np.ones(bw.size, float)
+            tstart = time()
+            if ratesolver == "python":
+                ppsolver(nphot, bw, cs, expl)
+                rates = nphot/expl
+            if ratesolver == "c":
+                get_phc_solution(bw, b, rates, expl, cs)
+                nphot[:] = rates*expl
+            if ratesolver == "brent":
+                get_brent_solution(bw, b, rates, expl, cs)
+                nphot[:] = rates*expl
+
+            cc = np.cumsum(bw/(bw*np.repeat(rates, cs) + 1.))
+            ch = np.empty(expl.size, float)
+            ch[1:] = np.diff(cc[np.cumsum(cs) - 1]) - expl[1:]
+            ch[0] = cc[cs[0] - 1]- expl[0]
+            t = np.cumsum(np.log(bw*np.repeat(rates, cs) + 1))
+            qest[1:] = np.diff(t[np.cumsum(cs) - 1])
+            qest[:1] = t[cs[0] - 1]
+            #qest[(cs == 0) | (nphot < 0.5)] == 0.
+            qest[(cs == 0) | (nphot < 0.5)] == 0.
+
+        tpool = ThreadPool(self.lthreads)
+        tpool.map(worker, range(csplit))
+        return x, y, ntot, thet
+
 
 
 
@@ -437,7 +574,7 @@ def estimate_rate_for_direction_iterate(locwcs, x, y, exposure, i, j, ee, pk, qt
             pkc = pkc[:ic.size] #np.tile(i, nphot.size)
             #qtotc = qtotc[:ic.size]
 
-        vr = np.repeat(v, ic.size//nphot.size, axis=0)
+        #vr = np.repeat(v, ic.size//nphot.size, axis=0)
 
         #m, bw = naive_bispline_interpolation(ic, jc, qtotc.apply(vr, inverse=True), eec)
         m, bw = naive_bispline_interpolation(ic, jc, np.einsum("kj,mij->kmi", v, mrot).reshape((-1, 3)), eec)
@@ -476,8 +613,8 @@ def estimate_rate_for_direction_iterate(locwcs, x, y, exposure, i, j, ee, pk, qt
 def estimate_rate_for_direction_c(locwcs, x, y, exposure, i, j, ee, pk, qtot, ratesolver="c"):
     data, mask = None, None
     vt = pol_to_vec(*np.deg2rad(locwcs.all_pix2world(np.array([y, x]).T, 0)).T)
-    ssize = 2000000 # number of event for split
-    csplit = (x.size*i.size)//2000000 + 1
+    ssize = 1000000 # number of event for split
+    csplit = (x.size*i.size)//1000000 + 1
     csize = x.size//csplit
     csplit = x.size//csize + (1 if x.size%csize > 0 else 0)
     ntot = np.zeros(x.size, float)
@@ -498,15 +635,15 @@ def estimate_rate_for_direction_c(locwcs, x, y, exposure, i, j, ee, pk, qtot, ra
         qest = thet[sl*csize: x.size if sl == csplit -1 else (sl + 1)*csize]
         expl = exposure[sl*csize: x.size if sl == csplit -1 else (sl + 1)*csize]
         if ic.size != nphot.size*i.size:
-            ic = ic[:nphot.size*i.size] #np.tile(i, nphot.size)
-            jc = jc[:ic.size] #np.tile(i, nphot.size)
-            kc = kc[:ic.size] #np.tile(i, nphot.size)
-            eec = eec[:ic.size] #np.tile(i, nphot.size)
-            pkc = pkc[:ic.size] #np.tile(i, nphot.size)
-            #qtotc = qtotc[:ic.size]
+            ic = ic[:nphot.size*i.size]
+            jc = jc[:ic.size]
+            kc = kc[:ic.size]
+            eec = eec[:ic.size]
+            pkc = pkc[:ic.size]
 
         vr = np.einsum("kj,mij->kmi", v, mrot).reshape((-1, 3))
         #m, bw = naive_bispline_interpolation(ic, jc, qtotc.apply(vr, inverse=True), eec)
+        #m, bw = naive_bispline_interpolation(ic, jc, vr, inverse=True), eec)
         m, bw, data, mask = psf_nearest_value(ic, jc, vr, kc, energy=eec, data=data, mask=mask)
         if m.sum() == 0:
             continue
