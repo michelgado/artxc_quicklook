@@ -1,5 +1,5 @@
 from .caldb import get_totevt_during_bkg, get_deadtime_for_dev
-from .background import get_background_surface_brigtnress
+from .background import get_background_surface_brigtnress, get_background_bands_ratio
 from .filters import DEFAULTBKGFILTER, IndependentFilters, Intervals, RationalSet
 from .aux import interp1d
 from .time import GTI
@@ -11,17 +11,11 @@ def get_src_frac(urddata, filters):
     urddata shoulb be unfilterred
     the procedure finds excess over stored background spectrum and attribute it to the source, after that a fraction of excess signal contained within filters is found
     """
-    dfilt = {urdn: d.filters & IndependentFilters({"GRADE": RationalSet(range(16)), "ENERGY": Intervals([0., np.inf])}) for urdn, d in urddata.items()}
+    tfilt = DEFAULTBKGFILTER.substitute("ENERGY", Intervals([2., 150.]))
     bkgdata = {urdn: DEFAULTBKGFILTER.apply(d).sum() for urdn, d in urddata.items()}
-    print("bkgdata", bkgdata)
-    totdata = {urdn: d.size for urdn, d in urddata.items()}
-    print("totdata", totdata)
-    fildata = {urdn: filters[urdn].apply(d).sum() for urdn, d in urddata.items()}
-    print("filtdata", fildata)
-    tbrate = {urdn: get_background_surface_brigtnress(urdn, dfilt[urdn], fill_value=0.).sum() for urdn in urddata}
-    r1 = {urdn: tbrate[urdn]/get_background_surface_brigtnress(urdn, DEFAULTBKGFILTER, fill_value=0.).sum() for urdn in urddata}
-    r2 = {urdn: tbrate[urdn]/get_background_surface_brigtnress(urdn, filters[urdn], fill_value=0.).sum() for urdn in urddata}
-    fracs = {urdn: (fildata[urdn] - bkgdata[urdn]/r2[urdn])/(totdata[urdn] - bkgdata[urdn]/r1[urdn]) for urdn in urddata}
+    totdata = {urdn: tfilt.apply(d).sum() for urdn, d in urddata.items()}
+    filtdata = {urdn: filters[urdn].apply(d).sum() for urdn, d in urddata.items()}
+    fracs = {urdn: (filtdata[urdn] - bkgdata[urdn]*get_background_bands_ratio(filters[urdn], DEFAULTBKGFILTER))/(totdata[urdn] - bkgdata[urdn]*get_background_bands_ratio(tfilt, DEFAULTBKGFILTER)) for urdn in urddata}
     return fracs
 
 

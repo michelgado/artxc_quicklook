@@ -27,9 +27,9 @@ relativistic_corrections_gti = np.array([
                   [6.28720417e+08, 6.30954255e+08]])
 
 ARTCALDBPATH = os.environ["ARTCALDB"]
-indexfname = "artxc_calib/caldb.indx"
+indexfname = "artxc_caldb/caldb.indx"
 
-idxtabl = Table(fits.getdata(os.path.join(ARTCALDBPATH, indexfname), 1))
+idxtabl = Table(fits.getdata(os.path.join(ARTCALDBPATH, "..", indexfname), 1))
 idxtabl = idxtabl.to_pandas()
 
 idxtabl["CAL_VSB"] = [(Time(a + "T" + b) - Time(MJDREF, format="mjd")).sec for a, b in idxtabl[["CAL_VSD", "CAL_VST"]].values]
@@ -100,18 +100,18 @@ def mksomething(urddata, hkdata, attdata, gti):
 
 
 def get_bokz_timepatches(gti=None):
-    patches = np.loadtxt("/srg/a1/work/andrey/ART-XC/Crab/bokz_time_patches.txt").reshape((-1, 2))
+    patches = np.loadtxt(os.path.join(ARTCALDBPATH, "bokz_time_patches.txt")).reshape((-1, 2))
     return patches if gti is None else patches[gti.mask_external(patches[:, 0])]
 
 @lru_cache(maxsize=1)
 def get_bokz_bti():
-    bti = np.loadtxt("/srg/a1/work/andrey/ART-XC/Crab/bokz_btis_patches.txt")
+    bti = np.loadtxt(os.path.join(ARTCALDBPATH, "bokz_btis_patches.txt"))
     return bti
 
 
 @lru_cache(maxsize=1)
 def get_bokz_fjump_bti():
-    bti = np.loadtxt("/srg/a1/work/andrey/ART-XC/Crab/bad_future_jumps.txt")
+    bti = np.loadtxt(os.path.join(ARTCALDBPATH, "bad_future_jumps.txt"))
     return bti
 
 
@@ -123,7 +123,7 @@ def get_deadtime_for_dev(dev, gti=None):
 
 
 def get_obt_timecorr_calib():
-    #return os.path.join(ARTCALDBPATH, "art_clock_model_corr_v07092022.txt")
+    #return os.path.join(ARTCALDBPATH, "..", "art_clock_model_corr_v07092022.txt")
     return fits.getdata(os.path.join(ARTCALDBPATH, "timecorrection.fits"), 1)
 
 
@@ -160,7 +160,7 @@ def get_caldata(ctype, dev, gti=None):
     ti = np.array([te[:-1], te[1:]]).T[gaps]
     idx = np.searchsorted(caldata.CAL_VSB.values, ti.mean(axis=1)) - 1
     u, ui = np.unique(idx, return_inverse=True)
-    return [(os.path.join(ARTCALDBPATH, caldata.iloc[i].CAL_DIR.rstrip(), caldata.iloc[i].CAL_FILE.rstrip()), ti[ui == i]) for i in u]
+    return [(os.path.join(ARTCALDBPATH, "..", caldata.iloc[i].CAL_DIR.rstrip(), caldata.iloc[i].CAL_FILE.rstrip()), ti[ui == i]) for i in u]
 
 
 """
@@ -171,7 +171,7 @@ def get_relevat_file(cal_cname, instrume, date=datetime.datetime(2030, 10, 10)):
     caltable = get_cif(cal_cname, instrume)
     didx = caltable.index.get_loc(date, method="ffill")
     row = caltable.iloc[didx]
-    fpath = os.path.join(ARTCALDBPATH, row["CAL_DIR"].rstrip(), row["CAL_FILE"].rstrip())
+    fpath = os.path.join(ARTCALDBPATH, "..", row["CAL_DIR"].rstrip(), row["CAL_FILE"].rstrip())
     return fpath
 """
 
@@ -250,7 +250,7 @@ def get_shadowmask_by_urd(urdn):
     #temporal patch
     """
     urdtobit = {28:2, 22:4, 23:8, 24:10, 25:20, 26:40, 30:80}
-    fpath = os.path.join(ARTCALDBPATH, "artxc_detmask_%s_20200414_v001.fits" % URDTOTEL[urdn])
+    fpath = os.path.join(ARTCALDBPATH, "..", "artxc_detmask_%s_20200414_v001.fits" % URDTOTEL[urdn])
     #mask = np.logical_not(fits.getdata(fpath, 1).astype(bool))
     """
     #print("urdn", urdn, ANYTHINGTOTELESCOPE[urdn])
@@ -302,14 +302,14 @@ def get_device_timeshift(dev):
     return dt
 
 
-fshifts = [l.rstrip().rsplit() for l in open('/srg/a1/work/andrey/ART-XC/att_compressed/bokz_shifts.list')]
+fshifts = [l.rstrip().rsplit() for l in open(os.path.join(ARTCALDBPATH,'bokz_shifts.list'))]
 fshifts = {os.path.basename(name): int(k) for name, k in fshifts}
 def get_specific_fileshift(fname):
     return fshifts.get(os.path.basename(fname), 0.)
 
 
 def get_totevt_during_bkg(urdn):
-    tevt = pickle.load(open("/srg/work/andrey/ART-XC/crab_calibration/total_events_in_bkg.pkl", "rb"))
+    tevt = pickle.load(open(os.path.join(ARTCALDBPATH, "total_events_in_bkg.pkl"), "rb"))
     g, e = tevt[urdn]
     return e/g.length
 
@@ -380,20 +380,20 @@ def default_background_events_filter(energy=None, grade=None):
 
 def get_ayut_inversed_psf_data_packed():
     """
-    ipsf1 = fits.open(os.path.join(ARTCALDBPATH, "iPSF_ayut.fits"))
+    ipsf1 = fits.open(os.path.join(ARTCALDBPATH, "..", "iPSF_ayut.fits"))
     mm = np.zeros((121, 121), float)
     mm[56:65, 56:65] = 1.
     ipsf = fits.HDUList([ipsf1[0], ipsf1[1], fits.ImageHDU(np.tile(mm, (ipsf1[2].data.shape[0], ipsf1[2].data.shape[1], 1, 1)))])
     """
     ipsf = fits.open(os.path.join(ARTCALDBPATH, "marchall_ipsf.fits.gz"))
-    #ipsf = fits.open(os.path.join(ARTCALDBPATH, "iPSF_ayut.fits"))
-    #ipsf = fits.open(os.path.join(ARTCALDBPATH, "iPSF_hybrid.fits.gz"))
+    #ipsf = fits.open(os.path.join(ARTCALDBPATH, "..", "iPSF_ayut.fits"))
+    #ipsf = fits.open(os.path.join(ARTCALDBPATH, "..", "iPSF_hybrid.fits.gz"))
     return ipsf
 
 @lru_cache(maxsize=1)
 def get_ayut_inverse_psf_datacube_packed():
     ipsf = np.copy(get_ayut_inversed_psf_data_packed()[2].data).astype(float)
-    #ipsf = fits.getdata(os.path.join(ARTCALDBPATH, "iPSF_hybrid.fits.gz"), 2)
+    #ipsf = fits.getdata(os.path.join(ARTCALDBPATH, "..", "iPSF_hybrid.fits.gz"), 2)
     #ipsf = pickle.load(open("/srg/a1/work/srg/ARTCALDB/caldb_files/iPSF_marshall.pkl", "rb"))
     return ipsf
 
