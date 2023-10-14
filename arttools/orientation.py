@@ -5,6 +5,7 @@ from math import pi, cos, sin, sqrt
 from ._det_spatial import urd_to_vec, F, DL, raw_xy_to_vec
 from .sphere import ConvexHullonSphere, get_vec_triangle_area, FullSphere, ConvexHullonSphere, CVERTICES, SPHERE
 from .time import get_hdu_times, GTI, tGTI, emptyGTI, board_time_to_jyear
+from .filters import Intervals
 from .vector import vec_to_pol, pol_to_vec, normalize
 from .caldb import T0, get_boresight_by_device, get_device_timeshift, relativistic_corrections_gti, MJDREF, get_bokz_timepatches, get_bokz_bti, get_bokz_fjump_bti, get_specific_fileshift
 from .containers import Urddata
@@ -302,7 +303,7 @@ class AttDATA(SlerpWithNaiveIndexing):
                     q = attloc(gloc.make_tedges(attloc.times)[0])
                     chloc = ConvexHullonSphere(np.concatenate([q.apply(v) for v in fov], axis=0)) & ch
                     chulls.append(chloc)
-        print("report: ", [(ch.area, g.exposure) for ch, g in zip(chulls, gtis)])
+        #print("report: ", [(ch.area, g.exposure) for ch, g in zip(chulls, gtis)])
         return list(zip(chulls, gtis)) if len(chulls) > 0 else [[], []]
 
 
@@ -495,14 +496,14 @@ def read_bokz_fits(bokzhdu, perform_time_corrections=True, correct_future_jumps=
 
         patches = get_bokz_timepatches(gti=GTI([max(T0, bokzdata["TIME"][0]), bokzdata["TIME"][-1]]))
         idx = np.searchsorted(bokzdata["TIME"], patches[:, 0])
-        print("check patches", idx, bokzdata.size)
+        #print("check patches", idx, bokzdata.size)
         mpatches = (idx > 0) & (idx < bokzdata.size)
         dtcs[idx[mpatches] - 1] += patches[mpatches, 1]
 
 
         times = np.full(bokzdata.size, bokzdata["TIME"][0])
         times[1:] += np.cumsum(dtcs)
-        print(np.where(times[1:] < times[:-1]))
+        #print(np.where(times[1:] < times[:-1]))
 
 
         mask0quats = ~np.isnan(np.sum(q.as_rotvec()**2, axis=1)) & ~np.any(np.isnan(mat), axis=(1, 2))
@@ -514,7 +515,7 @@ def read_bokz_fits(bokzhdu, perform_time_corrections=True, correct_future_jumps=
         maskdubles[np.where(np.all(mat[1:,:, :] == mat[:-1, :, :], axis=(1, 2)))[0] + 1] = False
 
         mask = np.logical_and.reduce([mask0quats, masktimes, maskdubles, ~mna])
-        print("mask", mask.size, mask.sum(), mask0quats.sum(), masktimes.sum(), maskdubles.sum(), mna.sum())
+        #print("mask", mask.size, mask.sum(), mask0quats.sum(), masktimes.sum(), maskdubles.sum(), mna.sum())
         if mask.sum() < 2:
             res = AttDATA([], [], gti=emptyGTI)
             res.times = np.empty(0, float)
@@ -523,6 +524,8 @@ def read_bokz_fits(bokzhdu, perform_time_corrections=True, correct_future_jumps=
         qbokz = qbokz[mask]
         torig = np.copy(times)
         times = times[mask]
+        idx = np.argsort(times)
+        times, qbokz = times[idx], qbokz[idx]
         return AttDATA(times, qbokz, **kwargs).apply_gti(~bti)
     else:
         return AttDATA(bokzdata["TIME"][~mna], qbokz[~mna], **kwargs).apply_gti(~bti)
@@ -603,7 +606,7 @@ def get_photons_vectors(urddata, URDN, attdata, subscale=1, randomize=False):
     urdnatt = attdata.for_urdn(URDN)
     qall = urdnatt(np.repeat(urddata["TIME"], subscale*subscale))
     photonvecs = urd_to_vec(urddata, subscale, randomize)
-    print(len(qall), photonvecs.shape)
+    #print(len(qall), photonvecs.shape)
     if photonvecs.size == 0:
         phvec = photonvecs
     else:
@@ -1260,7 +1263,7 @@ class ChullGTI(ConvexHullonSphere):
             self.parent.update_parent_gti()
 
     def get_gti(self):
-        return reduce(lambda a, b: a | b, [ch.gti for ch in self.all_hairs])
+        return Intervals.merge_or([ch.gti for ch in self.all_hairs])
 
 class FullSphereChullGTI(ChullGTI):
     def __init__(self):

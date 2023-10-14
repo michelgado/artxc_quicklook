@@ -103,7 +103,6 @@ def get_events_energy(eventlist, hkdata, caldb, escalecaldb=None, set_central_st
     4. estimate weighted energy of the photon using "independent" energy estimation in the top and bottom strips.
     whoala, you got your energy dude
     """
-    print("total events", eventlist.size)
     emean = np.zeros(eventlist.size, np.double)
     bitmask = np.zeros((8, emean.size), bool)
 
@@ -116,14 +115,11 @@ def get_events_energy(eventlist, hkdata, caldb, escalecaldb=None, set_central_st
 
     energb, maskb, sigmab = get_bot_energy(eventlist, hkdata, caldb, set_central_strip_triggered=set_central_strip_triggered)
     bitmask[5:8, :] = maskb
-    print("bot dist", np.unique(maskb.sum(axis=0), return_counts=True))
 
     energt, maskt, sigmat = get_top_energy(eventlist, hkdata, caldb, set_central_strip_triggered=set_central_strip_triggered)
     bitmask[2:5, :] = maskt
-    print("top dist", np.unique(maskt.sum(axis=0), return_counts=True))
 
     atleastone = np.any(bitmask[2:,:], axis=0)
-    print("drop by threshold", atleastone.size - atleastone.sum(), " from ", atleastone.size)
 
     ebot = np.sum(energb*maskb, axis=0)
     sigmabotsq = np.sum(sigmab**2.*maskb, axis=0)

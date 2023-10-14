@@ -27,9 +27,9 @@ relativistic_corrections_gti = np.array([
                   [6.28720417e+08, 6.30954255e+08]])
 
 ARTCALDBPATH = os.environ["ARTCALDB"]
-indexfname = "artxc_caldb/caldb.indx"
+indexfname = "data/artxc_calib/caldb.indx"
 
-idxtabl = Table(fits.getdata(os.path.join(ARTCALDBPATH, "..", indexfname), 1))
+idxtabl = Table(fits.getdata(os.path.join(ARTCALDBPATH, "../../", indexfname), 1))
 idxtabl = idxtabl.to_pandas()
 
 idxtabl["CAL_VSB"] = [(Time(a + "T" + b) - Time(MJDREF, format="mjd")).sec for a, b in idxtabl[["CAL_VSD", "CAL_VST"]].values]
@@ -160,7 +160,7 @@ def get_caldata(ctype, dev, gti=None):
     ti = np.array([te[:-1], te[1:]]).T[gaps]
     idx = np.searchsorted(caldata.CAL_VSB.values, ti.mean(axis=1)) - 1
     u, ui = np.unique(idx, return_inverse=True)
-    return [(os.path.join(ARTCALDBPATH, "..", caldata.iloc[i].CAL_DIR.rstrip(), caldata.iloc[i].CAL_FILE.rstrip()), ti[ui == i]) for i in u]
+    return [(os.path.join(ARTCALDBPATH, "../../", caldata.iloc[i].CAL_DIR.rstrip(), caldata.iloc[i].CAL_FILE.rstrip()), ti[ui == i]) for i in u]
 
 
 """
@@ -386,15 +386,14 @@ def get_ayut_inversed_psf_data_packed():
     ipsf = fits.HDUList([ipsf1[0], ipsf1[1], fits.ImageHDU(np.tile(mm, (ipsf1[2].data.shape[0], ipsf1[2].data.shape[1], 1, 1)))])
     """
     ipsf = fits.open(os.path.join(ARTCALDBPATH, "marchall_ipsf.fits.gz"))
-    #ipsf = fits.open(os.path.join(ARTCALDBPATH, "..", "iPSF_ayut.fits"))
-    #ipsf = fits.open(os.path.join(ARTCALDBPATH, "..", "iPSF_hybrid.fits.gz"))
     return ipsf
 
 @lru_cache(maxsize=1)
-def get_ayut_inverse_psf_datacube_packed():
-    ipsf = np.copy(get_ayut_inversed_psf_data_packed()[2].data).astype(float)
-    #ipsf = fits.getdata(os.path.join(ARTCALDBPATH, "..", "iPSF_hybrid.fits.gz"), 2)
-    #ipsf = pickle.load(open("/srg/a1/work/srg/ARTCALDB/caldb_files/iPSF_marshall.pkl", "rb"))
+def get_ayut_inverse_psf_datacube_packed(app=None):
+    ipsffile = get_ayut_inversed_psf_data_packed()
+    ipsf = np.copy(ipsffile["MATRIX"].data).astype(float)
+    if not app is None:
+        ipsf = ipsf*ipsffile["APPSCALE"].data["scale"][np.searchsorted(ipsffile["APPSCALE"].data["app"], app) - 1]
     return ipsf
 
 def get_arf():

@@ -377,12 +377,12 @@ class IlluminationSources(object):
         urdgtis = {urdn: f.filters["TIME"] & cgti for urdn, f in urdfilters.items()}
 
         gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
-        print("gti exposure", gti.exposure)
+        #print("gti exposure", gti.exposure)
         tel, gaps, locgti = make_small_steps_quats(attdata, gti=gti, tedges=te)
         tc = (tel[1:] + tel[:-1])[gaps]/2.
 
         shiftsize = int(min(app, 300)//45 + 1)
-        print("shiftsize", shiftsize)
+        #print("shiftsize", shiftsize)
         xc, yc = np.mgrid[-shiftsize: shiftsize + 1: 1, -shiftsize: shiftsize + 1: 1] # size of the pixel is 45 arcsec
         detmask = np.zeros((48 + 2*shiftsize, 48 + shiftsize*2), bool)
 
@@ -420,10 +420,10 @@ class IlluminationSources(object):
                 idx = np.searchsorted(te, np.repeat(tc, cvals)[millum]) - 1
                 dtu = np.repeat(dtu, cvals)[millum]
                 dtc = np.repeat(dtcorr[urdn](tc), cvals)[millum] if urdn in dtcorr else 1.
-                print("urdn", urdn, " time", np.sum(dtu*w))
+                #print("urdn", urdn, " time", np.sum(dtu*w))
                 np.add.at(dtn, idx, w*dtu*dtc*urdweights.get(urdn, 1./7.))
-                print("urdweights", urdweights.get(urdn, 1./7.))
-        print("dtn sum", dtn.sum())
+                #print("urdweights", urdweights.get(urdn, 1./7.))
+        #print("dtn sum", dtn.sum())
         return dtn
 
 
@@ -431,6 +431,7 @@ class WCSSkyWithIllumination(WCSSky, IlluminationSources): #, IlluminationSource
 
     def __init__(self, isources, filters, **kwargs):
         IlluminationSources.__init__(self, isources, filters)
+        #print("initial illumination init")
         super().__init__(isources=isources, filters=filters, **kwargs)
         #WCSSky.__init__(self, isources, *args, filters=filters, **kwargs)
 

@@ -131,6 +131,7 @@ class Intervals(object):
         return self.arr.__repr__()
 
     def __and__(self, other):
+        return self.merge_and([self, other])
         """
         this operation must left us with intersections of the two sets of 1d intervals
         """
@@ -155,6 +156,28 @@ class Intervals(object):
         gres.arr = np.copy(arr[np.cumsum(ms[idx][:-1]) == 2])
         gres.arr = gres.arr[gres.arr[:, 0] < gres.arr[:, 1]]
         return gres
+
+    @classmethod
+    def merge_and(cls, intervals_list):
+        if np.any([intervals.size == 0 for intervals in intervals_list]):
+            return cls([[]])
+
+        tt = np.concatenate([intervals.arr.ravel() for intervals in intervals_list])
+        #in this set of edges all even are starts and odd and ends, but not ordered
+        ms = np.ones(tt.size, int)
+        #mark all starts with 1 and stops with -1
+        ms[1::2] = -1
+        #sort all edges but store their position
+        idx = np.argsort(tt)
+        tt = tt[idx]
+        ms = ms[idx]
+        mask = np.cumsum(ms) == len(intervals_list)
+        mask[mask] = tt[mask] != np.roll(tt, -1)[mask]
+        gres = cls.__new__(cls)
+        gres.arr = np.copy(np.array([tt[mask], np.roll(tt, -1)[mask]]).T)
+        return gres
+
+
 
     def merge_joint(self):
         """
@@ -194,6 +217,10 @@ class Intervals(object):
         #note, since during each init set of intervals are regularized,
         #no additional actions are required to get union
         return self.__class__(np.concatenate([self.arr, other.arr]))
+
+    @classmethod
+    def merge_or(cls, intervals_list):
+        return cls(np.concatenate([intervals.arr for intervals in intervals_list], axis=0))
 
     def __iadd__(self, val):
         if type(val) is float is np.inf:
@@ -286,6 +313,7 @@ class Intervals(object):
         intervals if requeired), and mask, showing position of the gaps between points clusted from
         different intervals
         """
+
         dtmed = np.median(np.diff(ts, 1))
         gtloc = self & self.__class__(ts[[0, -1]])
         if joinsize > 0:
@@ -327,23 +355,23 @@ class Intervals(object):
 
         te = np.unique(np.concatenate([self.arr.ravel(), te[self.mask_external(te)]]))
         gaps = self.mask_external((te[1:] + te[:-1])/2.)
-        print("te.size", te.size)
+        #print("te.size", te.size)
         if joinsize != 1:
             gcut = (np.diff(te) < dt*joinsize) & gaps
-            print("gcut sum", gcut.sum(), np.sum(np.diff(te) < dt*joinsize))
+            #print("gcut sum", gcut.sum(), np.sum(np.diff(te) < dt*joinsize))
             #print("gcut sum", gcut.sum())
             glong = np.ones(te.size, bool)
             glong[1:-1] = ~(gcut[:-1] & gaps[1:])
             te = te[glong]
-            print("te.size", te.size)
+            #print("te.size", te.size)
 
             gaps = self.mask_external((te[1:] + te[:-1])/2.)
             gcut = (np.diff(te) < dt*joinsize) & gaps
-            print("gcut sum", gcut.sum(), np.sum(np.diff(te) < dt*joinsize))
+            #print("gcut sum", gcut.sum(), np.sum(np.diff(te) < dt*joinsize))
             glong = np.ones(te.size, bool)
             glong[1:-1] = ~(gcut[1:] & gaps[:-1])
             te = te[glong]
-            print("te.size", te.size)
+            #print("te.size", te.size)
 
             gaps = self.mask_external((te[1:] + te[:-1])/2.)
 

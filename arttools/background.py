@@ -62,7 +62,6 @@ def make_overall_background_map(subgrid=10, useshadowmask=True):
     ymin, ymax = ymin - dy/2., ymax + dy
 
     x, y = np.mgrid[xmin:xmax:dd, ymin:ymax:dd]
-    print(x.shape)
     shape = x.shape
     newvmap = np.zeros(shape, np.double)
     vecs = offset_to_vec(np.ravel(x), np.ravel(y))
@@ -138,10 +137,7 @@ def make_quick_bkgmap_for_wcs(wcs, attdata, urdgtis, time_corr={}):
     for urd in urdgtis:
         bkgmap = make_background_det_map_for_urdn(urd)
         bkg = bkgmap((mgrid[1], mgrid[0]))
-        print(bkg.shape)
         bkg = sum(bkg[i%5::5,i//5::5] for i in range(25))/25.
-        print(bkg.shape)
-        print("run convolve")
         bkgimg = convolve_profile(attdata, wcs, bkg, urdgtis[urd], time_corr.get(urd, lambda x: 1.)) + bkgimg
     return bkgimg
 
@@ -314,7 +310,6 @@ def get_bkg_lightcurve_for_app(urdbkg, filters, att, ax, app=120., te=np.array([
     vecs = raw_xy_to_vec(xd.ravel(), yd.ravel()).reshape((48, 48, 3))
 
     shiftsize = int(min(app, 300)//45 + 1)
-    print("shiftsize", shiftsize)
     xc, yc = np.mgrid[-shiftsize: shiftsize + 1: 1, -shiftsize: shiftsize + 1: 1] # size of the pixel is 45 arcsec
 
     for urdn in filters:
@@ -379,7 +374,6 @@ def get_photbkg_lightcurve_for_app(locphotbkg, att, ax, app, te, filters, dtcorr
     vecs = raw_xy_to_vec(xd.ravel(), yd.ravel()).reshape((48, 48, 3))
 
     shiftsize = int(min(app, 300)//45 + 1)
-    print("shiftsize", shiftsize)
     xc, yc = np.mgrid[-shiftsize: shiftsize + 1: 1, -shiftsize: shiftsize + 1: 1] # size of the pixel is 45 arcsec
 
     for urdn in filters:
@@ -450,7 +444,6 @@ def get_bkg_spec(urdbkg, filters, att, ax, appsize, dtcorr={}, illum_filters=Non
         shmask = filters[urdn].meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
         bloc = bloc[shmask, :]
         bloc = bloc/bloc.sum()
-        print("background pix specs formed", bloc.shape)
 
         qlist = qval*get_boresight_by_device(urdn)
         x, y = xd[shmask], yd[shmask]
@@ -490,7 +483,6 @@ def make_mock_photbkg(urdn, filters, attdata, photbkg, randomize=True):
     te, gaps, lgti = make_small_steps_quats(attdata.for_urdn(urdn))
     tc = (te[1:] + te[:-1])[gaps]/2.
     dt = np.diff(te)[gaps]
-    print(tc.min(), tc.max(), dt.min())
     qloc = attdata.for_urdn(urdn)(tc)
 
     gridp, specp = get_crabspec_for_filters(filters)
@@ -499,15 +491,10 @@ def make_mock_photbkg(urdn, filters, attdata, photbkg, randomize=True):
 
     for xp, yp, qpix in zip(x, y, qcorr):
         i, j = xy_to_opaxoffset(xp, yp, urdn)
-        #print("ij", i, j)
         ploc = pfun(i, j)
         ra, dec = np.rad2deg(vec_to_pol((qloc*qpix).apply([1, 0, 0])))
-        #print(ra, dec)
         prates = photbkg(ra, dec)
-        #print(prates, prates*ploc*dt)
-        #print(np.random.poisson(prates*ploc*dt))
         time = np.repeat(tc, np.random.poisson(prates*ploc*dt))
-        #print(time.min(), time.max(), time.size)
         if time.size == 0:
             continue
         if randomize:

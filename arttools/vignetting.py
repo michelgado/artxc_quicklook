@@ -74,7 +74,7 @@ class DetectorVignetting(object):
 
     def _set_ipsf_functions(self, iifun):
         self.iifun = iifun
-        self.norm = np.sum([self.iifun(i, j)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
+        self.norm = 1. #np.sum([self.iifun(i, j)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
 
     def set_vignetting_functions(self, vfun):
         self.vignfun = vfun
@@ -104,7 +104,7 @@ class DetectorVignetting(object):
 
     @property
     def img(self):
-        return self._img/self.norm
+        return self._img #/self.norm
 
     def produce_vignentting(self, x, y, i, j):
         for xp, yp, il, jl in zip(x, y, i, j):

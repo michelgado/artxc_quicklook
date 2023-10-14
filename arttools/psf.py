@@ -85,7 +85,7 @@ def naive_bispline_interpolation(rawx, rawy, vec, energy=None, urdn=None, data=N
     """
     iifun = get_ipsf_interpolation_func()
 
-    imgmax = np.sum([unpack_inverse_psf_ayut(i, j)[:, 60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)], axis=0)
+    #imgmax = np.sum([unpack_inverse_psf_ayut(i, j)[:, 60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)], axis=0)
     """
     if imgfilter is None:
         imgmax = np.sum([unpack_inverse_psf_ayut(i, j)[:, 60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)], axis=0)
@@ -118,7 +118,7 @@ def naive_bispline_interpolation(rawx, rawy, vec, energy=None, urdn=None, data=N
         data[k, eidx, ip, jp+jshift]*(xg[ip+ishift] - xl)*(yl - yg[jp]) + \
         data[k, eidx, ip+ishift, jp+jshift]*(xl - xg[ip])*(yl - yg[jp]))
     mask[mask] = s > 0.
-    return mask, (s/imgmax[eidx])[s > 0.]
+    return mask, s[s > 0.] #(s/imgmax[eidx])[s > 0.]
 
 
 def psf_nearest_value(rawx, rawy, vec, k=None, energy=None, data=None, mask=None):
@@ -128,7 +128,7 @@ def psf_nearest_value(rawx, rawy, vec, k=None, energy=None, data=None, mask=None
     iifun = get_ipsf_interpolation_func()
 
     if data is None:
-        imgmax = np.sum([unpack_inverse_psf_ayut(i, j)[:, 60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)], axis=0)
+        #imgmax = np.sum([unpack_inverse_psf_ayut(i, j)[:, 60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)], axis=0)
         data = get_ayut_inverse_psf_datacube_packed()
         mask = data[:, 0, :, :] > 1e-10
     if mask is None:
@@ -156,8 +156,8 @@ def naive_bispline_interpolation_specweight(rawx, rawy, vec, data, urdn=None, cs
     if data is None:
         w = get_specweights(imgfilter, ayutee, cspec)
         data = np.sum(get_ayut_inverse_psf_datacube_packed()*w[np.newaxis, :, np.newaxis, np.newaxis], axis=1)
-        imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
-        data = data/imgmax #(data[0, 60, 60] + data[1, 60, 51]*4 + data[2, 51, 51]*4)
+        #imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
+        #data = data/imgmax #(data[0, 60, 60] + data[1, 60, 51]*4 + data[2, 51, 51]*4)
 
     #data = get_ayut_inverse_psf_datacube_packed()
     k, xl, yl = vec_to_ipsfpix(rawx, rawy, vec, urdn)
@@ -278,8 +278,8 @@ def unpack_inverse_psf_datacube_specweight_ayut(imgfilter, cspec, app=None):
         data = data*psfmask[np.newaxis, np.newaxis, :, :]
 
     data = np.sum(data*w[np.newaxis, :, np.newaxis, np.newaxis], axis=1)
-    imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
-    data = data/imgmax #(d
+    #imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
+    #data = data/imgmax #(d
     return data
 
 
@@ -321,8 +321,8 @@ def get_pix_overall_countrate_constbkg_ayut(imgfilter, cspec=None, app=None, fol
     w = get_specweights(imgfilter, ayutee, cspec)
     data = get_ayut_inverse_psf_datacube_packed()
 
-    imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
-    data = data/imgmax
+    #imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
+    #data = data/imgmax
     #print(sarea.shape, data.shape, appmask.shape)
     data = (data*appmask[np.newaxis, np.newaxis, :, :]).sum(axis=(2, 3))*sarea
     if fold_energy:

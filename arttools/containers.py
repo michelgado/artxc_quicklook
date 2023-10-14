@@ -42,9 +42,6 @@ class Urddata(object):
     def concatenate(cls, urddlist):
         if np.unique([d.urdn for d in urddlist]).size != 1:
             raise ValueError("can't mix data from different URDNs, since they have different calibrations")
-        #print('filters', [d.filters for d in urddlist])
-        print("exposure", sum([d.filters["TIME"].length for d in urddlist]))
-        print("crossed exposure", reduce(lambda a, b: a | b, [d.filters["TIME"] for d in urddlist]).length)
         cfilter = reduce(lambda a, b: a | b, [d.filters for d in urddlist])
 
         cfilter = urddlist[0].filters
@@ -58,8 +55,6 @@ class Urddata(object):
         """
         import pickle
         pickle.dump([cfilter, [d.filters for d in urddlist]], open("/srg/a1/work/andrey/ART-XC/lp20/filttest.pkl","wb"))
-        print("tot filter", cfilter)
-        print("volume", [d.filters.volume for d in urddlist], sum([d.filters.volume for d in urddlist]), cfilter.volume - sum([d.filters.volume for d in urddlist]))
         """
         """
         if abs(cfilter.volume - sum([d.filters.volume for d in urddlist])) > 1e-1:
@@ -84,9 +79,7 @@ def read_urdfiles(urdflist, filterslist={}):
         urdhk[udata.urdn] = urdhk.get(udata.urdn, []) + [np.copy(ffile["HK"].data),]
         gti = Intervals([]) if udata.urdn not in urddata else reduce(lambda a, b: a | b, [f.filters["TIME"] for f in urddata[udata.urdn]])
         udata = udata.apply_filters(IndependentFilters({"TIME": ~gti}))
-        #print("filter", udata.filters["TIME"])
         udata = udata.apply_filters(filterslist.get(udata.urdn, IndependentFilters({})))
-        #print("filter", udata.filters["TIME"])
         urddata[udata.urdn] = urddata.get(udata.urdn, []) + [udata,]
 
     for urdn in urddata:

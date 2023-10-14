@@ -154,7 +154,6 @@ def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNU
     gti = reduce(lambda a, b: a | b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
     if gti.length == 0:
         return te, np.zeros(te.size - 1)
-    #print("gti exposure", gti.exposure)
     tel, gaps, locgti = make_small_steps_quats(attdata, gti=gti, tedges=te)
     tc = (tel[1:] + tel[:-1])[gaps]/2.
     qval = attdata(tc)
@@ -176,7 +175,6 @@ def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNU
         np.add.at(dtn, idx[mloc], vval[mloc]*dtu[mloc])
     if not illum_filters is None:
         dtillum = illum_filters.make_exposures(direction, te, attdata, urdfilters, urdweights=urdweights, dtcorr=dtcorr, app=app, cspec=cspec)
-        #print("pure vignetted exposure %.1e, illumination cutout %.1e" % (dtn.sum(), dtillum.sum()))
         dtn = dtn - dtillum
     return te, dtn
 

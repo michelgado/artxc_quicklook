@@ -145,21 +145,27 @@ void rmul(double * mat, double *vec, double *out)
         out[2] = mat[2]*vec[0] + mat[5]*vec[1] + mat[8]*vec[2];
 };
 
+
 double * psfvalfromptr(double * psfdata, npy_intp * dims, int eidx, int k, int xi, int yi)
 {
         //printf("check didx %d %.2e\n", ((dims[1]*eidx + k)*dims[2] + xi)*dims[3] + yi, *( psfdata + ((dims[1]*eidx + k)*dims[2] + xi)*dims[3] + yi));
         return psfdata + ((dims[1]*eidx + k)*dims[2] + xi)*dims[3] + yi;
 };
 
+
 static PyObject * solve_for_locations(PyObject *self, PyObject *args)
 {
         PyArrayObject *i, *j, *eidx, *vec, *rmat, *smat, *pk, *emap;
         double xs, ys, dx, dy;
+        double dxd2, dyd2;
         int xsize, ysize, loc, k; 
 
         if (!PyArg_ParseTuple(args, "OOOOOOOOdidi", &i, &j, &eidx, &rmat, &pk, &vec, &emap, &smat, &dx, &xsize, &dy, &ysize)) return NULL;
         xs = -dx*xsize/2.;
         ys = -dy*ysize/2.;
+        dxd2 = dx/2.;
+        dyd2 = dx/2.;
+
 
         //printf("dims %d %f %f %d %f %f %d\n" , i->dimensions[0], dx/2.*((double)xsize + 1.), dx, xsize, xs, ys, ysize);
         npy_intp snew = {vec->dimensions[0]};
@@ -171,6 +177,7 @@ static PyObject * solve_for_locations(PyObject *self, PyObject *args)
 
         Py_BEGIN_ALLOW_THREADS;
 
+        //double inpixdx, inpixdy;
         double * cmapd = (double*) cmap->data;
         double * pmapd = (double*) pmap->data;
         double * smatd = (double*) smat->data;
@@ -184,7 +191,7 @@ static PyObject * solve_for_locations(PyObject *self, PyObject *args)
         double * invec;
         long * eidxd = (long*) eidx->data;
 
-        double pval, eloc, r0; 
+        double pval, eloc, r0, p2, p3, l; 
         int idx1d, idx2d; 
 
 
@@ -199,14 +206,47 @@ static PyObject * solve_for_locations(PyObject *self, PyObject *args)
                         rmul((double*) rmat->data + ctr*9, invec, lvec);
                         inpix_vec_to_inpix_coord(lvec, iptr + ctr, jptr + ctr, &x, &y);
                         //printf("final vec %f %f\n", lvec[1], lvec[2]);
-                        if ((x > xs) && (x < -xs))
+                        if ((x > xs + dxd2) && (x < -xs - dxd2))
                         {
-                                if ((y > ys) && (y < -ys))
+                                if ((y > ys + dyd2) && (y < -ys - dyd2))
                                 {
                                         k = unpack_pix_index( * (iptr + ctr),  * (jptr + ctr));
                                         idx1d = (int)((x - xs)/dx);
                                         idx2d = (int)((y - ys)/dy);
                                         pval = * psfvalfromptr(smatd, smat->dimensions, k, * (eidxd + ctr), idx1d, idx2d); 
+
+                                        //naive interpolation block
+                                        //-------------------------------------------------------------------------------------------------------
+                                        inpixdx = (x - xs)/dx - idx1d;
+                                        inpixdy = (y - ys)/dy - idx2d;
+                                        if (inpixdx > 0.5)
+                                        {
+                                                p2 = * psfvalfromptr(smatd, smat->dimensions, k, * (eidxd + ctr), idx1d + 1, idx2d);
+                                                inpixdx = inpixdx - 0.5;
+                                                if (inpixdy > 0.5)
+                                                {
+                                                        l = inpixdy + inpixdx - 0.5;
+                                                        p3 = * psfvalfromptr(smatd, smat->dimensions, k, * (eidxd + ctr), idx1d, idx2d + 1);
+                                                }else{
+                                                        l = inpixdx + (0.5 - inpixdy);
+                                                        p3 = * psfvalfromptr(smatd, smat->dimensions, k, * (eidxd + ctr), idx1d, idx2d - 1);
+                                                }
+                                        }else{
+                                                p2 = * psfvalfromptr(smatd, smat->dimensions, k, * (eidxd + ctr), idx1d - 1, idx2d);
+                                                inpixdx = 0.5 - inpixdx;
+                                                if (inpixdy > 0.5)
+                                                {
+                                                        l = inpixdy + inpixdx - 0.5;
+                                                        p3 = * psfvalfromptr(smatd, smat->dimensions, k, * (eidxd + ctr), idx1d, idx2d + 1);
+                                                }else{
+                                                        l = inpixdx + (0.5 - inpixdy);
+                                                        p3 = * psfvalfromptr(smatd, smat->dimensions, k, * (eidxd + ctr), idx1d, idx2d - 1);
+                                                }
+                                        }
+                                        pval = pval*(1. - l) + p2*(l - x) + p3*x;
+                                        // interpolation up to here
+                                        //-------------------------------------------------------------------------------------------------------
+
                                         pval = pval * (*(pkd + ctr));
                                         if (pval > 1e-10)
                                         {
@@ -224,13 +264,13 @@ static PyObject * solve_for_locations(PyObject *self, PyObject *args)
                         eloc = (double) *((double*) emap->data + loc);
                         pval = get_phc_solution_pkr((double) msum, eloc, bw, msum);
                         *(cmapd + loc) = pval*eloc; 
-                        lkl = 1.;
+                        lkl = 0.;
                         for (ctr=0; ctr < msum; ctr ++)
                         {
-                                lkl = lkl*(pval*bw[ctr] + 1.);
+                                lkl = lkl + log(pval*bw[ctr] + 1.);
                         }
                         //printf("lkl %f %f\n", lkl, log(lkl));
-                        *(pmapd + loc) = log(lkl); //get_lkl_pkr(pval, bw, msum);
+                        *(pmapd + loc) = lkl; //log(lkl); //get_lkl_pkr(pval, bw, msum);
                         //printf("photons %d %d %f %f %f %f\n", loc, msum, pval, eloc, get_lkl_pkr(pval, bw, msum), *(pmapd + loc));
                 }else{
                         *(cmapd + loc) = 0.;

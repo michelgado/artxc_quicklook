@@ -28,9 +28,28 @@ class GTI(Intervals):
     """
 
     @classmethod
-    def from_hdu(cls, gtihdu):
-        arr = np.array([gtihdu.data["START"], gtihdu.data["STOP"]]).T
-        return cls(arr)
+    def from_hdu(cls, gtihdu, photpackages=True):
+        arr = Table(gtihdu.data).as_array()
+        if "TSTART" in arr.dtype.names:
+            gti = cls(np.array([gtihdu.data["TSTART"], gtihdu.data["TSTOP"]]).T)
+        if "START" in arr.dtype.names:
+            gti = cls(np.array([gtihdu.data["START"], gtihdu.data["STOP"]]).T)
+
+        if photpackages:
+            """
+            photpackages are data structures provided by the ART-XC detectors, each packages usually contains 83 photons,
+            we assume, that there is now event loss between the packages
+            threfore, we are trying to fill the gaps in GTI packages by extending each of them by 5\\tau (where \\tau - is typical photon awaiting time
+            for a typical detector count rate (10 cts/s) this would left ~ 170 unclosed gaps per year, i.e. one unclosed gap each two days.
+            """
+            if "EVENTS" in arr.dtype.names:
+                dts = np.diff(gti.arr, axis=1).ravel()/arr["EVENTS"]
+            else:
+                dts = np.diff(gti.arr, axis=1).ravel()/83.
+            gnew = gti + np.array([-7.*dts, 7.*dts]).T
+            idx = np.searchsorted(gti.arr[:, 1], gnew.arr.mean(axis=1))
+            gti = gnew + np.array([6*dts[idx], -6.*dts[idx]]).T
+        return gti
 
     @classmethod
     def from_tedges(cls, ts):
@@ -103,8 +122,10 @@ def get_gti(ffile, gtiextname=None, excludebki=True, merge_interval_dt=None, use
     else:
         gti = tGTI
         for hdu in ffile:
-            if hdu.name in ["GTI", "STD_GTI", "KVEA_GTI"]:
+            if hdu.name in ["GTI", "KVEA", "STD_GTI"]:
                 gti = gti & GTI.from_hdu(hdu)
+                break
+
 
     if not merge_interval_dt is None:
         gti.merge_close_intervals(0.5)
