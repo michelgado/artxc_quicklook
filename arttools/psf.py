@@ -176,6 +176,16 @@ def naive_bispline_interpolation_specweight(rawx, rawy, vec, data, urdn=None, cs
     return mask, s
 
 
+def repack_for_fast_psf_cases(data):
+    """
+    here I will assume that PSF contains 121x121 arrays, with 5\arcsec resolutions, which translates
+    in 9 PSF pixel equal to one detector pixel
+    Then I can produce fast access psf for 9x9 fields with pixel, which allso will have
+    """
+    return None
+
+
+
 def offset_to_psfcoord(i, j, xo, yo, energy=None):
     iifun = get_ipsf_interpolation_func()
     xi, yi = np.searchsorted(iifun.grid[0], xo), np.searchsorted(iifun.grid[1], yo)
@@ -221,6 +231,7 @@ ayutee = np.array([4., 6., 8., 10., 12., 16., 20., 24., 30.])
 
 def get_ipsf_energy_index(urddata):
     return np.searchsorted(ayutee, urddata['ENERGY']) - 1
+
 
 def unpack_inverse_psf_ayut(i, j, e=None):
     """
@@ -278,10 +289,7 @@ def unpack_inverse_psf_datacube_specweight_ayut(imgfilter, cspec, app=None):
         data = data*psfmask[np.newaxis, np.newaxis, :, :]
 
     data = np.sum(data*w[np.newaxis, :, np.newaxis, np.newaxis], axis=1)
-    #imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
-    #data = data/imgmax #(d
     return data
-
 
 
 def unpack_inverse_psf_specweighted_ayut(imgfilter, cspec=None, app=None):
@@ -345,13 +353,19 @@ def photbkg_pix_coeff(urdn, imgfilter, cspec=None):
     return bkgprofile
 
 
-def get_ipsf_interpolation_func(app=6.*60):
+def get_ipsf_interpolation_func(app=1000.):
     """
     provides with new instance of ReugularInterpolatorGrid with grid (x, y coordinates) set to the resolution of IPSF crrently stores in caldb
     """
     ipsf = get_ayut_inversed_psf_data_packed()
-    xo = ipsf["offset"].data["x_offset"] #*0.9874317205607761 #*1.0127289656 #*1.0211676541662125
-    yo = ipsf["offset"].data["y_offset"] #*0.9874317205607761 #*1.0127289656 #1.0211676541662125
+
+    ic = ipsf["offset"].data.size//2
+    offset = vec_to_offset(np.array([cos(pi/180.*app/3600.), sin(pi/180.*app/3600.), 0.]))[0]
+    dx = min(np.searchsorted(ipsf["offset"].data["x_offset"], offset) - ic, ic)
+    print("offset", offset, np.searchsorted(ipsf["offset"].data["x_offset"], offset), dx)
+
+    xo = ipsf["offset"].data["x_offset"][ic - dx: ic + dx + 1] #*0.9874317205607761 #*1.0127289656 #*1.0211676541662125
+    yo = ipsf["offset"].data["y_offset"][ic - dx: ic + dx + 1] #*0.9874317205607761 #*1.0127289656 #1.0211676541662125
     #xo = xo[(xo > - app) & (xo < app)]
     return RegularGridInterpolator((xo, yo), np.empty((xo.size, yo.size), np.double), bounds_error=False, fill_value=0.)
 

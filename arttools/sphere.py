@@ -3,6 +3,7 @@ from scipy.spatial.transform import Rotation, Slerp
 from math import sin, cos, pi, sqrt, acos, asin
 from .vector import vec_to_pol, normalize
 from functools import lru_cache, reduce
+#from concurrent.feature
 
 
 """
@@ -122,6 +123,22 @@ def get_outof_trinagle(vec1, vec2, vec3, vecs):
     #return  np.any([s1*s2 < 0, s1*s3 < 0, s2*s3 < 0], axis=0)
     return np.all([s1 > 0, s2 > 0, s3 > 0], axis=0)
 
+
+
+def dropinhull(vecs, maxit=100):
+    cvec = np.sum(vecs, axis=0)
+    cvec = cevc/sqrt(np.sum(cvec**2.))
+    da = np.sum(cvec*vecs, axis=1)
+    idx = np.argsort(da)
+    v1, v2, v3 = vecs[idx[:3]]
+    v1, v2, v3 = orient_triangle(v1, v2, v3)
+    mask = sphere.get_outof_trinagle(v1, v2, v3, vec)
+    mask[idx[:3]] = True
+    vecs = vecs[mask]
+
+
+
+
 class ConvexHullonSphere(object):
     """
     class to define convex hull on the sphere surface
@@ -137,6 +154,7 @@ class ConvexHullonSphere(object):
         #vecs = np.unique(vecs, axis=0)
 
         cvec = normalize(vecs.sum(axis=0))
+
         idx1 = get_most_distant_idx(cvec, vecs)
         idx2 = get_most_distant_idx(vecs[idx1], vecs)
         v1, v2 = vecs[idx1], vecs[idx2]
@@ -174,6 +192,71 @@ class ConvexHullonSphere(object):
             self.parent = self
         else:
             self.parent = parent
+
+    @staticmethod
+    def create_chull1(vecs):
+        cvec = normalize(vecs.sum(axis=0))
+
+        idx1 = get_most_distant_idx(cvec, vecs)
+        idx2 = get_most_distant_idx(vecs[idx1], vecs)
+        v1, v2 = vecs[idx1], vecs[idx2]
+        mask = np.ones(vecs.shape[0], bool)
+        mask[[idx1, idx2]] = False
+        vecs = vecs[mask]
+        ovecs = [v2, v1]
+        m = np.sum(vecs*np.cross(v1, v2), axis=1) > 0.
+        if np.any(m):
+            ovecs = get_all_outer(ovecs, vecs[m])
+        ovecs.append(ovecs.pop(0))
+        #ovecs[0], ovecs[1], ovecs[-1] = ovecs[-1], ovecs[0], ovecs[0]
+        m = np.sum(vecs*np.cross(v1, v2), axis=1) < 0.
+        if np.any(m):
+            ovecs = get_all_outer(ovecs, vecs[m])
+
+        ovecs = np.array(ovecs)
+        vnew = [ovecs[0]]
+        i = 0
+        while True:
+            if ovecs.size == 0:
+                break
+            ovecs = ovecs[1:]
+            ovecs = ovecs[1. - np.sum(ovecs*vnew[-1], axis=1) > 1e-15]
+            if ovecs.size > 0:
+                vnew.append(ovecs[0])
+        ovecs = np.array(vnew)
+        return ovecs
+
+    @staticmethod
+    def create_chull2(vecs):
+        cm = np.sum(vecs, axis=0)
+        da = np.sum(cm*vecs, axis=1)
+        mfidx = np.argmin(da)
+        mf = vecs[mfidx]
+        vort1 = normalize(np.cross(cm, mf))
+        vort2 = normalize(cm - mf * sum(mf * cm))
+        angle = np.arctan2(np.sum(vecs*vort2, axis=1), np.sum(vecs*vort1, axis=1))
+        angle[mfidx] = angle[mfidx - 1]/2. + angle[mfidx - 2]/2. # random not max and not min value
+        idx = np.argsort(angle)
+        verts = [vecs[idx[0]], mf, vecs[idx[-1]],]
+        mask = ~get_outof_trinagle(vecs[idx[0]], mf, vecs[idx[-1]], vecs)
+        mask[[mfidx, idx[0], idx[-1]]] = False
+        vecs = vecs[mask]
+        while True:
+            mf = verts[-1]
+            vort1 = normalize(np.cross(cm, mf))
+            vort2 = normalize(cm - mf * sum(mf * cm))
+            angle = np.arctan2(np.sum(vecs*vort2, axis=1), np.sum(vecs*vort1, axis=1))
+            idx = np.argmax(angle)
+            verts.append(vecs[idx])
+            mask = ~get_outof_trinagle(verts[0], verts[-2], verts[-1], vecs)
+            mask[idx] = False
+            vecs = vecs[mask]
+            if vecs.size == 0:
+                break
+        return np.array(verts)
+
+
+
 
     def all_hairs(self, res=None):
         if res is None:
@@ -250,6 +333,23 @@ class ConvexHullonSphere(object):
         return self
 
 
+    def simplify2(self, da=1e-5):
+        print("start with", self.vertices.shape[0])
+        orts = self.orts
+        daa = cos(da)
+        das = np.sum(self.vertices*np.roll(self.vertices, 1, axis=0), axis=1)
+        if np.max(das) > daa:
+            idxd = np.argmax(das)
+            mask = das > daa
+            mnew = np.ones(mask.size, bool)
+            mnew[idxd%2::2] = ~mask[idxd%2::2]
+            print("removed vertices", (~mnew).sum())
+            orts = orts[mnew]
+            #orts = np.delete(orts, idxd, axis=0)
+            return self.__class__(normalize(np.cross(orts, np.roll(orts, 1, axis=0)))).simplify2(da)
+        else:
+            return self
+
 
 
     @property
@@ -287,7 +387,7 @@ class ConvexHullonSphere(object):
     @lru_cache(1)
     def expand(self, dtheta):
 
-        return self.__class__(self.expand5(dtheta))
+        return self.expand6(dtheta) #self.__class__(self.expand5(dtheta))
         #return self.expand5(dtheta)
 
     def expand1(self, dtheta):
@@ -374,6 +474,17 @@ class ConvexHullonSphere(object):
         vpro = normalize(self.vertices + np.roll(self.vertices, -1, axis=0))
         neworts = orts*np.cos(dtheta)[:, np.newaxis] - vpro*np.sin(dtheta)[:, np.newaxis]
         cm = self.get_center_of_mass()
+        """
+        if two orts does not produce convex edge, replace with single ort
+        """
+        oprod = np.sum(neworts*np.roll(neworts, 1, axis=0), axis=1)
+        print(oprod)
+        oprod = oprod > 0.
+        mremove = np.all(np.array([np.roll(oprod, 1, axis=0), oprod, np.roll(oprod, -1, axis=0)]).T == [False, True, False], axis=1)
+        print(mremove)
+
+
+
         while True:
             """
             check is the side, produced by particular ort (orthogonal to it) is consumed by the neighbouring orts, if it does, remove it
@@ -386,6 +497,41 @@ class ConvexHullonSphere(object):
         newverts = normalize(np.cross(neworts, np.roll(neworts, 1, axis=0)))
         return newverts
         #return self.__class__(newverts)
+
+    def expand6(self, dtheta):
+        angle = np.sum(self.orts * np.roll(self.orts, 1, axis=0), axis=1)
+        """
+        sharp vertices require additional ort to be added
+        blunt vertices may disapear due to expansion
+        """
+        orts = normalize(np.cross(self.vertices, np.roll(self.vertices, -1, axis=0))) # np.cross(self.vertices, np.roll(self.vertices, 1, axis=0)))
+        #orts = normalize(np.cross(np.roll(self.vertices, -1, axis=0), self.vertices)) # np.cross(self.vertices, np.roll(self.vertices, 1, axis=0)))
+        da = np.sum(self.vertices*np.roll(self.vertices, -1, axis=0), axis=1) # cos 2\alpha
+        dthetai = dtheta/np.sqrt((da + 1.)/2.)
+        vpro = normalize(self.vertices + np.roll(self.vertices, -1, axis=0))
+        neworts = orts*np.cos(dthetai)[:, np.newaxis] - vpro*np.sin(dthetai)[:, np.newaxis]
+        newangle = np.sum(neworts * np.roll(neworts, 1, axis=0), axis=1)
+        newverts = normalize(np.cross(neworts, np.roll(neworts, 1, axis=0)))
+        mask = np.sum(newverts*self.vertices, axis=1) > 0 # for very blunt angles extension may swap vertices to the other side of the sphere
+
+        a1 = normalize(np.cross(self.vertices, orts) + np.cross(np.roll(orts, 1, axis=0), self.vertices))
+        #print(a1.shape, dtheta, mask.sum())
+        aorts = -self.vertices*sin(dtheta) + a1*cos(dtheta)
+        idx = np.cumsum((angle < 0) + 1) - 1
+        ot = np.empty((idx[-1] + 1, 3), float)
+        ot[idx] = neworts
+        mt = np.ones(ot.shape[0], bool)
+        mt[idx] = False
+        ot[mt, :] = aorts[angle < 0]
+        #print(ot.shape, mask.sum(), mask.size, mt.sum())
+
+        vnew = normalize(np.cross(ot, np.roll(ot, 1, axis=0)))
+        mnew = np.ones(vnew.shape[0], bool)
+        mnew[idx] = mask
+
+        return self.__class__(vnew[mnew])
+
+
 
 
     @property
@@ -690,6 +836,31 @@ class ConvexHullonSphere(object):
                     ch.split_on_equal_segments(sarea)
                 """
 
+    def split_on_roughly_rectangular_segments(self, area, maxside=pi):
+        if len(self.childs) > 1:
+            for ch in self.childs:
+                ch.split_on_roughly_rectangular_segments(area)
+        else:
+            da = np.sum(self.vertices*np.roll(self.vertices, 1, axis=0), axis=1)
+            if self.area > area*1.5 or acos(da.min()) > maxside:
+                if False: #self.vertices.shape[0] == 3:
+                    split_triangle_chull(self)
+                else:
+                    idx = np.argmin(da)
+                    cm = self.get_center_of_mass()
+                    newvert = normalize(self.vertices[idx] + np.roll(self.vertices, 1, axis=0)[idx]) # center of the longest side
+                    newort = np.cross(cm, newvert)
+                    m = np.sum(self.vertices*newort, axis=1) > 0
+                    print("check m shape", m, m.sum(), self.vertices.shape)
+                    idx2 = np.where(m & ~np.roll(m, 1))[0]
+                    newvert2 = normalize(self.vertices[idx2] + np.roll(self.vertices, 1, axis=0)[idx2]) # center of the longest side
+                    chnew1 = self.__class__(np.concatenate([newvert.reshape((-1, 3)), self.vertices[~m], newvert2.reshape((-1, 3))], axis=0), self) #np.array([vnew,] + list(np.roll(self.vertices, -idx, axis=0)[:istart])), self)
+                    chnew2 = self.__class__(np.concatenate([newvert2.reshape((-1, 3)), self.vertices[m], newvert.reshape((-1, 3))], axis=0), self) #np.array([vnew,] + list(np.roll(self.vertices, -idx, axis=0)[:istart])), self)
+                    #chnew2 = self.__class__(np.array(list(np.roll(self.vertices, -idx, axis=0)[istart -1:]) + [vnew,]), self)
+                    self.childs = [chnew1, chnew2]
+                for ch in self.childs:
+                    ch.split_on_roughly_rectangular_segments(area, maxside)
+
 
 def split_triangle(v):
     #da = np.sum(np.roll(v, 1, axis=0)*np.roll(v, 2, axis=0), axis=1)
@@ -830,6 +1001,28 @@ class FullSphere(ConvexHullonSphere):
 
     def __and__(self, other):
         return ConvexHullonSphere(other.vertices)
+
+class SphereC4(ConvexHullonSphere):
+    def __init__(self):
+        self.parent = [self,]
+        self.vertices = np.empty((0, 3), float)
+        r = normalize(np.array([[1, 1, 1], [1, 1, -1], [1, -1, -1], [1, -1, 1]]))
+        self.childs = [ConvexHullonSphere(np.roll(r, i, axis=0)) for i in range(3)]
+        r = r*[-1, 1, 1]
+        self.childs += [ConvexHullonSphere(np.roll(r, i, axis=0)) for i in range(3)]
+
+    @property
+    def area(self):
+        return 4.*pi*(180/pi)**2.
+
+    def check_inside_polygon(self, vecs):
+        return np.ones(vecs.shape[0], bool)
+
+    def __and__(self, other):
+        return ChullGTI(other.vertices)
+
+
+
 
 SPHERE = FullSphere()
 

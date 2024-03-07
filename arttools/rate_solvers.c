@@ -288,7 +288,8 @@ double get_phc_solution_pkr(double r, double e, double *pk, int size)
         {
                 rnew = lkl_rate_condition_pkr(r, pk, size)*r/e;
                 //printf("rnew %d %f\n", i, rnew*e);
-                if ((fabs(rnew - r) < 1e-7) | (rnew*e < 0.1)) break;
+                if ((fabs(rnew - r) < 1e-7) | (rnew*e < 0.001)) break;
+                //if ((fabs(rnew - r) < 1e-7) | (rnew*e < 1.)) break;
                 r = rnew;
         };
         /*printf("it counter %d\n", i);*/

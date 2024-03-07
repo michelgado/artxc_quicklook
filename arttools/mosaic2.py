@@ -292,17 +292,20 @@ class WCSSky(SkyInterpolator):
         return self.wcs
 
     @DistributedObj.for_each_argument
-    def convolve_with_core(self, qvals, scales, core, cache=False):
+    def convolve_with_core(self, qvals, scales, core, cache=False, subres=1):
         #tmpimg = np.zeros((self.img.shape), float)
         radec = np.rad2deg(vec_to_pol(qvals.apply([1, 0, 0])))
-        #xy = (self.locwcs.all_world2pix(radec.T, 0).T[:, np.newaxis, :] + self.subres[:, :, np.newaxis] + 0.5).astype(int).reshape((2, -1))
-        xy = (self.locwcs.all_world2pix(radec.T, 0).T[:, np.newaxis, :] + 0.5).astype(int).reshape((2, -1))
+        #xy = (self.locwcs.all_world2pix(radec.T, 0).T[:, np.newaxis, :] + 0.5).astype(int).reshape((2, -1))
+        xy = (self.locwcs.all_world2pix(radec.T, 0).T + 0.5).astype(int)
         il, ih, jl, jh = xy[1].min(), xy[1].max(), xy[0].min(), xy[0].max()
         il, ih = max(il - core.shape[0]//2, 0), min(ih + core.shape[0]//2 + 1, self.img.shape[0])
         jl, jh = max(jl - core.shape[1]//2, 0), min(jh + core.shape[1]//2 + 1, self.img.shape[1])
         tmpimg = np.zeros((ih - il, jh - jl), float)
+        mask = np.logical_and.reduce([xy[1] >= il, xy[0] > jl, xy[1] < tmpimg.shape[0] + il, xy[0] < tmpimg.shape[1] + jl])
         #np.add.at(tmpimg, (xy[1] - il, xy[0] - jl), np.tile(scales/self.subres.size*2, self.subres.size//2))
-        np.add.at(tmpimg, (xy[1] - il, xy[0] - jl), scales)
+        np.add.at(tmpimg, (xy[1, mask] - il, xy[0, mask] - jl), scales[mask])
+
+
         self.img[il:ih, jl:jh] += convolve(tmpimg, core, mode="same")
 
     def fft_convolve(self, qvals, scales):
@@ -316,13 +319,13 @@ class WCSSky(SkyInterpolator):
     def fft_convolve_multiple(self, data, total=np.inf, subres=1):
         locwcs = WCS(self.locwcs.to_header())
         oldshape = np.copy(self.shape)
-        if subres > 1:
-            subres = subres//2*2 + 1
+        if int(subres) > 1:
+            subres = int(subres) #//2*2 + 1
             lwcs = WCS(locwcs.to_header())
             lwcs.wcs.cdelt = locwcs.wcs.cdelt/subres
-            lwcs.wcs.crpix = [locwcs.wcs.crpix[0]*subres + subres//2, locwcs.wcs.crpix[1]*subres + subres//2]
+            lwcs.wcs.crpix = [locwcs.wcs.crpix[0]*subres, locwcs.wcs.crpix[1]*subres]
             lwcs = WCS(lwcs.to_header())
-            shape = [(0, int(locwcs.wcs.crpix[1]*2 + 1)*subres), (0, int(locwcs.wcs.crpix[0]*2 + 1)*subres)]
+            shape = [(self.shape[0][0]*subres, self.shape[0][1]*subres), (self.shape[1][0]*subres, self.shape[1][1]*subres)]
             self.__init__(lwcs, self.vmap, shape=shape, mpnum=self._pool._processes)
 
 
@@ -566,7 +569,7 @@ class SkyImage(DistributedObj):
 
     @DistributedObj.for_each_argument
     def convolve_with_core(self, qvals, scales, core, cache=False):
-        tmpimg = np.zeros((self.img.shape), float)
+        #tmpimg = np.zeros((self.img.shape), float)
         radec = np.rad2deg(vec_to_pol(qvals.apply([1, 0, 0])))
         """
         xy = np.copy(self.locwcs.all_world2pix(radec.T, 0)).T
@@ -574,22 +577,27 @@ class SkyImage(DistributedObj):
         xy = (xy[:, np.newaxis, :] + self.subres[:, :, np.newaxis] + 0.5).astype(int).reshape((2, -1))
         print(xy)
         """
-        xy = (self.locwcs.all_world2pix(radec.T, 0).T[:, np.newaxis, :] + self.subres[:, :, np.newaxis] + 0.5).astype(int).reshape((2, -1))
+        #xy = (self.locwcs.all_world2pix(radec.T, 0).T[:, np.newaxis, :] + self.subres[:, :, np.newaxis] + 0.5).astype(int).reshape((2, -1))
+        xy = (self.locwcs.all_world2pix(radec.T, 0).T + 0.5).astype(int)
+        mask = np.logical_and.reduce([xy[1] > -1, xy[0] > -1, xy[1] < tmpimg.shape[0], xy[0] < tmpimg.shape[1]])
+        xy, scales = xy[:, mask], scales[mask]
         il, ih, jl, jh = xy[1].min(), xy[1].max(), xy[0].min(), xy[0].max()
         il, ih = max(il - core.shape[0]//2, 0), min(ih + core.shape[0]//2 + 1, self.img.shape[0])
         jl, jh = max(jl - core.shape[1]//2, 0), min(jh + core.shape[1]//2 + 1, self.img.shape[1])
         tmpimg = np.zeros((ih - il, jh - jl), float)
+        xl, yl = xy[1] - il, xy[0] - jl
         #np.add.at(tmpimg, (xy[1], xy[0]), np.repeat(scales/self.subres.size*2, self.subres.size//2))
         #np.add.at(tmpimg, (xy[1], xy[0]), scales)
-        np.add.at(tmpimg, (xy[1] - il, xy[0] - jl), np.tile(scales/self.subres.size*2, self.subres.size//2))
+        np.add.at(tmpimg, (xl, yl), scales) # np.tile(scales/self.subres.size*2, self.subres.size//2))
+        #np.add.at(tmpimg, (xy[1] - il, xy[0] - jl), np.tile(scales/self.subres.size*2, self.subres.size//2))
         #self.img += convolve(tmpimg, core, mode="same")
         self.img[il:ih, jl:jh] += convolve(tmpimg, core, mode="same")
 
     def fft_convolve(self, qvals, scales):
         self.clean_image()
         rolls = wcs_roll(self.locwcs, qvals)
-        urolls, uiidx = np.unique((rolls*180./pi*2).astype(int), return_inverse=True)
-        cores = self.cores_for_rolls((urolls + 0.5)/360.*pi)
+        urolls, uiidx = np.unique((rolls*180./pi*5).astype(int), return_inverse=True)
+        cores = self.cores_for_rolls((urolls + 0.5)/180.*pi/5.)
         #return [(qvals[k == uiidx], scales[k == uiidx], core) for k, core in enumerate(cores)]
         list(self.convolve_with_core(((qvals[k == uiidx], scales[k == uiidx], core) for k, core in enumerate(cores))))
         self.accumulate_img()

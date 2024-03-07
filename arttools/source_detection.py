@@ -11,7 +11,7 @@ from .vector import normalize, pol_to_vec, vec_to_pol
 from .expmap import make_exposures, make_expmap_for_wcs
 from .mosaic2 import WCSSky, get_source_photon_probability, get_zerosource_photstat
 from .orientation import get_events_quats, get_photons_vectors
-from .psf_functions import solve_for_locations
+from .psf_functions import solve_for_locations, optimal_filter
 from scipy.spatial.transform import Rotation
 import tqdm
 
@@ -128,7 +128,7 @@ def make_detmap(locwcs, emap, tasks, sky=None, mpnum=20, maxit=101, ctot=None, u
     sky.rmap_convolve_multicore(tasks, total=len(tasks))
     return ctot, np.copy(sky.img)
 
-def create_neighboring_blocks(locwcs, emap, i, j, qtot, pk, ee):
+def create_neighboring_blocks(locwcs, emap, i, j, qtot, pk, ee, rmap=None):
     vmap = get_ipsf_interpolation_func()
     sizex = int(np.arctan(max(np.max(np.abs(vmap.grid[0][[0, -1]])), np.max(np.abs(vmap.grid[1][[0, -1]])))/F)*180/pi/np.min(locwcs.wcs.cdelt[1])*sqrt(2.)) + 2
     sizey = int(np.arctan(max(np.max(np.abs(vmap.grid[0][[0, -1]])), np.max(np.abs(vmap.grid[1][[0, -1]])))/F)*180/pi/np.min(locwcs.wcs.cdelt[0])*sqrt(2.)) + 2
@@ -162,7 +162,10 @@ def create_neighboring_blocks(locwcs, emap, i, j, qtot, pk, ee):
         nsl = piu[k] + ishift
         nsl = np.searchsorted(siu, nsl[np.isin(nsl, siu, assume_unique=True)], sorter=ssorter)
         idxg = np.concatenate([np.arange(sus[nl], sue[nl]) for nl in nsl])
-        return x, y, exp, i[idxg], j[idxg], ee[idxg], pk[idxg], qtot[idxg]
+        if rmap is None:
+            return x, y, exp, i[idxg], j[idxg], ee[idxg], pk[idxg], qtot[idxg]
+        else:
+            return x, y, exp, rmap[x, y], i[idxg], j[idxg], ee[idxg], pk[idxg], qtot[idxg]
 
     return pus.size, get_idxg_vals
 
@@ -225,6 +228,7 @@ def make_srccount_and_detmap(locwcs, emap, urde, attdata, bkglc, photbkgrate=lam
         rmat = qtot.as_matrix()
         vt = pol_to_vec(*np.deg2rad(locwcs.all_pix2world(np.array([y, x]).T, 0)).T)
         return x, y, solve_for_locations(i,j,eidx,rmat,pk,vt,exp,psfdata,dx,xsize,dy,ysize)
+        #return x, y, solve_for_locations(i,j,eidx,rmat,pk,vt,psfdata,dx,xsize,dy,ysize)
 
     pool = ThreadPool(mpnum)
     for x, y, (cl, pl) in tqdm.tqdm(pool.imap_unordered(worker, (feeder(i) for i in range(ntasks))), total=ntasks):
@@ -232,13 +236,40 @@ def make_srccount_and_detmap(locwcs, emap, urde, attdata, bkglc, photbkgrate=lam
         pmap[x, y] = pl
     return cmap, pmap
 
+def make_optimal_filter_solution(locwcs, emap, rmap, urde, attdata, bkglc, photbkgrate=lambda evt, att: 0., urdweights=urdcrates, cspec=None, mpnum=4):
+    i, j, qtot, prate, brate, ee = make_unipix_data(urde, attdata, bkglc, photbkgrate=photbkgrate, urdweights=urdweights, cspec=cspec)
+    cmap = np.zeros(emap.shape, float)
+    pmap = np.zeros(emap.shape, float)
+    pk = prate/brate
+
+    psfdata = get_ayut_inverse_psf_datacube_packed()
+    ntasks, feeder = create_neighboring_blocks(locwcs, emap, i, j, qtot, pk, ee, rmap=rmap)
+    iifun = get_ipsf_interpolation_func()
+    dx = iifun.grid[0][1] - iifun.grid[0][0]
+    dy = iifun.grid[1][1] - iifun.grid[1][0]
+    xsize = iifun.grid[0].size
+    ysize = iifun.grid[1].size
+
+    def worker(args):
+        x, y, exp, rates, i, j, ee, pk, qtot = args
+        eidx = np.searchsorted(ayutee, ee) - 1
+        rmat = qtot.as_matrix()
+        vt = pol_to_vec(*np.deg2rad(locwcs.all_pix2world(np.array([y, x]).T, 0)).T)
+        return x, y, optimal_filter(i,j,eidx,rmat,pk,vt,exp,rates,psfdata,dx,xsize,dy,ysize)
+        #return x, y, solve_for_locations(i,j,eidx,rmat,pk,vt,psfdata,dx,xsize,dy,ysize)
+
+    pool = ThreadPool(mpnum)
+    for x, y, cl in tqdm.tqdm(pool.imap_unordered(worker, (feeder(i) for i in range(ntasks))), total=ntasks):
+        pmap[x, y] = cl
+    return pmap
+
 def estimate_rate_for_direction_exact(vec, exposure, i, j, ee, pk, qtot):
     m, bw = naive_bispline_interpolation(i, j, qtot.apply(vec, inverse=True), ee)
     svals = bw*pk[m]
     guess = np.sum(svals/(svals*m.sum()/exposure + 1.))/exposure
     return root(lambda x: np.sum(svals/(svals*x + 1.)) - exposure, guess).x[0]
 
-def ppsolver(nphot, bw, cs, expl):
+def ppsolver(nphot, bw, cs, expl, itnum=200):
     bwc = np.copy(bw)
     mtot = cs > 0
     csc = cs[mtot]
@@ -246,12 +277,14 @@ def ppsolver(nphot, bw, cs, expl):
     nc = csc.astype(float)
     nn = np.empty(nc.size, float)
     explc = expl[mtot]
-    for _ in range(200):
+    for _ in range(itnum):
         cres = np.cumsum(1./(1. + np.repeat(explc/nc, csc)/bwc))
-        nn[1:] = np.diff(cres[css])
+        nn[1:] = np.diff(cres[css])#*np.sign(nphot[mtot][1:])
         nn[0] = cres[css[0]]
+        #print("nn0", nn[0])
         nphot[mtot] = nn
-        mnotdone = ~np.logical_or((nn <= nc) & (nn < 1.), np.abs(nn - nc) < 1e-5)
+        mnotdone = ~np.logical_or((nn <= nc) & (nn < 0.001), np.abs(nn - nc) < 1e-5)
+        #mnotdone = ~(np.abs(nn - nc) < 1e-5)
         if ~np.any(mnotdone):
             break
         mtot[mtot] = mnotdone
@@ -260,7 +293,7 @@ def ppsolver(nphot, bw, cs, expl):
         css = np.cumsum(csc) - 1
         explc = explc[mnotdone]
         nc, nn = nn[mnotdone], nc[mnotdone]
-    return
+    return nphot
 
 
 def estimate_rate_for_direction_iterate(locwcs, x, y, exposure, i, j, ee, pk, qtot, ratesolver="python"):

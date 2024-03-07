@@ -14,6 +14,7 @@ ARTDEADTIME = 770e-6 #seconds - ART-XC detector deadtime
 class ART_TIME_ERROR(ValueError):
     pass
 
+
 class GTI(Intervals):
     """
     this class provides a number of userfull function to work with consequitive ordered unintersected 1d intervals
@@ -28,12 +29,15 @@ class GTI(Intervals):
     """
 
     @classmethod
-    def from_hdu(cls, gtihdu, photpackages=True):
+    def from_hdu(cls, gtihdu, photpackages=True, timecols=None):
         arr = Table(gtihdu.data).as_array()
         if "TSTART" in arr.dtype.names:
             gti = cls(np.array([gtihdu.data["TSTART"], gtihdu.data["TSTOP"]]).T)
         if "START" in arr.dtype.names:
             gti = cls(np.array([gtihdu.data["START"], gtihdu.data["STOP"]]).T)
+        if not timecols is None:
+            gti = cls(np.array([gtihdu.data[timecols[0]], gtihdu.data[timecols[1]]]).T)
+
 
         if photpackages:
             """
@@ -113,7 +117,7 @@ def board_time_to_jyear(timeseries):
     return 2000. + (timeseries - 54005.152032)/31557600.0
 
 
-def get_gti(ffile, gtiextname=None, excludebki=True, merge_interval_dt=None, usehkgti=True):
+def get_gti(ffile, gtiextname=None, excludebki=True, merge_interval_dt=None, usehkgti=True, photpackages=True):
     if not gtiextname is None:
         try:
             gti = GTI(np.array([ffile[gtiextname].data["START"], ffile[gtiextname].data["STOP"]]).T)
@@ -123,7 +127,7 @@ def get_gti(ffile, gtiextname=None, excludebki=True, merge_interval_dt=None, use
         gti = tGTI
         for hdu in ffile:
             if hdu.name in ["GTI", "KVEA", "STD_GTI"]:
-                gti = gti & GTI.from_hdu(hdu)
+                gti = gti & GTI.from_hdu(hdu, photpackages)
                 break
 
 

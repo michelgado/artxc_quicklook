@@ -13,6 +13,18 @@ from scipy.optimize import minimize
 from scipy.spatial.transform import Rotation, Slerp
 import matplotlib.pyplot as plt
 
+def make_merc_wcs(dx, dy, rac=0., decc=0., sx=1, sy=1, alpha=0.):
+    locwcs = WCS(naxis=2)
+    locwcs.wcs.crpix = [sx, sy]
+    locwcs.wcs.crval = [rac*180./pi, decc*180./pi]
+    locwcs.wcs.cdelt = [dy, dx]
+    cdmat = np.array([[cos(alpha), -sin(alpha)], [sin(alpha), cos(alpha)]])
+    locwcs.wcs.pc = cdmat
+    locwcs.wcs.ctype = ["RA---MER", "DEC--MER"]
+    locwcs.wcs.radesys = "FK5"
+    return locwcs
+
+
 
 def make_tan_wcs(rac, decc, sizex=1, sizey=1, pixsize=10./3600., alpha=0., lonpole=None, latpole=None):
     locwcs = WCS(naxis=2)
@@ -61,6 +73,7 @@ def minarea_ver2(vecs, pixsize=20./3600., lonpole=None, latpole=None):
     cdmat = np.array([[cos(alpha), -sin(alpha)], [sin(alpha), cos(alpha)]])
     locwcs.wcs.pc = cdmat
     locwcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    #locwcs.wcs.ctype = ["RA---CYP", "DEC--CYP"]
     locwcs.wcs.radesys = "FK5"
     if not lonpole is None:
         locwcs.wcs.lonpole = lonpole
@@ -69,10 +82,12 @@ def minarea_ver2(vecs, pixsize=20./3600., lonpole=None, latpole=None):
 
     ra, dec = vec_to_pol(chull.vertices)
     x, y = locwcs.all_world2pix(np.array([ra, dec]).T*180./pi, 1).T
+    """
     sizex, sizey = int(x.max() - x.min()), int(y.max() - y.min())
     rac, decc = locwcs.all_pix2world([[(x.max() + x.min())/2., (y.max() + y.min())/2.],], 1)[0]
     locwcs.wcs.crval = [rac, decc]
     locwcs.wcs.crpix = [int(sizex//2) + 1 - int(sizex//2)%2, int(sizey//2) + 1 - int(sizey//2)%2]
+    """
     def minarea(var):
         alpha = var[0]
         cdmat = np.array([[cos(alpha), -sin(alpha)], [sin(alpha), cos(alpha)]])
@@ -90,11 +105,15 @@ def minarea_ver2(vecs, pixsize=20./3600., lonpole=None, latpole=None):
     cdmat = np.array([[cos(alpha), -sin(alpha)], [sin(alpha), cos(alpha)]])
     locwcs.wcs.pc = cdmat
     x, y = locwcs.all_world2pix(np.array([ra, dec]).T*180./pi, 1).T
-
+    locwcs.wcs.crpix = (np.array(locwcs.wcs.crpix) - [x.min(), y.min()] + 0.5).astype(int)
+    shape = (int(y.max() - y.min() + 0.5), int(x.max() - x.min() + 0.5))
+    shape = (shape[0] + 1 - shape[0]%2, shape[1] + 1 - shape[1]%2)
+    """
     sizex = max(int(x.max() - locwcs.wcs.crpix[0]), int(locwcs.wcs.crpix[0] - x.min())) #int((x.max() - x.min())//2)
     sizey = max(int(y.max() - locwcs.wcs.crpix[1]), int(locwcs.wcs.crpix[1] - y.min())) #int((y.max() - y.min())//2)
     locwcs.wcs.crpix = [sizex + 1 - sizex%2, sizey + 1 - sizey%2]
-    return locwcs
+    """
+    return locwcs, shape
 
 
 

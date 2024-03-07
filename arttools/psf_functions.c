@@ -177,7 +177,7 @@ static PyObject * solve_for_locations(PyObject *self, PyObject *args)
 
         Py_BEGIN_ALLOW_THREADS;
 
-        //double inpixdx, inpixdy;
+        double inpixdx, inpixdy;
         double * cmapd = (double*) cmap->data;
         double * pmapd = (double*) pmap->data;
         double * smatd = (double*) smat->data;
@@ -191,14 +191,13 @@ static PyObject * solve_for_locations(PyObject *self, PyObject *args)
         double * invec;
         long * eidxd = (long*) eidx->data;
 
-        double pval, eloc, r0, p2, p3, l; 
+        double pval, eloc, p2, p3, l; 
         int idx1d, idx2d; 
 
 
         for (loc=0; loc < vec->dimensions[0]; loc++)
         {
                 msum = 0;
-                r0 = 1.;
                 invec = (double*) vec->data + loc*3;
                 //printf("init vec %f %f %f\n", invec[0], invec[1], invec[2]);
                 for (ctr=0; ctr < i->dimensions[0]; ctr++)
@@ -288,11 +287,139 @@ static PyObject * solve_for_locations(PyObject *self, PyObject *args)
 }
 
 
+static PyObject * optimal_filter(PyObject *self, PyObject *args)
+{
+        PyArrayObject *i, *j, *eidx, *vec, *rmat, *smat, *pk, *emap, *rmap;
+        double xs, ys, dx, dy;
+        double dxd2, dyd2;
+        int xsize, ysize, loc, k; 
+
+        if (!PyArg_ParseTuple(args, "OOOOOOOOOdidi", &i, &j, &eidx, &rmat, &pk, &vec, &emap, &rmap, &smat, &dx, &xsize, &dy, &ysize)) return NULL;
+        xs = -dx*xsize/2.;
+        ys = -dy*ysize/2.;
+        dxd2 = dx/2.;
+        dyd2 = dx/2.;
+
+
+        //printf("dims %d %f %f %d %f %f %d\n" , i->dimensions[0], dx/2.*((double)xsize + 1.), dx, xsize, xs, ys, ysize);
+        npy_intp snew = {vec->dimensions[0]};
+        PyArrayObject * pmap = PyArray_SimpleNew(1, &snew, NPY_DOUBLE);
+
+        double * lvec = (double*)malloc(sizeof(double)*3);
+        double * bw = (double*)malloc(sizeof(double)*i->dimensions[0]);
+
+        Py_BEGIN_ALLOW_THREADS;
+
+        double inpixdx, inpixdy;
+        double * pmapd = (double*) pmap->data;
+        double * smatd = (double*) smat->data;
+        double * pkd = (double*) pk->data;
+        long * iptr = (long*)i->data;
+        long * jptr = (long*)j->data;
+
+
+        long ctr, msum=0; 
+        double x, y, lkl; 
+        double * invec;
+        long * eidxd = (long*) eidx->data;
+
+        double pval, eloc, p2, p3, l, rloc; 
+        int idx1d, idx2d; 
+
+
+        for (loc=0; loc < vec->dimensions[0]; loc++)
+        {
+                msum = 0;
+                invec = (double*) vec->data + loc*3;
+                //printf("init vec %f %f %f\n", invec[0], invec[1], invec[2]);
+                for (ctr=0; ctr < i->dimensions[0]; ctr++)
+                {
+                        rmul((double*) rmat->data + ctr*9, invec, lvec);
+                        inpix_vec_to_inpix_coord(lvec, iptr + ctr, jptr + ctr, &x, &y);
+                        //printf("final vec %f %f\n", lvec[1], lvec[2]);
+                        if ((x > xs + dxd2) && (x < -xs - dxd2))
+                        {
+                                if ((y > ys + dyd2) && (y < -ys - dyd2))
+                                {
+                                        k = unpack_pix_index( * (iptr + ctr),  * (jptr + ctr));
+                                        idx1d = (int)((x - xs)/dx);
+                                        idx2d = (int)((y - ys)/dy);
+                                        pval = * psfvalfromptr(smatd, smat->dimensions, k, * (eidxd + ctr), idx1d, idx2d); 
+
+                                        //naive interpolation block
+                                        //-------------------------------------------------------------------------------------------------------
+                                        inpixdx = (x - xs)/dx - idx1d;
+                                        inpixdy = (y - ys)/dy - idx2d;
+                                        if (inpixdx > 0.5)
+                                        {
+                                                p2 = * psfvalfromptr(smatd, smat->dimensions, k, * (eidxd + ctr), idx1d + 1, idx2d);
+                                                inpixdx = inpixdx - 0.5;
+                                                if (inpixdy > 0.5)
+                                                {
+                                                        l = inpixdy + inpixdx - 0.5;
+                                                        p3 = * psfvalfromptr(smatd, smat->dimensions, k, * (eidxd + ctr), idx1d, idx2d + 1);
+                                                }else{
+                                                        l = inpixdx + (0.5 - inpixdy);
+                                                        p3 = * psfvalfromptr(smatd, smat->dimensions, k, * (eidxd + ctr), idx1d, idx2d - 1);
+                                                }
+                                        }else{
+                                                p2 = * psfvalfromptr(smatd, smat->dimensions, k, * (eidxd + ctr), idx1d - 1, idx2d);
+                                                inpixdx = 0.5 - inpixdx;
+                                                if (inpixdy > 0.5)
+                                                {
+                                                        l = inpixdy + inpixdx - 0.5;
+                                                        p3 = * psfvalfromptr(smatd, smat->dimensions, k, * (eidxd + ctr), idx1d, idx2d + 1);
+                                                }else{
+                                                        l = inpixdx + (0.5 - inpixdy);
+                                                        p3 = * psfvalfromptr(smatd, smat->dimensions, k, * (eidxd + ctr), idx1d, idx2d - 1);
+                                                }
+                                        }
+                                        pval = pval*(1. - l) + p2*(l - x) + p3*x;
+                                        // interpolation up to here
+                                        //-------------------------------------------------------------------------------------------------------
+
+                                        pval = pval * (*(pkd + ctr));
+                                        if (pval > 1e-10)
+                                        {
+                                                bw[msum] = pval;
+                                                //printf("%d %f %f %f\n", ctr, x, y, pval);
+                                                msum += 1;
+                                        };
+ 
+                                };
+                        };
+
+                };
+                if (msum > 0)
+                {
+                        eloc = (double) *((double*) emap->data + loc);
+                        rloc = (double) *((double*) rmap->data + loc);
+                        lkl = 0.;
+                        for (ctr=0; ctr < msum; ctr ++)
+                        {
+                                lkl = lkl + log(rloc*bw[ctr] + 1.);
+                        }
+                        *(pmapd + loc) = lkl; //log(lkl); //get_lkl_pkr(pval, bw, msum);
+                }else{
+                        *(pmapd + loc) = 0.;
+                };
+        };
+
+        Py_END_ALLOW_THREADS;
+
+        free(bw);
+        free(lvec);
+
+        PyObject *res = Py_BuildValue("O", pmap);
+        return res;
+}
+
 
 static PyMethodDef PSFMethods[] = {
         {"get_pix_coord_for_urdn", get_pix_coord_for_urdn, METH_VARARGS, "get coordinates centered at provided pixel"}, 
         {"get_unipix_fast_index", get_unipix_fast_index, METH_VARARGS, "get coordinates within pixel based on its coordinates"}, 
         {"solve_for_locations", solve_for_locations, METH_VARARGS, "get coordinates within pixel based on its coordinates"}, 
+        {"optimal_filter", optimal_filter, METH_VARARGS, "get optimal filter solution for specific rate map"}, 
         {NULL, NULL, 0, NULL}
 }; 
 

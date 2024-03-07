@@ -1,7 +1,7 @@
 from .caldb import get_boresight_by_device, get_optical_axis_offset_by_device
 from .atthist import hist_orientation_for_attdata, AttWCSHist, AttHealpixHist, AttInvHist, make_small_steps_quats
 from .mosaic2 import SkyImage, WCSSky
-from .vignetting import make_vignetting_for_urdn, make_overall_vignetting
+from .vignetting import make_vignetting_for_urdn, make_overall_vignetting, get_vmap_angular_scales
 from .psf import get_ipsf_interpolation_func, unpack_inverse_psf_specweighted_ayut, rawxy_to_opaxoffset, get_pix_overall_countrate_constbkg_ayut
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from .vector import vec_to_pol, pol_to_vec
@@ -39,6 +39,43 @@ def collect(res, qout, lock):
     lock.release()
 
 
+def vmap_segment_worker(dq, vmap):
+    """
+    quaternion moves satellite coordinate system to the fk5 coordinate system
+    in sattelite coordinate system
+    if we now invert previos quaternion and apply to next one, then we get movement "along sky" in satterlite coordinate system
+    """
+    pass
+
+
+
+def patchwork_expmap(att, wcs, gti=None, urdn=None, dalpha=0.1*pi/180.):
+    """
+    """
+    patt = pack_attdata(att if urdn is None else att.for_urdn(urdn), pi/3600./180.)
+
+    te, gaps = patt.gti.make_tedges(patt.times) if gti is None else gti.make_tedges(patt.times)
+    qmain = patt(te)
+    dq = (qmain[:-1].inv()*qmain[1:])[gaps]
+    """
+    produces the attitudes segmetns, within which movement can be approximated by linear rotation
+    """
+    ralpha = np.arccos(dq.as_rotvec[:, 2]) #the angle of movement in the detector coordinate system
+    uangle, idx = np.unique((ralpha/dalpha).astype(int), return_inverse=True)
+    """
+    we can now take vignetting template rotate it to the -angle and move to the right to emulate its movement on the sky
+    """
+    if urdn is None:
+        vmap = make_overall_vignetting(imgfilters, urdweights={urdn: w*dtcc[urdn] for urdn, w in urdweights.items()}, **kwargs)
+    else:
+        vmap = make_vignetting_for_urdn(urdn, imgfilters[urdn].filters, **kwargs)
+
+    da, db = get_vmap_angular_scales(vmap)
+
+
+
+
+
 def make_mosaic_expmap_mp_executor(shape, wcs, vmap, qvals, exptime, mpnum):
     qin = Queue(100)
     qout = Queue()
@@ -67,7 +104,7 @@ def make_mosaic_expmap_mp_executor(shape, wcs, vmap, qvals, exptime, mpnum):
 
     return res[0]
 
-def make_expmap_for_attdata(sky, attdata, imgfilters, dtcorr={}, kind="direct", urdweights={}, **kwargs):
+def make_expmap_for_attdata(sky, attdata, imgfilters, dtcorr={}, kind="direct", urdweights={}, subres=1, **kwargs):
     """
     produce exposure map on the provided wcs area, with provided GTI and attitude data
 
@@ -130,7 +167,7 @@ def make_expmap_for_attdata(sky, attdata, imgfilters, dtcorr={}, kind="direct", 
         if kind == "direct":
             sky.direct_convolve(qval, exptime*urdweights.get(urdn, 1.))
         elif kind == "convolve":
-            sky.fft_convolve(qval, exptime*urdweights.get(urdn, 1.))
+            sky.fft_convolve(qval, exptime*urdweights.get(urdn, 1.)) #, subres=subres)
         print(" done!")
     return np.copy(sky.img)
 

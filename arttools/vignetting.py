@@ -91,15 +91,15 @@ class DetectorVignetting(object):
 
     def _set_app_shmask(self, app):
         if app is None:
-            self.psfmask = None
+            self.psfmask = 1.
         else:
             x, y = np.mgrid[-60:61:1, -60:61:1]
-            self.psfmask = x**2. + y**2. > app**2./25.
+            self.psfmask = x**2. + y**2. < app**2./25.
             self.app = app
 
     def add_pix(self, x, y, i, j):
         if ~self.dpix[x, y]:
-            self._img[(x - 1)*9: (x - 1)*9 + 121, (y - 1)*9: (y - 1)*9 + 121] += self.vignfun(self.iifun(i, j), self.vignscale, self.bmap[x, y])
+            self._img[(x - 1)*9: (x - 1)*9 + 121, (y - 1)*9: (y - 1)*9 + 121] += self.vignfun(self.iifun(i, j), self.vignscale, self.bmap[x, y])*self.psfmask
             self.dpix[x, y] = True
 
     @property
@@ -122,7 +122,7 @@ class DetectorVignetting(object):
 
 DEFAULVIGNIFUN = RegularGridInterpolator((np.arange(-262.5, 263, 1)/9.*DL, np.arange(-262.5, 263, 1)/9.*DL), np.zeros((526, 526)), bounds_error=False, fill_value=0.)
 
-
+@lru_cache(maxsize=7)
 def make_vignetting_for_urdn(urdn, imgfilter, cspec=None, app=None, brate=None, vfun=None, scale=None):
     """
     for provided urd number  energy or photon index provided 2d interpolation function (RegularGridInterpolator) defining the profile of the effective area depending on offset
@@ -185,6 +185,12 @@ def make_vignetting_for_urdn(urdn, imgfilter, cspec=None, app=None, brate=None, 
     dx = (np.arange(vmap.img.shape[0]) - (vmap.img.shape[0] - 1.)/2.)/9.*DL
     #imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
     return RegularGridInterpolator((dx, dx), vmap.img, bounds_error=False, fill_value=0.) #TODO for spefici masks, pixel at optical axis position can be switched off, broking normalization
+
+def get_vmap_angular_scales(vmap):
+    xc, yc = vmap.values.shape[0]//2, vmap.values.shape[1]//2
+    v = offset_to_vec(vmap.grid[0][[xc, xc - 1, xc]], vmap.grid[1][[yc, yc, yc -1]])
+    return np.arccos(np.sum(v[[0, 0]]*v[[1, 2]], axis=1))
+
 
 
 def get_blank_vignetting_interpolation_func():

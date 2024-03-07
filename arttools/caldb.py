@@ -389,11 +389,18 @@ def get_ayut_inversed_psf_data_packed():
     return ipsf
 
 @lru_cache(maxsize=1)
-def get_ayut_inverse_psf_datacube_packed(app=None):
-    ipsffile = get_ayut_inversed_psf_data_packed()
-    ipsf = np.copy(ipsffile["MATRIX"].data).astype(float)
+def get_ayut_inverse_psf_datacube_packed():
+    ipsf = get_ayut_inversed_psf_data_packed()
+    """
+    ic = ipsf["offset"].data.size//2
+    offset = vec_to_offset(np.array([cos(pi/180.*app/3600.), sin(pi/180.*app/3600.), 0.]))[0]
+    dx = min(np.searchsorted(ipsf["offset"].data["x_offset"], offset) - ic, ic)
+    """"
+    ipsf = np.copy(ipsf["MATRIX"].data).astype(float)
+    """
     if not app is None:
         ipsf = ipsf*ipsffile["APPSCALE"].data["scale"][np.searchsorted(ipsffile["APPSCALE"].data["app"], app) - 1]
+    """
     return ipsf
 
 def get_arf():

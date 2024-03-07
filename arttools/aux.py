@@ -133,6 +133,13 @@ class interp1d(i1d):
         fill_value = (left.fill_value[0], right.fill_value[-1])
         return interp1d(np.concatenate([left.x, right.x]), np.concatenate([left.y, right.y]), kind=self.kind, bounds_error=self.bounds_error & other.bounds_error, fill_value=fill_value)
 
+    def apply_gti(self, gti):
+        if gti.length == 0:
+            xx = np.array([0, 0])
+        else:
+            xx, gaps = gti.make_tedges(self.x)
+        yy = self(xx)
+        return self.__class__(xx, yy, kind=self._kind, bounds_error=self.bounds_error, fill_value=self.fill_value) #fill_value=tuple(fill_value))
 
     def _scale(self, scale):
         return self.__class__(self.x, self.y*scale, kind=self.kind, bounds_error=self.bounds_error, fill_value=tuple(np.asarray(self.fill_value)*scale))

@@ -711,8 +711,8 @@ class IndependentFilters(dict):
         """
         return cls({})
 
-    def hash(self):
-        return tuple((key, f.hash()) for key, f in self.items())
+    def __hash__(self):
+        return hash(tuple((key, f.hash()) for key, f in self.items()))
 
 
     def substitute(self, key, newfilter):

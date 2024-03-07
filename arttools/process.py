@@ -575,10 +575,10 @@ def make_img(flist, outputname, usergti=tGTI, emin=4., emax=12., make_detmap=Fal
     tgti = reduce(lambda a, b: a | b, [d.filters["TIME"] for d in urdevt.values()])
 
     pixsize = 10./3600.
-    lwcs = arttools.planwcs.make_wcs_for_attdata(attdata, gti=tgti, pixsize=pixsize)
+    lwcs, shape = arttools.planwcs.make_wcs_for_attdata(attdata, gti=tgti, pixsize=pixsize)
     print("initialized lwcs", lwcs)
 
-    bmap = arttools.background.make_bkgmap_for_wcs(lwcs, attdata, urdbkg, imgf, mpnum=30, kind="convolve") #time_corr=urddtc) #, illuminations=illum_filters)
+    bmap = np.zeros(shape, float) # arttools.background.make_bkgmap_for_wcs(lwcs, attdata, urdbkg, imgf, mpnum=30, kind="convolve") #time_corr=urddtc) #, illuminations=illum_filters)
 
     radec = np.concatenate([np.rad2deg(arttools.orientation.vec_to_pol(arttools.orientation.get_photons_vectors(d, urdn, attdata, randomize=True))).T for urdn, d in urdevt.items() if d.size > 0])
     xy = (lwcs.all_world2pix(radec, 1) - 0.5).astype(int)
@@ -587,7 +587,7 @@ def make_img(flist, outputname, usergti=tGTI, emin=4., emax=12., make_detmap=Fal
     img1 = np.zeros(bmap.shape, int)
     img1[u[:, 1], u[:, 0]] = uc
 
-    femap = arttools.expmap.make_expmap_for_wcs(lwcs, attdata, imgf, urdweights=urdcrates, kind="convolve")#, dtcorr=urddtc) #, urdweights=urdcrates) #emin=4., emax=12., phot_index=1.9)
+    femap = arttools.expmap.make_expmap_for_wcs(lwcs, attdata, imgf, shape=[(0, shape[0]), (0, shape[1])], urdweights=urdcrates, kind="convolve")#, dtcorr=urddtc) #, urdweights=urdcrates) #emin=4., emax=12., phot_index=1.9)
     if make_detmap:
         emap = femap
         """

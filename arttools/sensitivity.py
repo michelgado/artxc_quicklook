@@ -194,8 +194,8 @@ def get_sb_distribution(ax, att, filters, urdbkg, wcs=None, photbkgrate=0., urdw
     for urdn in filters:
         pgrid, photrate, partrate  = get_particle_and_photon_templates(filters[urdn], cspec=cspec)
         bkgprofile = get_background_surface_brigtnress(urdn, filters[urdn].filters, fill_value=0.)
-        bmax = max(partrate.max()*urdbkg[urdn].crate.max()*bkgprofile.max(), bmax)
-        brmin = urdbkg[urdn].crate[urdbkg[urdn].crate > 0.].min()
+        bmax = max(partrate.max()*urdbkg[urdn].y.max()*bkgprofile.max(), bmax)
+        brmin = urdbkg[urdn].y[urdbkg[urdn].y > 0.].min()
         bmin = min(bmin, partrate.min()*brmin*bkgprofile[bkgprofile > 0.].min())
         smax = max(smax, photrate.max()*urdweights.get(urdn, 1/7.))
         smin = min(smin, photrate.min()*urdweights.get(urdn, 1/7.))
@@ -204,8 +204,8 @@ def get_sb_distribution(ax, att, filters, urdbkg, wcs=None, photbkgrate=0., urdw
 
     sbin = np.linspace(0., smax*129/128.5, 129)
     bbin = np.linspace(0., bmax*128/128.5, 129)
-    sbin = np.logspace(log10(smin) - 3, log10(smax), 129)
-    bbin = np.logspace(log10(bmin), log10(bmax), 129)
+    sbin = np.logspace(log10(smin) - 4, log10(smax), 256)
+    bbin = np.logspace(log10(bmin), log10(bmax), 256)
     h = 0.
     stsum = 0.
     for urdn in filters:

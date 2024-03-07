@@ -191,7 +191,7 @@ class AttDATA(SlerpWithNaiveIndexing):
         else:
             ts, mgaps = gti.make_tedges(self.times)
             quats = self(ts)
-            res = self.__class__(ts, quats, gti=gti, **kwargs)
+            res = self.__class__(ts, quats, gti=gti, check_interpolation=False, **kwargs)
         return res
         """
         print(gti.exposure)
@@ -282,10 +282,10 @@ class AttDATA(SlerpWithNaiveIndexing):
             gti = gti & attl.circ_gti(-v, 90.*3600 - 0.1, ax=OPAX)
             if gti.exposure == 0:
                 break
-            attl = attl.apply_gti(gti, check_interpolation=False, hide_bad_interpolations=False)
+            attl = attl.apply_gti(gti) #, check_interpolation=False, hide_bad_interpolations=False)
         return gti
 
-    def get_covering_chulls(self, split_criteria = lambda x: [x.apply_gti(gti) for gti in get_observations_gtis(x, False)[0]], fov=None): # expandsize=pi/180.*26.5/60.):
+    def get_covering_chulls(self, split_criteria = lambda x: [x.apply_gti(gti) for gti in get_separate_slews_gti(x)], fov=None): # expandsize=pi/180.*26.5/60.):
         if fov is None:
             fov = raw_xy_to_vec(np.array([-12, 60, 60, -12]), np.array([-12, -12, 60, 60]))
 
@@ -306,6 +306,21 @@ class AttDATA(SlerpWithNaiveIndexing):
         #print("report: ", [(ch.area, g.exposure) for ch, g in zip(chulls, gtis)])
         return list(zip(chulls, gtis)) if len(chulls) > 0 else [[], []]
 
+
+class Att2comp(object):
+    def __init__(self, te, q1, q2, gti=None, **kwargs): #hide_bad_interpolations=True, check_interpolation=True, **kwargs):
+        self.a1 = AttDATA(te, q1, **kwargs)
+        self.a2 = AttDATA(te, q2, **kwargs)
+        self.gti = self.a1.gti & self.a2.gti
+
+    def __call__(self, times):
+        return self.a1(times)*self.a2(times)
+
+
+def get_separate_slews_gti(attdata, intpsplitside=100.):
+    slews = get_slews_gti(attdata)
+    sgti = ~(slews | (~attdata.gti).remove_short_intervals(intpsplitside))
+    return [attdata.gti & GTI(arr) for arr in sgti.arr]
 
 
 
@@ -431,7 +446,7 @@ def read_gyro_fits(gyrohdu):
     return ainit
 
 
-def read_bokz_fits(bokzhdu, perform_time_corrections=True, correct_future_jumps=True, **kwargs):
+def read_bokz_fits(bokzhdu, perform_time_corrections=True, correct_future_jumps=True, usecaldb_bti=True, **kwargs):
     """
     reads bokz quaternion from fits file hdu and returns AttDATA  container
 
@@ -459,7 +474,7 @@ def read_bokz_fits(bokzhdu, perform_time_corrections=True, correct_future_jumps=
     qbokz = earth_precession_quat(jyear).inv()*q*qbokz0*\
             get_boresight_by_device("BOKZ")
 
-    bti = GTI(get_bokz_bti())
+    bti = GTI(get_bokz_bti()) if usecaldb_bti else GTI([])
     mfutbti = GTI(get_bokz_fjump_bti())
 
     #print("return as is")
@@ -1131,6 +1146,8 @@ def get_slews_gti(attdata):
     slews = slews + [-30, 30]
     return slews
 
+
+
 def get_observations_gtis(attdata, join=True, intpsplitside=100.):
     '''
     for provided attitude (in the form of AttDATA container)
@@ -1153,13 +1170,15 @@ def get_observations_gtis(attdata, join=True, intpsplitside=100.):
     sgti = ~(slews | (~attdata.gti).remove_short_intervals(intpsplitside))
     print("sgti exposure", sgti.exposure)
     for i, arr in enumerate(sgti.arr):
-        attl = attdata.apply_gti(GTI(arr), check_interpolation=False)
+        attl = attdata.apply_gti(GTI(arr)) #, check_interpolation=False)
         print("check", i, arr[1] - arr[0], attl.gti.exposure)
         if attl.gti.exposure == 0.:
             continue
-        chull = ConvexHullonSphere(np.concatenate([attl.rotations.apply(v1) for v1 in v]))
-        chulls.append(chull)
-        gtis.append(attl.gti)
+        clocs, gtloc = zip(*attl.get_covering_chulls())
+        #chull = ConvexHullonSphere(np.concatenate([attl.rotations.apply(v1) for v1 in v]))
+        chulls += clocs #append(chull)
+        gtis += gtloc
+        #gtis.append(attl.gti)
 
     clusters = np.arange(len(chulls))
 
@@ -1172,8 +1191,9 @@ def get_observations_gtis(attdata, join=True, intpsplitside=100.):
                 if np.any(ch1.check_inside_polygon(ch2.vertices)) or np.any(ch2.check_inside_polygon(ch1.vertices)):
                     clusters[(clusters == clusters[i]) | (clusters == clusters[j])] = min(clusters[i], clusters[j])
 
-        gtis = [attdata.gti & GTI((~slews & attdata.gti).arr[clusters == cluster]) for cluster in np.unique(clusters)]
-        chulls = [ConvexHullonSphere(np.concatenate([ch.vertices for ch, cl in zip(chulls, clusters) if cl == cluster], axis=0)) for cluster in np.unique(clusters)]
+        u, inv = np.unique(clusters, return_inverse=True)
+        gtis = [GTI.merge_or([g for g, c in zip(gtis, inv) if c == cg]) for cg in u] #np.unique(clusters)]).gti & GTI((~slews & attdata.gti).arr[clusters == cluster]) for cluster in np.unique(clusters)]
+        chulls = [ConvexHullonSphere(np.concatenate([ch.vertices for ch, c in zip(chulls, inv) if c == cg], axis=0)) for cg in u]
     return gtis, [ch.area for ch in chulls], [np.rad2deg(vec_to_pol(ch.get_center_of_mass())) for ch in chulls], chulls
 
 
@@ -1281,6 +1301,33 @@ class FullSphereChullGTI(ChullGTI):
     def __and__(self, other):
         return ChullGTI(other.vertices)
 
+class FullSphereC4GTI(ConvexHullonSphere):
+    def __init__(self):
+        self.parent = [self,]
+        self.vertices = np.empty((0, 3), float)
+        r = normalize(np.array([[1, 1, 1], [1, 1, -1], [1, -1, -1], [1, -1, 1]]))
+        self.childs = [ConvexHullonSphere(np.roll(r, i, axis=0)) for i in range(3)]
+        r = r*[-1, 1, 1]
+        self.childs += [ConvexHullonSphere(np.roll(r, i, axis=0)) for i in range(3)]
+
+    @property
+    def area(self):
+        return 4.*pi*(180/pi)**2.
+
+    def check_inside_polygon(self, vecs):
+        return np.ones(vecs.shape[0], bool)
+
+    def __and__(self, other):
+        return ChullGTI(other.vertices)
+
+
+def decompose_on_linear_and_rot(q, ax=OPAX):
+    dq = q[1:]*q[:-1].inv()
+    vv = q.apply(ax)
+    ca = np.sum(vv[:-1]*vv[1:], axis=1)
+    qlin = Rotation.from_rotvec(np.cross(vv[:-1], vv[1:])/np.sqrt(1. - ca**2.)[:, np.newaxis]*np.arccos(ca)[:, np.newaxis])
+    return qlin, qlin.inv()*dq
+
 
 def get_linear_and_rot_components(vrot, ax=OPAX):
     """
@@ -1290,25 +1337,44 @@ def get_linear_and_rot_components(vrot, ax=OPAX):
     lets assume that the rotation vector is oriented along z in this system, and axis has coordinates ax = (cosp, sinp, 0)
     then rotated vector would have coordinates axr = (cosp, sinp cosa, sinp sina) so (vrot ax) = cosp
     and linear rotation between two vectors is a scale prodact of two
-    coslinear = cosp**2 + sinp**2*cosa
+    1) coslinear = (ax axr)
+    2) coslinear = cosp**2 + sinp**2*cosa
     the rotational angle is defined by the angle between vectors, tangent to shortes trajectory, and one defined by quaternion
-    cos(rot/2) = ([vrot ax] [vort ax]) / sinp      (here (vort ax) = 0, |[vort ax]| = 1)
+    3) cos(rot/2) = ([vrot ax] [vort ax]) / sinp
+    (here (vort ax) = 0, |[vort ax]| = 1)
     where 1/sinp appear due to the necessity to normalize  [vrot ax]
-    vort itself can be defined as  vort = [ax axr]/sqrt(1 - coslinear**2)
-    [vrot ax] = -[ax vrot] = -[ax [ax axr]]/sina = - ax coslinear/sina + axr/sina
-    ([vrot ax] [vort ax]) = ([vrot ax] axr)/sina
-    axr can be defined as follows axr = cosp vrot + (ax - cosp vrot)*cosa + [vrot ax] sina
+    vort itself can be defined as
+    4) vort = [ax axr]/sinlinear
+    [vort ax] = -[ax vort] = -[ax [ax axr]]/sinlinear = - ax coslinear/sinlinear + axr/sinlinear
     therefore
-    ([vrot ax] axr) = ([vrot ax])**2 sina = sinp**2 sina
-    finally
-    cos(rot/2) = sinp*sina/sqrt(1 - coslinear**2) (1)
+    5) ([vrot ax] [vort ax])/sinp = ([vrot ax] (axr/slinear - ax ctglinear))/sinp = ([vrot ax] axr)/(slinear sinp)
+    the [vrot ax]/sinp is (0, 0, 1) and the axr is (cosp, sinp cosa, sinp sina) and therefore   ###axr can be defined as follows axr = (cosp vrot + (ax - cosp vrot)*cosa + [vrot ax] sina ([vrot ax] = (0, 1, 0), axr = (sinp cosa, sinp sina, cosp) -- > ([vrot ax] axr) = sinp sina
+    and therefore
+    6) cos(rot/2) = sinp sina/slinear
 
-    there is specific case, which is not well handled by machine precision: coslinear -> 1
-    this case can appear in two cases (moda << 1 & cosp << 1) and sinp << 1
+    there is specific case, which is not well handled by machine precision: coslinear -> 1 in that case cos(rot/2) = sinp*sina/rlinear
+    this case can appear in two cases (a << 1 & cosp << 1) and sinp << 1
+    in both cases we can decompos cos linear on 1 - linear^2/2 = 1 - sinp^2(1 - cosa) --> linear = sinp sqrt(2(1 - cosa)) = 2sinp sin(a/2)
+    therefore
+    cos(rot/2) = sinp sina/sin(linear) = sina/2 sin(a/2) = 2 sin(a/2) cos(a/2)/(2 sin(a/2)) = cos(a/2)
 
-    if cosp ->  1 (sinp << 1)  rot -> moda
-    if moda -> 0 then cos(rot/2) -> 1 (first order decomposition) and 1 - moda^2 (1/3 - 1/8*sinp^2) therefore rot -> moda*sqrt(4/3 - sinp^2)
-    we will approximate both cases with moda*np.sqrt(1 - cosp**2)
+    if cos p == 0 sin p == 1 (no ax rotation should be present)
+    coslinear = cos a
+    cos(r/2) = sina/sqrt(1 - cosp^2(1 - cosa) + sinp^2 cosa^2)
+
+    sin linear = sqrt( 1 - coslinear^2) = sqrt(1 - cosp^4 - 2 cosp^2 sinp^2 cosa - sinp^4 cosa^2) = sinp sqrt(1 + cosp^2(1 - 2 cosa) - sinp^2 cosa^2)
+    futhermore
+    1 + cosp^2 (1 - 2cosa) - sinp^2 cosa^2 = 2 cosp^2(1 - cosa) + sinp^2 sina^2 = sina^2 ( sinp^2 + 4 cosp^2 sin(a/2)^2/(4 sin(a/2)^2 cos(a/2)^2)) = sina^2( sinp^2 + cosp^2/cos(a/2)^2)
+
+
+
+    another option to compute rot
+    cos(rot/2) = (v_bc, v_lon)
+    v_bc --> unit vector along big circle (moving along this axis no rotation is observed)
+    v_lon --> moving along longitude
+    dv = (sinp, 0, cosp - (sinp cosa, sinp sina, cosp) == ((1 - sina)*sinp, -sinp sina, 0)
+    here we need to drop component along r which is (cosp, sinp, 0) itself --> dv_sphere = (0, 0, -sinp sina)
+    v_bc = (0, 0, 1)
     """
     #qrot = (qvals[1:].inv()*qvals[:-1])
     #vrot = qrot.as_rotvec()
@@ -1318,9 +1384,20 @@ def get_linear_and_rot_components(vrot, ax=OPAX):
     cosp[moda == 0] = 0.
     sasq = (1 - cosp**2.)
     coslinear = (cosp**2 + sasq*np.cos(moda))
-    cosrot = np.empty(coslinear.size, float)
+    #cosrot = 2.*np.arccos(np.sin(moda)/np.sqrt(1. + cosp**2*(1. - 2.*np.cos(moda) - sasq*np.cos(moda)**2.))) #np.empty(coslinear.size, float)
+    cosrot = 2.*np.arccos(np.cos(moda/2)/np.sqrt(sasq*np.cos(moda/2)**2 + cosp**2)) #np.empty(coslinear.size, float)
+    #mp = (cosp > 0.99) & (moda < 0.01)
+    #cosrot[mp] =
+    """
+    mp = np.abs(cosp) > 0.99 #rotation along axis
+    corrot[mp] = moda[mp]
+    ma = (np.abs(coslinear) > 0.99) & ~mp
+    cosrot[ma] =
+
+
     mask = np.abs(coslinear) > 0.99 # for this condition linear components coluld not be greater then 0.01*pi, therefore a simple approximate estimation of rotation can be used to obtain rotaion angle with ~1% accuracy
-    cosrot[mask] = np.abs(moda[mask])*cosp[mask] ##naive approximation to the second order decomposiition of case moda->0
+    cosrot[mask] =# np.abs(moda[mask])*cosp[mask] ##naive approximation to the second order decomposiition of case moda->0
+    """
     """
     print("maxcosrot", cosrot[mask].max(), coslinear[mask])
     print(cosp[~mask], coslinear[~mask], np.sin(moda[~mask]))
@@ -1328,7 +1405,7 @@ def get_linear_and_rot_components(vrot, ax=OPAX):
     """
     #cr = np.sqrt((1. - cosp[~mask]**2.)/(1. - coslinear[~mask]**2.))*np.sin(moda[~mask])
     #print("crmin and max", cr.max(), cr.min())
-    cosrot[~mask] = np.arccos(np.minimum(np.sqrt((1. - cosp[~mask]**2.)/(1. - coslinear[~mask]**2.))*np.sin(moda[~mask]), 1.))*2.
+    #cosrot[~mask] = np.arccos(np.minimum(np.sqrt((1. - cosp[~mask]**2.)/(1. - coslinear[~mask]**2.))*np.sin(moda[~mask]), 1.))*2.
     return np.arccos(coslinear), cosrot
 
 
@@ -1362,6 +1439,20 @@ def pack_attdata(att, precision):
     return AttDATA.concatenate(acomp, check_interpolation=False) #hide_bad_interpolations=False)
 
 
+def pack_attdata_2lin(att, precision, lincomponents=2, maxste=3600.):
+    acomp = []
+    for te, ts in att.gti.arr:
+        gloc = GTI([te, ts])
+        t, gaps = gloc.make_tedges(att.times)
+        vecs = att(t).apply([1, 0, 0])
+        idx = np.unique(linear_segments(vecs, t, idx=[0, t.size - 1], att=att, precision=precision))
+        aloc = AttDATA(t[idx], att(t[idx]), gti=gloc, check_interpolation=False)
+        aloc.gti = gloc
+        acomp.append(aloc)
+    return AttDATA.concatenate(acomp, check_interpolation=False)
+
+
+
 def add_new_compressed_att(att, times, names, fname):
     print(fname)
     if fname.rstrip() in names:
@@ -1379,8 +1470,10 @@ def add_new_compressed_att(att, times, names, fname):
         else:
             try:
                 if (arttools.time.GTI(att.gti.arr[[0, -1],[0, 1]]) & atl.gti).exposure > 0.:
-                    atl = arttools.orientation.AttDATA.concatenate([atl, att.apply_gti(arttools.time.GTI(atl.gti.arr[[0, -1],[0, 1]]), check_interpolation=False)])
-                att = arttools.orientation.AttDATA.concatenate([att.apply_gti(~atl.gti, check_interpolation=False), pack_attdata(atl,pi/180.*5./3600.)], check_interpolation=False)
+                    #atl = arttools.orientation.AttDATA.concatenate([atl, att.apply_gti(arttools.time.GTI(atl.gti.arr[[0, -1],[0, 1]]), check_interpolation=False)])
+                    atl = arttools.orientation.AttDATA.concatenate([atl, att.apply_gti(arttools.time.GTI(atl.gti.arr[[0, -1],[0, 1]]))])
+                #att = arttools.orientation.AttDATA.concatenate([att.apply_gti(~atl.gti, check_interpolation=False), pack_attdata(atl,pi/180.*5./3600.)], check_interpolation=False)
+                att = arttools.orientation.AttDATA.concatenate([att.apply_gti(~atl.gti), pack_attdata(atl,pi/180.*5./3600.)], check_interpolation=False)
             except Exception:
                 print("fail to concat with %s" % fname)
             else:

@@ -196,7 +196,8 @@ def get_particle_and_photon_templates(filters, cspec=None):
         specp = specp/specp.sum()
 
     gridb, specb = get_background_spectrum(filters)
-    specb = (specb/np.diff(gridb["ENERGY"])[:, np.newaxis])/specb.sum()
+    #specb = (specb/np.diff(gridb["ENERGY"])[:, np.newaxis])/specb.sum()
+    specb = specb/specb.sum()
     return gridp, specp, specb
 
 
