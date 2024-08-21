@@ -189,6 +189,8 @@ def make_spec(ra, dec, survey=None, flist=None, usergti=tGTI):
             bkggti = {}
             urdevt = {}
 
+            imgfilters = {urdn: arttools.filters.IndependentFilters(f) for urdn, f in arttools.filters.DEFAULTFILTERS.items()}
+
             for urdn in imgfilters:
                 imgfilters[urdn]["ENERGY"] = arttools.filters.Intervals([4., 30.])
 
@@ -540,11 +542,11 @@ def analyze_survey(fpath, pastday=None):
                                       "emap%02d_%s.fits.gz" % (k, date),
                                       usedtcorr=False)
 
-def make_img(flist, outputname, usergti=tGTI, emin=4., emax=12., make_detmap=False, ra=None, dec=None):
+def make_img(flist, outputname, usergti=tGTI, emin=4., emax=12., make_detmap=False, ra=None, dec=None, usephotpackage=False, brighsrcdeadtime=False):
     tfpat = re.compile(".*T\d{1}_cl.evt")
     allfiles = [l.rstrip() for l in open(flist)]
-    attfiles = [l for l in allfiles if "gyro.fits" in l or "att" in l]
-    urdfiles = [l for l in allfiles if "urd.fits" == l[-8:] or tfpat.match(l)]
+    attfiles = [l for l in allfiles if "gyro.fits" in l or "att" in l or "bokz" in l]
+    urdfiles = [l for l in allfiles if "urd.fits" == l[-8:] or tfpat.match(l) or "uf.fits" in l]
 
     attdata = arttools.orientation.AttDATA.concatenate([arttools.orientation.get_attdata(gf) for gf in attfiles])
     attdata = attdata.apply_gti(usergti + [-3, 3])
@@ -560,16 +562,19 @@ def make_img(flist, outputname, usergti=tGTI, emin=4., emax=12., make_detmap=Fal
 
     print("check attdata", attdata.gti.exposure)
 
-    urddata, urdhk = arttools.containers.read_urdfiles(urdfiles, {urdn: arttools.filters.IndependentFilters({"TIME": attdata.gti}) for urdn in arttools.telescope.URDNS}) #[f.replace("L0", "L1b") for f in urdfiles])
+    urddata, urdhk = arttools.containers.read_urdfiles(urdfiles, {urdn: arttools.filters.IndependentFilters({"TIME": attdata.gti}) for urdn in arttools.telescope.URDNS}, photpackages=usephotpackage) #[f.replace("L0", "L1b") for f in urdfiles])
     for urdn in urddata:
         if not "ENERGY" in urddata[urdn].data.dtype.names:
             urddata[urdn] = arttools.energy.add_energies_and_grades(urddata[urdn], urdhk[urdn], arttools.caldb.get_energycal_by_urd(urdn), arttools.caldb.get_escale_by_urd(urdn))
     bkgdata = {urdn: d.apply_filters(bkgfilters) for urdn, d in urddata.items()}
     bkgtimes = np.sort(np.concatenate([d["TIME"] for d in bkgdata.values()]))
-    urdbkg = arttools.background.get_background_lightcurve(bkgtimes, bkgdata, 1000., imgfilters)
     urddtc = {urdn: arttools.time.deadtime_correction(hk) for urdn, hk in urdhk.items()}
+    urdbkg = arttools.background.get_background_lightcurve(bkgtimes, bkgdata, 1000., imgfilters, urddtc)
 
     urdevt = {urdn: d.apply_filters(imgfilters[urdn]) for urdn, d in urddata.items()}
+    if brighsrcdeadtime:
+        urddtc, urdbkg = arttools.deadtime.bright_source_deadtime(urdevt, urdbkg, dt=1., dtbkg=1000.)
+
     imgf = {urdn: d.filters for urdn, d in urdevt.items()}
 
     tgti = reduce(lambda a, b: a | b, [d.filters["TIME"] for d in urdevt.values()])
@@ -587,7 +592,7 @@ def make_img(flist, outputname, usergti=tGTI, emin=4., emax=12., make_detmap=Fal
     img1 = np.zeros(bmap.shape, int)
     img1[u[:, 1], u[:, 0]] = uc
 
-    femap = arttools.expmap.make_expmap_for_wcs(lwcs, attdata, imgf, shape=[(0, shape[0]), (0, shape[1])], urdweights=urdcrates, kind="convolve")#, dtcorr=urddtc) #, urdweights=urdcrates) #emin=4., emax=12., phot_index=1.9)
+    femap = arttools.expmap.make_expmap_for_wcs(lwcs, attdata, imgf, shape=[(0, shape[0]), (0, shape[1])], urdweights=urdcrates, kind="convolve", dtcorr=urddtc) #, urdweights=urdcrates) #emin=4., emax=12., phot_index=1.9)
     if make_detmap:
         emap = femap
         """
@@ -595,6 +600,8 @@ def make_img(flist, outputname, usergti=tGTI, emin=4., emax=12., make_detmap=Fal
         bkgrates = arttools.telescope.concat_data_in_order(bkgrates)
         """
 
+        cmap, pmap = arttools.source_detection.make_srccount_and_detmap(lwcs, emap, urdevt, attdata, urdbkg, urddtc=urddtc) #, photbkgrate=get_photbkg_rate)
+        """
         tit = arttools.source_detection.create_neighbouring_blocks_tasks(lwcs, emap, urdevt, attdata, urdbkg) #, photbkgrate=get_photbkg_rate)
         bs = arttools.source_detection.BlockEstimator(lwcs, mpnum=10)
 
@@ -604,6 +611,7 @@ def make_img(flist, outputname, usergti=tGTI, emin=4., emax=12., make_detmap=Fal
             ctot[x, y] = c
             pmap[x, y] = th
 
+        """
         """
 
         urdns = arttools.telescope.URDNS
@@ -644,9 +652,9 @@ def make_img(flist, outputname, usergti=tGTI, emin=4., emax=12., make_detmap=Fal
         sky.rmap_convolve_multicore(tasks, total=len(tasks))
         """
 
-        prob = (pmap - ctot)/log(10.)
+        prob = (pmap - cmap)
         fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(img1, header=lwcs.to_header(), name='PHOT'),
-                                                fits.ImageHDU(ctot/emap, header=lwcs.to_header(), name="rate"),
+                                                fits.ImageHDU(cmap/emap, header=lwcs.to_header(), name="rate"),
                                                 fits.ImageHDU(prob, header=lwcs.to_header(), name="prob"),
                                                 fits.ImageHDU(bmap, header=lwcs.to_header(), name="bmap"),
                                                 fits.ImageHDU(femap, header=lwcs.to_header(), name="emap")]).writeto(outputname + ".fits.gz")
@@ -658,16 +666,18 @@ def make_img(flist, outputname, usergti=tGTI, emin=4., emax=12., make_detmap=Fal
 
 
 def make_lightcurve(flist, outputname, ra, dec, dt, usergti=tGTI, emin=4., emax=12., app=120., spec=None, join_sep=0.):
+    print("using aperture:", app)
     timedel = float(dt)
     allfiles = [l.rstrip() for l in open(flist)]
-    attfiles = [l for l in allfiles if "gyro.fits" in l]
-    urdfiles = [l for l in allfiles if "urd.fits" == l[-8:]]
+    attfiles = [l for l in allfiles if "gyro.fits" in l or "bokz" in l or "att" in l]
+    urdfiles = [l for l in allfiles if "urd.fits" == l[-8:] or "uf.fits" in l]
 
     srcvec = arttools.vector.pol_to_vec(*np.deg2rad([float(ra), float(dec)]).reshape((2, -1)))[0]
 
     attdata = arttools.orientation.AttDATA.concatenate([arttools.orientation.get_attdata(gf)  for gf in attfiles])
     gti = attdata.circ_gti(srcvec, 18*60.)
     print(gti.arr)
+    print("resulted gti", gti.length)
     attdata = attdata.apply_gti((gti & usergti) + [-3, 3])
 
 
@@ -683,7 +693,7 @@ def make_lightcurve(flist, outputname, ra, dec, dt, usergti=tGTI, emin=4., emax=
             urddata[urdn] = arttools.energy.add_energies_and_grades(urddata[urdn], urdhk[urdn], arttools.caldb.get_energycal_by_urd(urdn), arttools.caldb.get_escale_by_urd(urdn))
         #urddata[urdn].data["TIME"] = urddata[urdn]["TIME"] + arttools.time.get_global_time(urddata[urdn]["TIME"], arttools.caldb.get_obt_timecorr_calib())
     print(urddata)
-    print({urdn: d.filters["TIME"] for urdn, d in urddata.items()})
+    print({urdn: d.filters["TIME"].length for urdn, d in urddata.items()})
 
 
     #attadta = arttools.orientation.AttDATA(attdata.time + arttools.time.get_global_time(attdata.time, arttools.caldb.get_obt_timecorr_calib()), attdata(attdata.times), attdata.gti)
@@ -1026,12 +1036,14 @@ if __name__ == "__main__":
     parser.add_argument("--spec", help="compute vignetting for specific spectral shape", default=None, required=False)
     parser.add_argument("--join_sep", help="if producing lightcurves with gaps, defined the longest time bin in binning separated observations", default=0., required=False, type=float)
     parser.add_argument("--survey", help="performa analysis over survey data for specified surveys (syntax 1 - first survey, 2,3 - second and third survey e.t.c)", default="1,2,3,4", required=False)
+    parser.add_argument("--photpackgti", help="use information about photon packages to produce gti", default=False, required=False)
 
     parsed = parser.parse_args(sys.argv[1:])
     gti = tGTI if parsed.gti is None else GTI(np.copy(np.loadtxt(parsed.gti).reshape((-1, 2))))
 
     if parsed.action == "spec":
-        make_spec(parsed.ra, parsed.dec, survey=parsed.survey)
+        #make_spec(parsed.ra, parsed.dec, survey=parsed.survey, flist=parsed.input[1:])
+        make_spec(parsed.ra, parsed.dec, flist=parsed.input[1:])
     if parsed.action == "obsgtis":
         fname = parsed.input
         if "@" == fname[0]:
@@ -1047,10 +1059,10 @@ if __name__ == "__main__":
                     f.write("\t%f %f\n" % tuple(arr))
 
     if parsed.action == "image":
-        make_img(parsed.input[1:], parsed.output, gti, emin=parsed.emin, emax=parsed.emax, make_detmap=parsed.make_detmap, ra=parsed.ra, dec=parsed.dec)
+        make_img(parsed.input[1:], parsed.output, gti, emin=parsed.emin, emax=parsed.emax, make_detmap=parsed.make_detmap, ra=parsed.ra, dec=parsed.dec, usephotpackage=parsed.photpackgti)
 
     if parsed.action == "lightcurve":
-        make_lightcurve(parsed.input[1:], parsed.output, ra=parsed.ra, dec=parsed.dec, usergti= gti, emin=parsed.emin, emax=parsed.emax, app=parsed.rapp, dt=parsed.dt, spec=parsed.spec, join_sep=parsed.join_sep)
+        make_lightcurve(parsed.input[1:], parsed.output, ra=parsed.ra, dec=parsed.dec, usergti= gti, emin=parsed.emin, emax=parsed.emax, app=float(parsed.rapp), dt=parsed.dt, spec=parsed.spec, join_sep=parsed.join_sep)
 
     if parsed.action == "spec_std":
         make_spec_and_arf(parsed.input[1:], parsed.output, ra=parsed.ra, dec=parsed.dec, usergti=gti)

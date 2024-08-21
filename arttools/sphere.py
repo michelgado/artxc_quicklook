@@ -851,7 +851,7 @@ class ConvexHullonSphere(object):
                     newvert = normalize(self.vertices[idx] + np.roll(self.vertices, 1, axis=0)[idx]) # center of the longest side
                     newort = np.cross(cm, newvert)
                     m = np.sum(self.vertices*newort, axis=1) > 0
-                    print("check m shape", m, m.sum(), self.vertices.shape)
+                    #print("check m shape", m, m.sum(), self.vertices.shape)
                     idx2 = np.where(m & ~np.roll(m, 1))[0]
                     newvert2 = normalize(self.vertices[idx2] + np.roll(self.vertices, 1, axis=0)[idx2]) # center of the longest side
                     chnew1 = self.__class__(np.concatenate([newvert.reshape((-1, 3)), self.vertices[~m], newvert2.reshape((-1, 3))], axis=0), self) #np.array([vnew,] + list(np.roll(self.vertices, -idx, axis=0)[:istart])), self)

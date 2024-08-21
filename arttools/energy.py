@@ -74,7 +74,9 @@ def get_escale_corr(time, energy, caldb):
     """
     C0 = interp1d(caldb["OBT"], caldb["C0"], bounds_error=False, fill_value=tuple(caldb["C0"][[0, -1]]))
     C1 = interp1d(caldb["OBT"], caldb["C1"], bounds_error=False, fill_value=tuple(caldb["C1"][[0, -1]]))
+    #C2 = interp1d(caldb["OBT"], caldb["C2"], bounds_error=False, fill_value=tuple(caldb["C2"][[0, -1]]))
 
+    #curvt = C2(time)
     scale = C0(time)
     shift = C1(time)
     return energy*scale + shift

@@ -11,8 +11,8 @@ from .aux import interp1d
 from .time import gti_intersection, gti_difference, GTI, emptyGTI
 from .vignetting import make_vignetting_for_urdn
 from ._det_spatial import DL, dxya, offset_to_vec, vec_to_offset, vec_to_offset_pairs, raw_xy_to_vec, vec_to_offset_pairs, offset_to_raw_xy, rawxy_to_qcorr
-from .psf import get_pix_overall_countrate_constbkg_ayut, urddata_to_opaxoffset, photbkg_pix_coeff, xy_to_opaxoffset
-from .mosaic2 import SkyImage
+from .psf import get_pix_overall_countrate_constbkg_ayut, urddata_to_opaxoffset, photbkg_pix_coeff, xy_to_opaxoffset, get_ipsf_interpolation_func, select_psf_groups
+from .mosaic2 import SkyImage, WCSSky
 from .telescope import URDNS
 from functools import reduce
 from scipy.spatial.transform import Rotation
@@ -95,7 +95,7 @@ def make_bkgmap_for_wcs(wcs, attdata, urdbkg, imgfilters, shape=None, illuminati
         subscale - defined a number of subpixels (under detecto pixels) to interpolate bkgmap
     """
     bkgmap = make_background_det_map_for_urdn(None)
-    sky = SkyImage(wcs, bkgmap, mpnum=mpnum)
+    sky = WCSSky(wcs, bkgmap, mpnum=mpnum)
     overall_gti = emptyGTI
 
     for urdn in imgfilters:
@@ -270,6 +270,11 @@ def get_photon_vs_particle_prob(udata, urdweights={}, cspec=None):
     for urdn in udata:
         pweights[urdn] = get_photon_to_particle_rate_ratio(udata[urdn], cspec)*urdweights.get(urdn, 1/7.)
     return pweights
+
+
+def make_bkglc(bkgevt, timebin, imgfilters=None, dtcorr={}):
+    tevt = np.sort(np.concatenate([d["TIME"] for d in bkgevt.values()]))
+    return get_background_lightcurve(tevt, bkgevt, timebin, imgfilters, dtcorr)
 
 def get_background_lightcurve(tevts, bkgfilters, timebin, imgfilters=None, dtcorr={}):
     """
@@ -558,3 +563,6 @@ def photbkgrate(wcs, pbkgrmap, urddata, attdata, weight=1., app=None, cspec=None
     xy = (wcs.all_world2pix(radec.T, 1) - 0.5).astype(int)[:, ::-1]
     prates = pbkgrmap[xy[:, 0], xy[:, 1]]*weight*pfun(i, j)
     return prates
+
+
+

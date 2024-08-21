@@ -35,6 +35,8 @@ class GTI(Intervals):
             gti = cls(np.array([gtihdu.data["TSTART"], gtihdu.data["TSTOP"]]).T)
         if "START" in arr.dtype.names:
             gti = cls(np.array([gtihdu.data["START"], gtihdu.data["STOP"]]).T)
+        if "start" in arr.dtype.names:
+            gti = cls(np.array([gtihdu.data["start"], gtihdu.data["stop"]]).T)
         if not timecols is None:
             gti = cls(np.array([gtihdu.data[timecols[0]], gtihdu.data[timecols[1]]]).T)
 

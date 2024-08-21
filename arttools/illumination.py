@@ -314,9 +314,9 @@ class IlluminationSources(object):
         if not filters is None:
             self.set_urdn_data_filters(filters)
 
-    def set_urdn_data_filters(self, filters, scales=None, brates=None, vfun=None, cspec=None):
+    def set_urdn_data_filters(self, filters, scales=None, brates=None, vfun=None, cspec=None, app=1000):
         self.filters = filters
-        self.detmap = {urdn: DetectorVignetting(unpack_inverse_psf_specweighted_ayut(f.filters, cspec=cspec)) for urdn, f in filters.items()}
+        self.detmap = {urdn: DetectorVignetting(unpack_inverse_psf_specweighted_ayut(f.filters, cspec=cspec, app=app)) for urdn, f in filters.items()}
         self.shmasks = {urdn: f.filters.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)]) for urdn, f in filters.items()}
         if not brates is None:
             for urdn in self.detmap:
@@ -458,18 +458,18 @@ class WCSSkyWithIllumination(WCSSky, IlluminationSources): #, IlluminationSource
         img += self.action(vm, scale, rmap)
         return np.any(vm > 0.)
 
-    def get_expmap(self, attdata, urdfilters, urdweights={}, dtcorr={}, cspec=None):
+    def get_expmap(self, attdata, urdfilters, urdweights={}, dtcorr={}, cspec=None, app=1000.):
         urdgtis = {urdn: f.filters["TIME"] for urdn, f in urdfilters.items()}
         self.clean_image()
-        self.update_filters({urdn: f.filters for urdn, f in urdfilters.items()}, cspec=cspec)
+        self.update_filters({urdn: f.filters for urdn, f in urdfilters.items()}, cspec=cspec, app=app)
 
         for urdn in urdgtis:
             self.set_urdn(urdn)
             gti = urdgtis[urdn]
-            if gti.exposure == 0:
+            if gti.length == 0:
                 print("urd %d has no individual gti, continue" % urdn)
                 continue
-            print("urd %d, exposure %.1f, progress:" % (urdn, gti.exposure))
+            print("urd %d, exposure %.1f, progress:" % (urdn, gti.length))
             exptime, qval, locgti = hist_orientation_for_attdata(attdata.for_urdn(urdn), gti, \
                                                                 timecorrection=dtcorr.get(urdn, lambda x: 1), \
                                                                 wcs=self.locwcs)
@@ -486,10 +486,10 @@ class WCSSkyWithIllumination(WCSSky, IlluminationSources): #, IlluminationSource
         for urdn in urdgtis:
             self.set_urdn(urdn)
             gti = urdgtis[urdn]
-            if gti.exposure == 0:
+            if gti.length == 0:
                 print("urd %d has no individual gti, continue" % urdn)
                 continue
-            print("urd %d, exposure %.1f, progress:" % (urdn, gti.exposure))
+            print("urd %d, exposure %.1f, progress:" % (urdn, gti.length))
             exptime, qval, locgti = hist_orientation_for_attdata(attdata.for_urdn(urdn), gti, \
                                                                 wcs=self.locwcs)
             for _ in tqdm.tqdm(self.interpolate_vmap_for_qval(zip(qval, exptime)), total=exptime.size):

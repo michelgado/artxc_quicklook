@@ -2,7 +2,7 @@ from .telescope import URDNS, concat_data_in_order
 from ._det_spatial import vec_to_offset, get_qcorr_for_urddata, F
 from math import pi, sin, cos, sqrt, log10
 from .background import get_local_bkgrates, get_photon_vs_particle_prob, get_photon_and_particles_rates
-from .psf import urddata_to_opaxoffset, unpack_inverse_psf_ayut, get_ipsf_interpolation_func, select_psf_groups, photbkg_pix_coeff, naive_bispline_interpolation, psf_nearest_value, unpack_pix_index, ayutee
+from .psf import urddata_to_opaxoffset, unpack_inverse_psf_ayut, get_ipsf_interpolation_func, select_psf_groups, photbkg_pix_coeff, naive_bispline_interpolation, psf_nearest_value, unpack_pix_index, ayutee, get_ipsf_cube_for_app
 from .aux import DistributedObj
 from .containers import Urddata
 from .caldb import get_telescope_crabrates, get_ayut_inverse_psf_datacube_packed
@@ -71,17 +71,34 @@ def make_unipix_data(urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate=l
     return i, j, qlist, prate, bkgrates*brate + pbkgrate*prate, eenergy
 
 
-def make_detstat_tasks(urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate=lambda evt, att: 0., cspec=None):
-    i, j, qlist, prate, brate, eenergy = make_unipix_data(urdevt, attdata, bkglc, urdweights, photbkgrate, cspec=cspec)
+def make_detstat_tasks(urdevt, attdata, bkglc, urdweights=urdcrates, photbkgrate=lambda evt, att: 0., cspec=None, app=None, urddtc={}):
+    i, j, qlist, prate, brate, eenergy = make_unipix_data(urdevt, attdata, bkglc, urdweights, photbkgrate, cspec=cspec, urddtc=urddtc)
     pkoef = prate/brate
 
     ije, sidx, ss, sc = select_psf_groups(i, j, eenergy)
-    tasks = [(qlist[sidx[s:s+c]], pkoef[sidx[s:s+c]], np.copy(unpack_inverse_psf_ayut(ic, jc)[eidx])) for (ic, jc, eidx), s, c in zip(ije.T, ss, sc)]
+    tasks = [(qlist[sidx[s:s+c]], pkoef[sidx[s:s+c]], np.copy(unpack_inverse_psf_ayut(ic, jc, app=app)[eidx])) for (ic, jc, eidx), s, c in zip(ije.T, ss, sc)]
     return tasks
 
+def integrate_ipsf_core(core, scale, rate):
+    return core*scale*rate
 
-def make_detmap(locwcs, emap, tasks, sky=None, mpnum=20, maxit=101, ctot=None, update_mask=True):
-    vmap = get_ipsf_interpolation_func()
+def make_fair_photbkg_rates(lwcs, surfaceb, urdevt, attdata, bkglc, cspec=None, urdweights=urdcrates):
+    """
+    lwcs and photbkg -- define the background map on some wcs coordinate grid
+    tasks -- see source_detection.make_detstat_tasks, produces a uniform pixel characteristics
+    """
+    sky = WCSSky(lwcs, vmap=get_ipsf_interpolation_func(), shape=[(0, surfaceb.shape[0]), (0, surfaceb.shape[1])])
+    sky.set_action(integrate_ipsf_core)
+    sky.set_rmap(surfaceb)
+    i, j, qlist, prate, brate, eenergy = make_unipix_data(urdevt, attdata, bkglc, urdweights, cspec=cspec)
+    ije, sidx, ss, sc = select_psf_groups(i, j, eenergy)
+    tasks = [(qlist[sidx[s:s+c]], prate[sidx[s:s+c]], np.copy(unpack_inverse_psf_ayut(ic, jc)[eidx])) for (ic, jc, eidx), s, c in zip(ije.T, ss, sc)]
+    vals = np.zeros(i.size, float)
+    vals[sidx] = np.concatenate([v for v in sky.rmap_convolve_multicore(tasks, ordered=True, total=len(tasks), return_sum=True)])
+    return i, j, qlist, prate, brate, eenergy, vals
+
+def make_detmap(locwcs, emap, tasks, sky=None, mpnum=20, maxit=101, ctot=None, app=1000., update_mask=True):
+    vmap = get_ipsf_interpolation_func(app)
     if sky is None:
         sky = WCSSky(locwcs, vmap, mpnum=mpnum)
     else:
@@ -128,8 +145,8 @@ def make_detmap(locwcs, emap, tasks, sky=None, mpnum=20, maxit=101, ctot=None, u
     sky.rmap_convolve_multicore(tasks, total=len(tasks))
     return ctot, np.copy(sky.img)
 
-def create_neighboring_blocks(locwcs, emap, i, j, qtot, pk, ee, rmap=None):
-    vmap = get_ipsf_interpolation_func()
+def create_neighboring_blocks(locwcs, emap, i, j, qtot, pk, ee, rmap=None, app=1200):
+    vmap = get_ipsf_interpolation_func(app)
     sizex = int(np.arctan(max(np.max(np.abs(vmap.grid[0][[0, -1]])), np.max(np.abs(vmap.grid[1][[0, -1]])))/F)*180/pi/np.min(locwcs.wcs.cdelt[1])*sqrt(2.)) + 2
     sizey = int(np.arctan(max(np.max(np.abs(vmap.grid[0][[0, -1]])), np.max(np.abs(vmap.grid[1][[0, -1]])))/F)*180/pi/np.min(locwcs.wcs.cdelt[0])*sqrt(2.)) + 2
     xy = (locwcs.all_world2pix(np.rad2deg(vec_to_pol(qtot.apply([1, 0, 0]))).T, 0) + 0.5).astype(int)[:, ::-1]
@@ -208,15 +225,15 @@ class BlockEstimator(DistributedObj):
             nphot[:] = m.reshape((nphot.size, -1)).sum(axis=1)
         return x, y, ntot
 
-def make_srccount_and_detmap(locwcs, emap, urde, attdata, bkglc, photbkgrate=lambda evt, att: 0., urdweights=urdcrates, cspec=None, mpnum=4):
-    i, j, qtot, prate, brate, ee = make_unipix_data(urde, attdata, bkglc, photbkgrate=photbkgrate, urdweights=urdweights, cspec=cspec)
+def make_srccount_and_detmap(locwcs, emap, urde, attdata, bkglc, photbkgrate=lambda evt, att: 0., urdweights=urdcrates, cspec=None, mpnum=4, app=1000., urddtc={}):
+    i, j, qtot, prate, brate, ee = make_unipix_data(urde, attdata, bkglc, photbkgrate=photbkgrate, urdweights=urdweights, cspec=cspec, urddtc=urddtc)
     cmap = np.zeros(emap.shape, float)
     pmap = np.zeros(emap.shape, float)
     pk = prate/brate
 
-    psfdata = get_ayut_inverse_psf_datacube_packed()
-    ntasks, feeder = create_neighboring_blocks(locwcs, emap, i, j, qtot, pk, ee)
-    iifun = get_ipsf_interpolation_func()
+    psfdata = get_ipsf_cube_for_app(app) #get_ayut_inverse_psf_datacube_packed()
+    ntasks, feeder = create_neighboring_blocks(locwcs, emap, i, j, qtot, pk, ee, app=app)
+    iifun = get_ipsf_interpolation_func(app)
     dx = iifun.grid[0][1] - iifun.grid[0][0]
     dy = iifun.grid[1][1] - iifun.grid[1][0]
     xsize = iifun.grid[0].size
@@ -236,15 +253,15 @@ def make_srccount_and_detmap(locwcs, emap, urde, attdata, bkglc, photbkgrate=lam
         pmap[x, y] = pl
     return cmap, pmap
 
-def make_optimal_filter_solution(locwcs, emap, rmap, urde, attdata, bkglc, photbkgrate=lambda evt, att: 0., urdweights=urdcrates, cspec=None, mpnum=4):
+def make_optimal_filter_solution(locwcs, emap, rmap, urde, attdata, bkglc, photbkgrate=lambda evt, att: 0., urdweights=urdcrates, app=1000., cspec=None, mpnum=4):
     i, j, qtot, prate, brate, ee = make_unipix_data(urde, attdata, bkglc, photbkgrate=photbkgrate, urdweights=urdweights, cspec=cspec)
     cmap = np.zeros(emap.shape, float)
     pmap = np.zeros(emap.shape, float)
     pk = prate/brate
 
-    psfdata = get_ayut_inverse_psf_datacube_packed()
+    psfdata = get_ipsf_cube_for_app(app) #get_ayut_inverse_psf_datacube_packed()
     ntasks, feeder = create_neighboring_blocks(locwcs, emap, i, j, qtot, pk, ee, rmap=rmap)
-    iifun = get_ipsf_interpolation_func()
+    iifun = get_ipsf_interpolation_func(app)
     dx = iifun.grid[0][1] - iifun.grid[0][0]
     dy = iifun.grid[1][1] - iifun.grid[1][0]
     xsize = iifun.grid[0].size

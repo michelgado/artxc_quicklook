@@ -74,6 +74,7 @@ class DetectorVignetting(object):
 
     def _set_ipsf_functions(self, iifun):
         self.iifun = iifun
+        self.ishift = (121 - self.iifun(0, 0).shape[-1])//2
         self.norm = 1. #np.sum([self.iifun(i, j)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
 
     def set_vignetting_functions(self, vfun):
@@ -99,7 +100,9 @@ class DetectorVignetting(object):
 
     def add_pix(self, x, y, i, j):
         if ~self.dpix[x, y]:
-            self._img[(x - 1)*9: (x - 1)*9 + 121, (y - 1)*9: (y - 1)*9 + 121] += self.vignfun(self.iifun(i, j), self.vignscale, self.bmap[x, y])*self.psfmask
+            #im = self._img[(x - 1)*9 + self.ishift: (x - 1)*9 + 121 - self.ishift, (y - 1)*9 + self.ishift: (y - 1)*9 + 121 - self.ishift]
+            #print("im shape", im.shape, self.iifun(i, j).shape, self.ishift, (x - 1)*9, (x - 1)*9 + 121)
+            self._img[(x - 1)*9 + self.ishift: (x - 1)*9 + 121 - self.ishift, (y - 1)*9 + self.ishift: (y - 1)*9 + 121 - self.ishift] += self.vignfun(self.iifun(i, j), self.vignscale, self.bmap[x, y]) #*self.psfmask
             self.dpix[x, y] = True
 
     @property
@@ -123,7 +126,7 @@ class DetectorVignetting(object):
 DEFAULVIGNIFUN = RegularGridInterpolator((np.arange(-262.5, 263, 1)/9.*DL, np.arange(-262.5, 263, 1)/9.*DL), np.zeros((526, 526)), bounds_error=False, fill_value=0.)
 
 @lru_cache(maxsize=7)
-def make_vignetting_for_urdn(urdn, imgfilter, cspec=None, app=None, brate=None, vfun=None, scale=None):
+def make_vignetting_for_urdn(urdn, imgfilter, cspec=None, app=1000., brate=None, vfun=None, scale=None):
     """
     for provided urd number  energy or photon index provided 2d interpolation function (RegularGridInterpolator) defining the profile of the effective area depending on offset
 
@@ -152,7 +155,7 @@ def make_vignetting_for_urdn(urdn, imgfilter, cspec=None, app=None, brate=None, 
 
     #ee = np.array([4., 6., 8., 10., 12., 16., 20., 24., 30.])
     #w = get_specweights(imgfilter.filters, ee, cspec)
-    iifun = unpack_inverse_psf_specweighted_ayut(imgfilter.filters, cspec=cspec)
+    iifun = unpack_inverse_psf_specweighted_ayut(imgfilter.filters, cspec=cspec, app=app)
     vmap = DetectorVignetting(iifun, app)
     if not brate is None:
         vmap.set_bkgratemap(get_background_surface_brigtnress(urdn, imgfilter, normalize=True)*brate)

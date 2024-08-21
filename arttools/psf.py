@@ -79,27 +79,25 @@ def vec_to_ipsfpix(rawx, rawy, vec, urdn=None):
     xl[m], yl[m] = yl[m], xl[m]
     return unpack_pix_index(i, j), xl, yl
 
-def naive_bispline_interpolation(rawx, rawy, vec, energy=None, urdn=None, data=None): #imgfilter=None, cspec=None): #, data=None):
+@lru_cache(maxsize=3)
+def get_ipsf_cube_for_app(app=1000):
+    #iifun = get_ipsf_interpolation_func(app)
+    ipsf = get_ayut_inversed_psf_data_packed()
+    ic = ipsf["offset"].data.size//2
+    offset = vec_to_offset(np.array([cos(pi/180.*app/3600.), sin(pi/180.*app/3600.), 0.]))[0]
+    dx = min(np.searchsorted(ipsf["offset"].data["x_offset"], offset) - ic, ic)
+    data = get_ayut_inverse_psf_datacube_packed()
+
+    x, y = np.mgrid[-60:61:1, -60:61:1]
+    psfmask = x**2. + y**2. <= app**2./25.
+    return np.copy(data[:, :, 60-dx : 61+dx, 60-dx : 61+dx]*psfmask[np.newaxis, np.newaxis, 60-dx : 61+dx, 60-dx : 61+dx])
+
+def naive_bispline_interpolation(rawx, rawy, vec, energy=None, urdn=None, data=None, app=1000.): #imgfilter=None, cspec=None): #, data=None):
     """
     for specified event provides bilinearly interpolated ipsf core values towards defined direction
     """
-    iifun = get_ipsf_interpolation_func()
-
-    #imgmax = np.sum([unpack_inverse_psf_ayut(i, j)[:, 60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)], axis=0)
-    """
-    if imgfilter is None:
-        imgmax = np.sum([unpack_inverse_psf_ayut(i, j)[:, 60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)], axis=0)
-    else:
-        w = get_specweights(imgfilter, ayutee, None)
-        data = np.sum(get_ayut_inverse_psf_datacube_packed()*w[np.newaxis, :, np.newaxis, np.newaxis], axis=1)
-        imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
-
-    if data is None:
-        data = get_ayut_inverse_psf_datacube_packed()
-        imgmax = np.sum([unpack_inverse_psf_ayut(i, j)[:, 60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)], axis=0)
-        data = data/imgmax
-    """
-    data = get_ayut_inverse_psf_datacube_packed()
+    iifun = get_ipsf_interpolation_func(app)
+    data = get_ipsf_cube_for_app(app)
 
     k, xl, yl = vec_to_ipsfpix(rawx, rawy, vec, urdn)
     mask = np.all([xl > iifun.grid[0][0], xl < iifun.grid[0][-1], yl > iifun.grid[1][0], yl < iifun.grid[1][-1]], axis=0)
@@ -121,15 +119,15 @@ def naive_bispline_interpolation(rawx, rawy, vec, energy=None, urdn=None, data=N
     return mask, s[s > 0.] #(s/imgmax[eidx])[s > 0.]
 
 
-def psf_nearest_value(rawx, rawy, vec, k=None, energy=None, data=None, mask=None):
+def psf_nearest_value(rawx, rawy, vec, k=None, energy=None, data=None, mask=None, app=1000):
     """
     for specified event provides nearest point of PSF
     """
-    iifun = get_ipsf_interpolation_func()
+    iifun = get_ipsf_interpolation_func(app)
 
     if data is None:
         #imgmax = np.sum([unpack_inverse_psf_ayut(i, j)[:, 60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)], axis=0)
-        data = get_ayut_inverse_psf_datacube_packed()
+        data = get_ipsf_cube_for_app(app) #get_ayut_inverse_psf_datacube_packed()
         mask = data[:, 0, :, :] > 1e-10
     if mask is None:
         mask = data[:, 0, :, :] > 1e-10
@@ -148,18 +146,15 @@ def psf_nearest_value(rawx, rawy, vec, k=None, energy=None, data=None, mask=None
 
     return imask, data[k, eidx, ip, jp], cs, data, mask
 
-def naive_bispline_interpolation_specweight(rawx, rawy, vec, data, urdn=None, cspec=None):
+def naive_bispline_interpolation_specweight(rawx, rawy, vec, data, urdn=None, cspec=None, app=1000.):
     """
     for specified event provides bilinearly interpolated ipsf core values towards defined direction
     """
-    iifun = get_ipsf_interpolation_func()
+    iifun = get_ipsf_interpolation_func(app)
     if data is None:
         w = get_specweights(imgfilter, ayutee, cspec)
-        data = np.sum(get_ayut_inverse_psf_datacube_packed()*w[np.newaxis, :, np.newaxis, np.newaxis], axis=1)
-        #imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
-        #data = data/imgmax #(data[0, 60, 60] + data[1, 60, 51]*4 + data[2, 51, 51]*4)
+        data = np.sum(get_ipsf_cube_for_app(app)*w[np.newaxis, :, np.newaxis, np.newaxis], axis=1)
 
-    #data = get_ayut_inverse_psf_datacube_packed()
     k, xl, yl = vec_to_ipsfpix(rawx, rawy, vec, urdn)
     mask = np.all([xl > iifun.grid[0][0], xl < iifun.grid[0][-1], yl > iifun.grid[1][0], yl < iifun.grid[1][-1]], axis=0)
     k, xl, yl = k[mask], xl[mask], yl[mask]
@@ -233,7 +228,7 @@ def get_ipsf_energy_index(urddata):
     return np.searchsorted(ayutee, urddata['ENERGY']) - 1
 
 
-def unpack_inverse_psf_ayut(i, j, e=None):
+def unpack_inverse_psf_ayut(i, j, e=None, app=1000.):
     """
     inverse psf is an integral of the product of psf and vignetting over ART-XC detectors pixels
     since this characteristics is a result of integral we cannot use differential approximation to extract
@@ -253,7 +248,7 @@ def unpack_inverse_psf_ayut(i, j, e=None):
     i < j : transpose
     """
     k = unpack_pix_index(i, j)
-    data = get_ayut_inverse_psf_datacube_packed()
+    data = get_ipsf_cube_for_app(app) #get_ayut_inverse_psf_datacube_packed()
     data = data[k]
     if abs(j) > abs(i):
         data = np.transpose(data, axes=(0, 2, 1))
@@ -279,20 +274,13 @@ def get_iicore_normalization(filters, cspec=None):
     return imgmax
 
 
-def unpack_inverse_psf_datacube_specweight_ayut(imgfilter, cspec, app=None):
+def unpack_inverse_psf_datacube_specweight_ayut(imgfilter, cspec=None, app=1000.):
     w = get_specweights(imgfilter, ayutee, cspec)
-
-    x, y = np.mgrid[-60:61:1, -60:61:1]
-    data = get_ayut_inverse_psf_datacube_packed()
-    if not app is None:
-        psfmask = x**2. + y**2. <= app**2./25.
-        data = data*psfmask[np.newaxis, np.newaxis, :, :]
-
-    data = np.sum(data*w[np.newaxis, :, np.newaxis, np.newaxis], axis=1)
-    return data
+    data = get_ipsf_cube_for_app(app)
+    return np.sum(data*w[np.newaxis, :, np.newaxis, np.newaxis], axis=1)
 
 
-def unpack_inverse_psf_specweighted_ayut(imgfilter, cspec=None, app=None):
+def unpack_inverse_psf_specweighted_ayut(imgfilter, cspec=None, app=1000.):
     """
     produces spectrum weights for ipsf channels
     """
@@ -309,41 +297,45 @@ def unpack_inverse_psf_specweighted_ayut(imgfilter, cspec=None, app=None):
         return d
     return newfunc
 
-def get_pix_overall_countrate_constbkg_ayut(imgfilter, cspec=None, app=None, fold_energy=True):
+def get_pix_overall_countrate_constbkg_ayut(imgfilter, cspec=None, app=1000., fold_energy=True):
     """
     return integral over effectiveness on sky area (integral in radians)
     """
-    iifun = get_ipsf_interpolation_func()
+    iifun = get_ipsf_interpolation_func(app)
     xo, yo = np.meshgrid(iifun.grid[0], iifun.grid[1])
+    """
     vecs = offset_to_vec(xo.ravel(), yo.ravel())
     v0 = offset_to_vec(0, 0)
     if app is None:
         appmask = np.ones(xo.shape, bool)
     else:
         appmask = np.sum(vecs*v0) > cos(app*pi/180./3600.)
+    """
     sarea = get_vec_triangle_area(offset_to_vec(iifun.grid[0][:-1], iifun.grid[0][:-1]),
                                   offset_to_vec(iifun.grid[0][1: ], iifun.grid[0][:-1]),
                                   offset_to_vec(iifun.grid[0][1: ], iifun.grid[0][1: ]))
     sarea = np.mean(sarea)*2.
     #print("psf fun pix area", sarea)
     w = get_specweights(imgfilter, ayutee, cspec)
-    data = get_ayut_inverse_psf_datacube_packed()
+    #data = get_ipsf_cube_for_app(app) #get_ayut_inverse_psf_datacube_packed()
+    data = get_ipsf_cube_for_app(app).sum(axis=(2, 3))*sarea  #get_ayut_inverse_psf_datacube_packed()
 
     #imgmax = np.sum([np.sum(unpack_inverse_psf_ayut(i, j)*w[:, np.newaxis, np.newaxis], axis=0)[60 - i*9, 60 - j*9]*8/(1. + (i == j))/(1. + (i == 0.))/(1. + (j == 0.)) for i in range(5) for j in range(5)])
     #data = data/imgmax
     #print(sarea.shape, data.shape, appmask.shape)
-    data = (data*appmask[np.newaxis, np.newaxis, :, :]).sum(axis=(2, 3))*sarea
+    #data = (data*appmask[np.newaxis, np.newaxis, :, :]).sum(axis=(2, 3))*sarea
     if fold_energy:
         data = np.sum(data*w[np.newaxis, :], axis=1)
 
     def newfunc(i, j):
         return data[unpack_pix_index(i, j)]
+
     if fold_energy:
         return newfunc
     else:
         return newfunc, ayutee
 
-def photbkg_pix_coeff(urdn, imgfilter, cspec=None):
+def photbkg_pix_coeff(urdn, imgfilter, cspec=None, app=1200):
     x, y = np.mgrid[0:48:1, 0:48:1]
     shmask = imgfilter.meshgrid(["RAW_Y", "RAW_X"], [np.arange(48), np.arange(48)])
     xp, yp = x[shmask], y[shmask]
@@ -351,6 +343,9 @@ def photbkg_pix_coeff(urdn, imgfilter, cspec=None):
     pixi = get_pix_overall_countrate_constbkg_ayut(imgfilter, cspec)
     bkgprofile[xp, yp] = pixi(*rawxy_to_opaxoffset(xp, yp, urdn))
     return bkgprofile
+
+
+
 
 
 def get_ipsf_interpolation_func(app=1000.):

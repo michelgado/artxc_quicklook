@@ -170,23 +170,26 @@ class SkyInterpolator(DistributedObj):
         self.corners.vertices = offset_to_vec(xc, yc)
 
     @DistributedObj.for_each_argument
-    def interpolate_vmap_for_qval(self, qval, scale, update_corners=False):
+    def interpolate_vmap_for_qval(self, qval, scale, update_corners=False, return_sum=False):
         if update_corners:
             self.update_corners()
         img, rmap, vecs = self._get_cutout(qval)
         if vecs.size == 0:
-            return False
+            return 0. if return_sum else False
         xyl = vec_to_offset_pairs(qval.apply(vecs, inverse=True))
         vm = self.vmap(xyl)
+        if return_sum:
+            res = np.sum(self.action(vm, scale, rmap))
+            return res
         img += self.action(vm, scale, rmap)
         return np.any(vm > 0.)
 
     @DistributedObj.for_each_argument
-    def interpolate_vmap_for_qvals(self, qvals, scales, vmap, update_corners=False):
+    def interpolate_vmap_for_qvals(self, qvals, scales, vmap, update_corners=False, return_sum=False):
         self.vmap.values = vmap
         if update_corners:
             self.update_corners()
-        return [self.interpolate_vmap_for_qval(q, s) for q, s in zip(qvals, scales)]
+        return [self.interpolate_vmap_for_qval(q, s, return_sum=return_sum) for q, s in zip(qvals, scales)]
 
     def direct_convolve(self, qvals, scales):
         self.clean_image()
@@ -300,20 +303,23 @@ class WCSSky(SkyInterpolator):
         il, ih, jl, jh = xy[1].min(), xy[1].max(), xy[0].min(), xy[0].max()
         il, ih = max(il - core.shape[0]//2, 0), min(ih + core.shape[0]//2 + 1, self.img.shape[0])
         jl, jh = max(jl - core.shape[1]//2, 0), min(jh + core.shape[1]//2 + 1, self.img.shape[1])
-        tmpimg = np.zeros((ih - il, jh - jl), float)
-        mask = np.logical_and.reduce([xy[1] >= il, xy[0] > jl, xy[1] < tmpimg.shape[0] + il, xy[0] < tmpimg.shape[1] + jl])
-        #np.add.at(tmpimg, (xy[1] - il, xy[0] - jl), np.tile(scales/self.subres.size*2, self.subres.size//2))
-        np.add.at(tmpimg, (xy[1, mask] - il, xy[0, mask] - jl), scales[mask])
+        if ih < 1 or jh < 1:
+            pass
+        else:
+            tmpimg = np.zeros((ih - il, jh - jl), float)
+            mask = np.logical_and.reduce([xy[1] >= il, xy[0] > jl, xy[1] < tmpimg.shape[0] + il, xy[0] < tmpimg.shape[1] + jl])
+            #np.add.at(tmpimg, (xy[1] - il, xy[0] - jl), np.tile(scales/self.subres.size*2, self.subres.size//2))
+            np.add.at(tmpimg, (xy[1, mask] - il, xy[0, mask] - jl), scales[mask])
 
-
-        self.img[il:ih, jl:jh] += convolve(tmpimg, core, mode="same")
+            self.img[il:ih, jl:jh] += convolve(tmpimg, core, mode="same")
 
     def fft_convolve(self, qvals, scales):
         self.clean_image()
         rolls = wcs_roll(self.locwcs, qvals)
         urolls, uiidx = np.unique((rolls*180./pi*2).astype(int), return_inverse=True)
         cores = self.cores_for_rolls((urolls + 0.5)/360.*pi)
-        list(self.convolve_with_core(((qvals[k == uiidx], scales[k == uiidx], core) for k, core in enumerate(cores))))
+        #list(self.convolve_with_core(((qvals[k == uiidx], scales[k == uiidx], core) for k, core in enumerate(cores))))
+        list(tqdm.tqdm(self.convolve_with_core(((qvals[k == uiidx], scales[k == uiidx], core) for k, core in enumerate(cores))), total=urolls.size))
         self.accumulate_img()
 
     def fft_convolve_multiple(self, data, total=np.inf, subres=1):
@@ -393,6 +399,22 @@ else:
             vecs = vecs[core > 0.]
             self._sarea = acos(np.min(vecs[:, 0]))
             self._set_corners(offset_to_vec(x[[0, 0, -1, -1]], y[[0, -1, -1, 0]]))
+
+        @DistributedObj.for_each_process
+        def set_ipix(self, ipix):
+            self.idx = np.sort(ipix) #vmap = RegularGridInterpolator((x, y), core, bounds_error=False, fill_value=0.)
+            self.img = np.zeros(ipix.size, float)
+            self.mask = np.ones(ipix.size, bool)
+            self.rmap = np.zeros(ipix.size, float)
+            self.vecs = np.array(healpy.pix2vec(self.nside, self.idx)).T
+
+        def update_ipix(self, ipix):
+            self.set_ipix(ipix)
+            self.idx = np.sort(ipix)
+            self.img = np.zeros(ipix.size, float)
+            self.mask = np.ones(ipix.size, bool)
+            self.rmap = np.zeros(ipix.size, float)
+            self.vecs = np.array(healpy.pix2vec(self.nside, self.idx)).T
 
 
 
@@ -584,14 +606,17 @@ class SkyImage(DistributedObj):
         il, ih, jl, jh = xy[1].min(), xy[1].max(), xy[0].min(), xy[0].max()
         il, ih = max(il - core.shape[0]//2, 0), min(ih + core.shape[0]//2 + 1, self.img.shape[0])
         jl, jh = max(jl - core.shape[1]//2, 0), min(jh + core.shape[1]//2 + 1, self.img.shape[1])
-        tmpimg = np.zeros((ih - il, jh - jl), float)
-        xl, yl = xy[1] - il, xy[0] - jl
-        #np.add.at(tmpimg, (xy[1], xy[0]), np.repeat(scales/self.subres.size*2, self.subres.size//2))
-        #np.add.at(tmpimg, (xy[1], xy[0]), scales)
-        np.add.at(tmpimg, (xl, yl), scales) # np.tile(scales/self.subres.size*2, self.subres.size//2))
-        #np.add.at(tmpimg, (xy[1] - il, xy[0] - jl), np.tile(scales/self.subres.size*2, self.subres.size//2))
-        #self.img += convolve(tmpimg, core, mode="same")
-        self.img[il:ih, jl:jh] += convolve(tmpimg, core, mode="same")
+        if ih < 0 or ih < 0:
+            pass
+        else:
+            tmpimg = np.zeros((ih - il, jh - jl), float)
+            xl, yl = xy[1] - il, xy[0] - jl
+            #np.add.at(tmpimg, (xy[1], xy[0]), np.repeat(scales/self.subres.size*2, self.subres.size//2))
+            #np.add.at(tmpimg, (xy[1], xy[0]), scales)
+            np.add.at(tmpimg, (xl, yl), scales) # np.tile(scales/self.subres.size*2, self.subres.size//2))
+            #np.add.at(tmpimg, (xy[1] - il, xy[0] - jl), np.tile(scales/self.subres.size*2, self.subres.size//2))
+            #self.img += convolve(tmpimg, core, mode="same")
+            self.img[il:ih, jl:jh] += convolve(tmpimg, core, mode="same")
 
     def fft_convolve(self, qvals, scales):
         self.clean_image()

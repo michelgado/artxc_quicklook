@@ -160,7 +160,8 @@ def get_caldata(ctype, dev, gti=None):
     ti = np.array([te[:-1], te[1:]]).T[gaps]
     idx = np.searchsorted(caldata.CAL_VSB.values, ti.mean(axis=1)) - 1
     u, ui = np.unique(idx, return_inverse=True)
-    return [(os.path.join(ARTCALDBPATH, "../../", caldata.iloc[i].CAL_DIR.rstrip(), caldata.iloc[i].CAL_FILE.rstrip()), ti[ui == i]) for i in u]
+    #return [(os.path.join(ARTCALDBPATH, "../../", caldata.iloc[i].CAL_DIR.rstrip(), caldata.iloc[i].CAL_FILE.rstrip()), ti[ui == i]) for i in u]
+    return [(os.path.join(ARTCALDBPATH, caldata.iloc[i].CAL_DIR.rstrip(), caldata.iloc[i].CAL_FILE.rstrip()), ti[ui == i]) for i in u]
 
 
 """
@@ -230,6 +231,8 @@ def get_boresight_by_device(dev):
 
     if str(dev).lower() == "bokz":
         return Rotation([ 0.12632717, -0.00164866, -0.00102702,  0.99198673])# temporal patch, based on the comparison of GYRO and BOKZ from 2020 02 01 (correction presented at 2023 04 04)
+    if str(dev).lower() == "sed2":
+        return Rotation.from_rotvec([-0.78608648,  0.00233278,  0.00129558])
     return Rotation(fits.getdata(get_caldata("BORESIGH", ANYTHINGTOTELESCOPE.get(dev, dev))[0][0], 1)[0])
 
 
@@ -275,9 +278,15 @@ def get_energycal_by_urd(urdn):
 def get_energycal(urdfile):
     return get_energycal_by_urd(urdfile["EVENTS"].header["URDN"])
 
+@lru_cache(maxsize=7)
 def get_escale_by_urd(urdn):
     fpath = get_caldata('ESCALE', ANYTHINGTOTELESCOPE.get(urdn, urdn))[0][0]
     return fits.getdata(fpath)
+    """
+    obt = (Time(hdata["DATE"]) - Time(MJDREF, format="mjd")).sec
+    return np.lib.recfunctions.append_fields(hdata, ["OBT",], [obt,], usemask=False)
+    """
+
 
 def get_caldb(caldb_entry_type, telescope, CALDB_path=ARTCALDBPATH, indexfile=indexfname):
     indexfile_path = os.path.join(CALDB_path, indexfile)
@@ -395,7 +404,7 @@ def get_ayut_inverse_psf_datacube_packed():
     ic = ipsf["offset"].data.size//2
     offset = vec_to_offset(np.array([cos(pi/180.*app/3600.), sin(pi/180.*app/3600.), 0.]))[0]
     dx = min(np.searchsorted(ipsf["offset"].data["x_offset"], offset) - ic, ic)
-    """"
+    """
     ipsf = np.copy(ipsf["MATRIX"].data).astype(float)
     """
     if not app is None:

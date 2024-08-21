@@ -16,6 +16,9 @@ from scipy.optimize import minimize
 from datetime import datetime
 from astropy.time import Time
 from astropy.io import fits
+from multiprocessing.pool import ThreadPool
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 
 #debug
@@ -142,7 +145,7 @@ class AttDATA(SlerpWithNaiveIndexing):
             self.bti = emptyGTI
 
     def _check_interpolation_quality(self):
-        if self.gti.exposure == 0. or self.times.size == 2:
+        if self.gti.length == 0. or self.times.size == 2:
             return emptyGTI
         mgap = self.gti.mask_external((self.times[1:] + self.times[:-1])/2.)
         mgap2 = np.zeros(mgap.size + 1, bool)
@@ -185,7 +188,7 @@ class AttDATA(SlerpWithNaiveIndexing):
     def apply_gti(self, gti, **kwargs):
         gti = GTI(gti)
         gti = gti & self.gti
-        if gti.exposure == 0:
+        if gti.length == 0:
             res = self.__class__([], [], gti=emptyGTI)
             res.times = np.empty(0, float)
         else:
@@ -194,8 +197,8 @@ class AttDATA(SlerpWithNaiveIndexing):
             res = self.__class__(ts, quats, gti=gti, check_interpolation=False, **kwargs)
         return res
         """
-        print(gti.exposure)
-        if gti.exposure == 0.:
+        print(gti.length)
+        if gti.length == 0.:
             ret = self.__class__([-np.inf, -np.inf], Rotation([[0, 0, 0, 1], [0, 0, 0, 1]]))
             ret.gti = gti
             return  ret
@@ -227,7 +230,7 @@ class AttDATA(SlerpWithNaiveIndexing):
             dt - withd of the time bins
             dlaphadt - angular speed in time bin
         """
-        if self.gti.exposure == 0.:
+        if self.gti.length == 0.:
             return None, None, None
         te, mgaps = self.gti.make_tedges(self.times)
         tc = ((te[1:] + te[:-1])/2.)[mgaps]
@@ -280,7 +283,7 @@ class AttDATA(SlerpWithNaiveIndexing):
         attl = copy(self)
         for v in chull.orts:
             gti = gti & attl.circ_gti(-v, 90.*3600 - 0.1, ax=OPAX)
-            if gti.exposure == 0:
+            if gti.length == 0:
                 break
             attl = attl.apply_gti(gti) #, check_interpolation=False, hide_bad_interpolations=False)
         return gti
@@ -298,12 +301,12 @@ class AttDATA(SlerpWithNaiveIndexing):
             for ch in ssegments: #SPHERE.childs:
                 #mask = ch.check_inside_polygon(vecs[~mtot])
                 gloc = attloc.chull_gti(ch)
-                if gloc.exposure > 0.:
+                if gloc.length > 0.:
                     gtis.append(gloc)
                     q = attloc(gloc.make_tedges(attloc.times)[0])
                     chloc = ConvexHullonSphere(np.concatenate([q.apply(v) for v in fov], axis=0)) & ch
                     chulls.append(chloc)
-        #print("report: ", [(ch.area, g.exposure) for ch, g in zip(chulls, gtis)])
+        #print("report: ", [(ch.area, g.length) for ch, g in zip(chulls, gtis)])
         return list(zip(chulls, gtis)) if len(chulls) > 0 else [[], []]
 
 
@@ -356,10 +359,10 @@ def define_required_correction(attdata):
     The precise information on when to apply this corrections is stored in the CALDB files.
 
     """
-    if (attdata.gti & gyrocorrectionbti).exposure > 0.:
+    if (attdata.gti & gyrocorrectionbti).length > 0.:
         a1 = attdata.apply_gti((attdata.gti & gyrocorrectionbti) + [1.4, -1.4])
         a2 = attdata.apply_gti((attdata.gti & ~gyrocorrectionbti) + [1.4, -1.4])
-        print(a1.gti.exposure, a2.gti.exposure, (a1.gti & a2.gti).exposure)
+        print(a1.gti.length, a2.gti.length, (a1.gti & a2.gti).length)
         return AttDATA.concatenate([a2, make_gyro_relativistic_correction(a1)]) #a2 + make_gyro_relativistic_correction(a1)
     else:
         return attdata
@@ -377,7 +380,7 @@ def lorentz_transform(speed, vec, beta):
 
 
 def make_gyro_relativistic_correction(attdata):
-    if attdata.gti.exposure == 0:
+    if attdata.gti.length == 0:
         return attdata
     print("inverse relativistic correction required")
     """
@@ -548,9 +551,10 @@ def read_bokz_fits(bokzhdu, perform_time_corrections=True, correct_future_jumps=
 
 def read_sed_fits(sedhdu):
     q0 = Rotation([0.1830127, 0.6830127, -0.1830127, 0.6830127])
+    #q0 = Rotation([0.6830127, -0.1830127, 0.6830127, 0.1830127])
     d = np.unique(np.copy(sedhdu.data))
     d = d[np.unique(d["TIME"], return_index=True)[1]]
-    q = Rotation(np.array([d["QRVE%d" % i] for i in [0, 1,2 ,3]]).T)
+    q = Rotation(np.array([d["QRVE%d" % i] for i in [0,1,2,3]]).T)
     return AttDATA(d["TIME"], q*q0)
 
 def get_raw_bokz(bokzhdu):
@@ -1065,7 +1069,7 @@ def slerp_circ_aperture_exposure(slerp, loc, appsize, offvec=OPAX, mask=None):
     t3 = slerp.times[:-1][m2] + slerp.timedelta[m2]*np.minimum(phi1 + dphi, rmod)/rmod
     g1 = GTI(np.array([slerp.times[:-1][m2], t1]).T)
     g2 = GTI(np.array([t2, t3]).T)
-    #print("gtis", g1.exposure, g2.exposure, gtiallin.exposure)
+    #print("gtis", g1.length, g2.length, gtiallin.length)
     gti = GTI(np.array([slerp.times[:-1][m2], t1]).T) | GTI(np.array([t2, t3]).T) | gtiallin
     gti.merge_joint()
 
@@ -1123,6 +1127,9 @@ def get_attdata(fname, atshift=0., **kwargs):
     elif "sed1" in fname:
         attdata = read_sed_fits(ffile["ORIENTATION"], **kwargs)
         tshift = 0.
+    elif "sed2" in fname:
+        attdata = read_sed_fits(ffile["ORIENTATION"], **kwargs)*get_boresight_by_device("sed2")
+        tshift = 93.91
     elif "RA" in ffile[1].data.dtype.names:
         #tshift = get_device_timeshift("gyro")
         tshift = 0.
@@ -1168,11 +1175,11 @@ def get_observations_gtis(attdata, join=True, intpsplitside=100.):
     chulls = []
     gtis = []
     sgti = ~(slews | (~attdata.gti).remove_short_intervals(intpsplitside))
-    print("sgti exposure", sgti.exposure)
+    print("sgti exposure", sgti.length)
     for i, arr in enumerate(sgti.arr):
         attl = attdata.apply_gti(GTI(arr)) #, check_interpolation=False)
-        print("check", i, arr[1] - arr[0], attl.gti.exposure)
-        if attl.gti.exposure == 0.:
+        print("check", i, arr[1] - arr[0], attl.gti.length)
+        if attl.gti.length == 0.:
             continue
         clocs, gtloc = zip(*attl.get_covering_chulls())
         #chull = ConvexHullonSphere(np.concatenate([attl.rotations.apply(v1) for v1 in v]))
@@ -1192,8 +1199,10 @@ def get_observations_gtis(attdata, join=True, intpsplitside=100.):
                     clusters[(clusters == clusters[i]) | (clusters == clusters[j])] = min(clusters[i], clusters[j])
 
         u, inv = np.unique(clusters, return_inverse=True)
-        gtis = [GTI.merge_or([g for g, c in zip(gtis, inv) if c == cg]) for cg in u] #np.unique(clusters)]).gti & GTI((~slews & attdata.gti).arr[clusters == cluster]) for cluster in np.unique(clusters)]
-        chulls = [ConvexHullonSphere(np.concatenate([ch.vertices for ch, c in zip(chulls, inv) if c == cg], axis=0)) for cg in u]
+        print(u, inv)
+        #gtis = [GTI.merge_or([g for g, c in zip(gtis, inv) if c == cg]) for cg in u] #np.unique(clusters)]).gti & GTI((~slews & attdata.gti).arr[clusters == cluster]) for cluster in np.unique(clusters)]
+        gtis = [GTI.merge_or([g for g, c in zip(gtis, inv) if c == cg]) for cg in range(u.size)]
+        chulls = [ConvexHullonSphere(np.concatenate([ch.vertices for ch, c in zip(chulls, inv) if c == cg], axis=0)) for cg in range(u.size)]
     return gtis, [ch.area for ch in chulls], [np.rad2deg(vec_to_pol(ch.get_center_of_mass())) for ch in chulls], chulls
 
 
@@ -1267,23 +1276,81 @@ class ObsClusters(object):
         if len(clist) > 1:
             self.collapse(clist)
 
+
+def get_ort_att_gti(att, ort, expandsize):
+    return att.circ_gti(ort, 90.*3600 - expandsize*180/pi*3600.)
+
 class ChullGTI(ConvexHullonSphere):
     def __init__(self, vertices, parent=None, gti=emptyGTI):
-        self.gti = gti
         super().__init__(vertices, parent)
+        self.__gti = gti
 
-    def update_parent_gti(self):
-        self.gti = reduce(lambda a, b: a | b, [ch.gti for ch in self.childs])
-        if self.parent != self:
-            self.parent.update_parent_gti()
+    @property
+    def gti(self):
+        if self.childs[0] == self:
+            return self.__gti
+        else:
+            return GTI(np.concatenate([h.gti.arr for h in self.all_hairs()], axis=0))
+
+    def add_gti(self, gti):
+        if self.childs[0] != self:
+            for ch in self.all_hairs():
+                ch.add_gti(gti)
+        else:
+            g1 = self.__gti | gti
+            self.__gti = self.__gti | gti
 
     def update_gti_for_attdata(self, attdata, expandsize=pi/180.*26.5/60.):
-        self.gti = self.gti | attdata.chull_gti(self.expand(expandsize))
-        if self.parent != self:
-            self.parent.update_parent_gti()
+        gloc = attdata.chull_gti(self if expandsize is None else self.expand(expandsize))
 
-    def get_gti(self):
-        return Intervals.merge_or([ch.gti for ch in self.all_hairs])
+        if gloc.length == 0:
+            return None
+
+        if self.childs[0] == self:
+            self.__gti = self.__gti | gloc
+        else:
+            aloc = attdata.apply_gti(gloc)
+            for ch in self.childs:
+                ch.update_gti_for_attdata(aloc)
+
+    def update_gti_ort(self, attdata, expandsize=pi/180.*26.5/60.):
+        if self.childs[0] == self:
+            self.__gti = self.__gti | attdata.gti
+        else:
+            uverts, uc = np.unique(np.concatenate([c.vertices for c in self.childs], axis=0),axis=0, return_counts=True)
+            seport = normalize(np.cross(*uverts[uc == 2])) #ort which were used to separate to child chulls
+            for ch in self.childs:
+                side = 1 if np.sum(seport*ch.vertices.mean(axis=0)) > 0 else -1
+                gloc = attdata.circ_gti(-side*seport, 90*3600 - expandsize*180/pi*3600)
+                if (attdata.gti & ~gloc).length == 0:
+                    continue
+                ch.update_gti_ort(attdata.apply_gti(~gloc), expandsize)
+
+    async def update_gti_ort_async(self, tpool, attdata, expandsize=pi/180.*26.5/60.):
+        """ faster versio for rectangular chulls"""
+        loop = asyncio.get_running_loop()
+        if self.childs[0] == self:
+            self.__gti = self.__gti | attdata.gti
+        else:
+            uverts, uc = np.unique(np.concatenate([c.vertices for c in self.childs], axis=0),axis=0, return_counts=True)
+            seport = normalize(np.cross(*uverts[uc == 2])) #ort which were used to separate to child chulls
+            glist = []
+            chlist = []
+            for ch in self.childs:
+                side = 1 if np.sum(seport*ch.vertices.mean(axis=0)) > 0 else -1
+                gloc = await loop.run_in_executor(tpool, get_ort_att_gti, attdata, -side*seport, expandsize)
+                #print(gloc.length)
+                #gloc = await asyncio.to_thread(attdata.circ_gti, -side*seport, 90*3600 - expandsize*180/pi*3600) #loop.run_in_executor(tpool, get_ort_att_gti, att, -side*seport, expandsize)
+                if (attdata.gti & ~gloc).length == 0:
+                    continue
+                glist.append(gloc)
+                chlist.append(ch)
+            if len(chlist) > 0:
+                #print("new tasks set", len(chlist))
+                await asyncio.gather(*[ch.update_gti_ort_async(tpool, attdata.apply_gti(~g)) for ch, g in zip(chlist, glist)])
+                #await asyncio.gather(*[ch.update_gti_ort_async(None, attdata.apply_gti(~g)) for ch, g in zip(chlist, glist)])
+
+
 
 class FullSphereChullGTI(ChullGTI):
     def __init__(self):
@@ -1295,30 +1362,66 @@ class FullSphereChullGTI(ChullGTI):
     def area(self):
         return 4.*pi*(180/pi)**2.
 
+    def expand(self, size):
+        return self
+
     def check_inside_polygon(self, vecs):
         return np.ones(vecs.shape[0], bool)
 
     def __and__(self, other):
         return ChullGTI(other.vertices)
 
-class FullSphereC4GTI(ConvexHullonSphere):
+    def update_gti_for_attdata(self, attdata, expandsize=pi/180.*26.5/60.):
+        """ faster versio for rectangular chulls"""
+        for ch in self.childs:
+            chloc = ch.expand(expandsize)
+            gloc = attdata.chull_gti(chloc)
+            ch.update_gti_for_attdata(attdata.apply_gti(gloc), expandsize)
+
+
+
+class FullSphereC4GTI(ChullGTI):
     def __init__(self):
         self.parent = [self,]
         self.vertices = np.empty((0, 3), float)
         r = normalize(np.array([[1, 1, 1], [1, 1, -1], [1, -1, -1], [1, -1, 1]]))
-        self.childs = [ConvexHullonSphere(np.roll(r, i, axis=0)) for i in range(3)]
-        r = r*[-1, 1, 1]
-        self.childs += [ConvexHullonSphere(np.roll(r, i, axis=0)) for i in range(3)]
+        self.childs = [ChullGTI(normalize(np.array([[1, 1, 1], [1, 1, -1], [1, -1, -1], [1, -1, 1]]))),
+                       ChullGTI(normalize(np.array([[-1, 1, 1], [-1, 1, -1], [-1, -1, -1], [-1, -1, 1]]))),
+                       ChullGTI(normalize(np.array([[1, 1, 1], [1, 1, -1], [-1, 1, -1], [-1, 1, 1]]))),
+                       ChullGTI(normalize(np.array([[1, -1, 1], [1, -1, -1], [-1, -1, -1], [-1, -1, 1]]))),
+                       ChullGTI(normalize(np.array([[1, 1, 1], [1, -1, 1], [-1, -1, 1], [-1, 1, 1]]))),
+                       ChullGTI(normalize(np.array([[1, 1, -1], [1, -1, -1], [-1, -1, -1], [-1, 1, -1]]))),]
 
     @property
     def area(self):
         return 4.*pi*(180/pi)**2.
 
+    def expand(self, size):
+        return self
+
     def check_inside_polygon(self, vecs):
         return np.ones(vecs.shape[0], bool)
 
     def __and__(self, other):
         return ChullGTI(other.vertices)
+
+
+    def update_gti_ort(self, attdata, expandsize=pi/180.*26.5/60):
+        for ch in self.childs:
+            chloc = ch.expand(expandsize)
+            gloc = attdata.chull_gti(chloc)
+            print("gloc", gloc.length, ch.area, chloc.area)
+            if gloc.length == 0:
+                continue
+            print("running chloc", ch.area)
+            ch.update_gti_ort(attdata.apply_gti(gloc), expandsize)
+
+
+    async def update_gti_ort_async(self, tpool, attdata, expandsize=pi/180.*26.5/60.):
+        """ faster versio for rectangular chulls"""
+        loop = asyncio.get_running_loop()
+        glist = await asyncio.gather(*[loop.run_in_executor(tpool, attdata.chull_gti, c.expand(expandsize)) for c in self.childs])
+        await asyncio.gather(*[ch.update_gti_ort_async(tpool, attdata.apply_gti(g), expandsize) for ch, g in zip(self.childs, glist) if g.length > 0])
 
 
 def decompose_on_linear_and_rot(q, ax=OPAX):
@@ -1469,7 +1572,7 @@ def add_new_compressed_att(att, times, names, fname):
             att = pack_attdata(atl, pi/180.*5./3600.)
         else:
             try:
-                if (arttools.time.GTI(att.gti.arr[[0, -1],[0, 1]]) & atl.gti).exposure > 0.:
+                if (arttools.time.GTI(att.gti.arr[[0, -1],[0, 1]]) & atl.gti).length > 0.:
                     #atl = arttools.orientation.AttDATA.concatenate([atl, att.apply_gti(arttools.time.GTI(atl.gti.arr[[0, -1],[0, 1]]), check_interpolation=False)])
                     atl = arttools.orientation.AttDATA.concatenate([atl, att.apply_gti(arttools.time.GTI(atl.gti.arr[[0, -1],[0, 1]]))])
                 #att = arttools.orientation.AttDATA.concatenate([att.apply_gti(~atl.gti, check_interpolation=False), pack_attdata(atl,pi/180.*5./3600.)], check_interpolation=False)

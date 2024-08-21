@@ -27,6 +27,14 @@ class FileIndex(object):
         self.index = np.empty(0, int) if index is None else index
         self.names = [] if names is None else names
 
+    def reshuffle_index(self):
+        u, ui = np.unique(self.index, return_index=True)
+        reindex = np.empty(u.size, int)
+        reindex[u[np.argsort(ui)]] = np.arange(u.size)
+        self.index = reindex[self.index]
+        self.names = [self.names[i] for i in u[np.argsort(ui)]]
+
+
     def add_file(self, name, intervals):
         if not name in self.names:
             snew = intervals & ~self.intervals
@@ -54,7 +62,9 @@ class FileIndex(object):
         if covered.arr.size == 0:
             return np.empty(0, int)
         te, gaps = covered.make_tedges(self.ts)
-        tc = (te[1:] + te[:-1])[gaps]/2.
+        tc = np.empty(gaps.sum() + 1, float)
+        tc[:-1] = (te[1:] + te[:-1])[gaps]/2.
+        tc[-1] = (covered.arr[-1, 1] - te[-1])/2.
         return self.index[np.unique(np.searchsorted(self.ts, tc)) - 1]
 
     def get_files(self, intervals):
@@ -167,4 +177,43 @@ def get_flist_from_index(index, gti):
     tc = (te[1:] + te[:-1])[gaps]/2.
     idx = np.searchsorted(indextimes, tc) - 1
     return [indexnames[i] for i in np.unique(idx)]
+
+class FManager(object):
+    def __init__(self, findex, chulls):
+        self.findex = findex
+        fidx = [findex.get_indexes(c.gti) for c in chulls]
+        xx, yy = np.repeat(np.arange(len(fidx)), [f.size for f in fidx]), np.concatenate(fidx)
+        self.fmat = coo_matrix((np.ones(xx.size, bool), (xx, yy)))
+        self.cstate = csr_matrix((np.empty(0, bool), (np.empty(0, int), np.empty(0, int))), shape=(1, self.fmat.shape[1]))
+        self.rowstate = np.ones(len(chulls), bool)
+
+    def get_nextoread(self, cstate=None):
+        snew = self.fmat.dot(1 - self.cstate.toarray().ravel() if cstate is None else 1 - cstate.toarray().ravel())
+        return np.argmin((self.fmat.shape[0] + 1)*(~self.rowstate) + snew)
+
+    def get_unread_files(self, sidx, cstate=None):
+        fstate = self.fmat.getrow(sidx)
+        toread = fstate.indices[~np.isin(fstate.indices, self.cstate.indices if cstate is None else cstate.indices)]
+        return toread
+
+    def update_state(self, ready):
+        self.cstate[:, ready] = True
+
+    def remove_row(self, sidx):
+        self.rowstate[sidx] = False
+        #mask = self.fmat.row != sidx
+        #self.fmat = coo_matrix((self.fmat.data[mask], (self.fmat.row[mask], self.fmat.col[mask])))
+
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.cstate.indices.size == self.fmat.shape[1]:
+            raise StopIteration
+        sidx = self.get_nextoread(self.cstate)
+        rres = self.get_unread_files(sidx)
+        self.remove_row(sidx)
+        self.update_state(rres)
+        return rres
 

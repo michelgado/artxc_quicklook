@@ -128,21 +128,21 @@ def make_expmap_for_attdata(sky, attdata, imgfilters, dtcorr={}, kind="direct", 
         print('check dtcorr', list(urdgtis.keys()))
         if all([urdn in urdgtis for urdn in URDNS]):
             overall_gti = reduce(lambda a, b: a & b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
-            print('overall exposure before dtm tolerance', overall_gti.exposure)
+            print('overall exposure before dtm tolerance', overall_gti.length)
             for urdn in URDNS:
                 dtm = np.median(dtcorr[urdn].y)
                 mdtc = np.abs(dtcorr[urdn].y - dtm)/dtm < 0.01 # dt corr tollerance let it be 1%
                 eloc = edges(mdtc) + [0, -1]
                 eloc = eloc[eloc[:, 0] != eloc[:, 1]]
                 overall_gti = overall_gti & GTI(dtcorr[urdn].x[eloc])
-                print('overall gti after %d' % urdn, overall_gti.exposure)
+                print('overall gti after %d' % urdn, overall_gti.length)
                 dtcc[urdn] = dtm
     else:
         overall_gti = reduce(lambda a, b: a & b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
 
-    print("overal exposure", overall_gti.exposure)
+    print("overal exposure", overall_gti.length)
 
-    if overall_gti.exposure > 0:
+    if overall_gti.length > 0:
         exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti, wcs=None if not hasattr(sky, "locwcs") else sky.locwcs)
         vmap = make_overall_vignetting(imgfilters, urdweights={urdn: w*dtcc[urdn] for urdn, w in urdweights.items()}, **kwargs)
         sky.set_vmap(vmap)
@@ -155,10 +155,10 @@ def make_expmap_for_attdata(sky, attdata, imgfilters, dtcorr={}, kind="direct", 
 
     for urdn in urdgtis:
         gti = urdgtis[urdn] & ~overall_gti
-        if gti.exposure == 0:
+        if gti.length == 0:
             print("urd %d has no individual gti, continue" % urdn)
             continue
-        print("urd %d, exposure %.1f, progress:" % (urdn, gti.exposure))
+        print("urd %d, exposure %.1f, progress:" % (urdn, gti.length))
         exptime, qval, locgti = hist_orientation_for_attdata(attdata.for_urdn(urdn), gti, \
                                                              timecorrection=dtcorr.get(urdn, lambda x: 1), \
                                                              wcs=None if not hasattr(sky, "locwcs") else sky.locwcs)
@@ -181,7 +181,7 @@ def make_expmap_for_wcs(wcs, attdata, imgfilters, shape=None, mpnum=MPNUM, dtcor
     return make_expmap_for_attdata(sky, attdata, imgfilters, dtcorr=dtcorr, kind=kind, urdweights=urdweights, **kwargs)
 
 
-def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNUM, dtcorr={}, app=None, cspec=None, illum_filters=None, **kwargs):
+def make_exposures(direction, te, attdata, urdfilters, urdweights={}, mpnum=MPNUM, dtcorr={}, app=1000, cspec=None, illum_filters=None, **kwargs):
     """
     estimate exposure within timebins te, for specified directions
     """

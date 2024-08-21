@@ -143,9 +143,9 @@ def get_theta_teylor_component(sky, attdata, imgfilters, brates, kind="direct", 
     dtcc = {urdn: 1. for urdn in URDNS}
     overall_gti = reduce(lambda a, b: a & b, [urdgtis.get(URDN, emptyGTI) for URDN in URDNS])
 
-    print("overal exposure", overall_gti.exposure)
+    print("overal exposure", overall_gti.length)
 
-    if overall_gti.exposure > 0:
+    if overall_gti.length > 0:
         exptime, qval, locgti = hist_orientation_for_attdata(attdata, overall_gti, wcs=None if not hasattr(sky, "locwcs") else sky.locwcs)
         vmap = make_theta_2nd_order_overall_profile(imgfilters, brates=brates, urdweights=urdweights, **kwargs)
         sky.set_vmap(vmap)
@@ -158,10 +158,10 @@ def get_theta_teylor_component(sky, attdata, imgfilters, brates, kind="direct", 
 
     for urdn in urdgtis:
         gti = urdgtis[urdn] & ~overall_gti
-        if gti.exposure == 0:
+        if gti.length == 0:
             print("urd %d has no individual gti, continue" % urdn)
             continue
-        print("urd %d, exposure %.1f, progress:" % (urdn, gti.exposure))
+        print("urd %d, exposure %.1f, progress:" % (urdn, gti.length))
         exptime, qval, locgti = hist_orientation_for_attdata(attdata.for_urdn(urdn), gti, \
                                                              wcs=None if not hasattr(sky, "locwcs") else sky.locwcs)
         vmap = make_vignetting_for_urdn(urdn, imgfilters[urdn].filters, brate=brates[urdn], scale=urdweights.get(urdn, 1/7.), vfun=sensitivity_second_order, **kwargs)
@@ -369,13 +369,13 @@ def compute_mean_threshold_for_rate(wcs, rate, attdata, urdgtis, imgfilters, urd
 
     for urdn in urdgtis:
         gti = urdgtis[urdn] & ~overall_gti
-        if gti.exposure == 0:
+        if gti.length == 0:
             print("urd %d has no individual gti, continue" % urdn)
             continue
         print("urd %d progress:" % urdn)
         exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urdn), gti)
         t1, g1 = gti.arange(np.max(gti.arr[:, 1] - gti.arr[:, 0]))
-        bmean = urdbkg[urdn].integrate_in_timebins(t1)[g1].sum()/gti.exposure
+        bmean = urdbkg[urdn].integrate_in_timebins(t1)[g1].sum()/gti.length
         print("mean background rate", bmean)
         vmap = make_direct_estimation(urdn, rate, bmean, imgfilters[urdn], **kwargs)
         sky._set_core(vmap.grid[0], vmap.grid[1], vmap.values)
@@ -410,13 +410,13 @@ def compute_completness_forconstbkg_and_srcrate(wcs, thlim, rate, attdata, urdgt
 
     for urdn in urdgtis:
         gti = urdgtis[urdn] & ~overall_gti
-        if gti.exposure == 0:
+        if gti.length == 0:
             print("urd %d has no individual gti, continue" % urdn)
             continue
         print("urd %d progress:" % urdn)
         exptime, qval, locgti = hist_orientation_for_attdata(attdata*get_boresight_by_device(urdn), gti)
         t1, g1 = gti.arange(np.max(gti.arr[:, 1] - gti.arr[:, 0]))
-        bmean = urdbkg[urdn].integrate_in_timebins(t1)[g1].sum()/gti.exposure
+        bmean = urdbkg[urdn].integrate_in_timebins(t1)[g1].sum()/gti.length
         print("mean background rate", bmean)
         vmap = make_direct_estimation(urdn, rate, bmean, imgfilters[urdn], **kwargs)
         skym1._set_core(vmap.grid[0], vmap.grid[1], vmap.values)
@@ -547,10 +547,10 @@ def estimate_theta_mean_val(wcs, attdata, urdgtis, imgfilters, srcrates, urdbkg,
 
     sky = SkyImage(wcs, get_blank_vignetting_interpolation_func(), mpnum=mpnum)
 
-    bkgprofile = [get_background_surface_brigtnress(urdn, imgfilters[urdn]) for urdn in urdgtis if urdgtis[urdn].exposure > 0.]
+    bkgprofile = [get_background_surface_brigtnress(urdn, imgfilters[urdn]) for urdn in urdgtis if urdgtis[urdn].length > 0.]
     bkgprofile = np.mean([np.median(b[~np.isnan(b)])/np.sum(b[~np.isnan(b)]) for b in bkgprofile])
-    mbrate = np.mean([urdbkg[urdn].median(urdgtis[urdn]) for urdn in urdgtis if urdgtis[urdn].exposure > 0.])
-    imgfilter = [imgfilters[urdn] for urdn in urdgtis if urdgtis[urdn].exposure > 0.][0]
+    mbrate = np.mean([urdbkg[urdn].median(urdgtis[urdn]) for urdn in urdgtis if urdgtis[urdn].length > 0.])
+    imgfilter = [imgfilters[urdn] for urdn in urdgtis if urdgtis[urdn].length > 0.][0]
 
     res1 = []
     res2 = []

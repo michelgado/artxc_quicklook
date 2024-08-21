@@ -135,6 +135,11 @@ static PyObject * get_unipix_fast_index(PyObject *self, PyObject *args)
                 *((int*)idx2->data + ctr) = *(idx2d + ctr);
         }
         PyObject *res = Py_BuildValue("OOOi", mask, idx1, idx2, msum);
+        free(idx1d);
+        free(idx2d);
+        Py_DECREF(idx1);
+        Py_DECREF(idx2);
+        Py_DECREF(mask);
         return res;
 }
 
@@ -283,6 +288,8 @@ static PyObject * solve_for_locations(PyObject *self, PyObject *args)
         free(lvec);
 
         PyObject *res = Py_BuildValue("OO", cmap, pmap);
+        Py_DECREF(cmap);
+        Py_DECREF(pmap);
         return res;
 }
 
@@ -411,6 +418,7 @@ static PyObject * optimal_filter(PyObject *self, PyObject *args)
         free(lvec);
 
         PyObject *res = Py_BuildValue("O", pmap);
+        Py_DECREF(pmap);
         return res;
 }
 

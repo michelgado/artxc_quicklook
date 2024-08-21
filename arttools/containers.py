@@ -2,8 +2,10 @@ import numpy as np
 from astropy.io import fits
 from astropy.table import Table
 from functools import reduce
+from collections import defaultdict
 from .filters import IndependentFilters, Intervals
 from .time import get_gti, make_hv_gti
+import tqdm
 
 class Urddata(object):
     def __init__(self, data, urdn, filters):
@@ -15,11 +17,13 @@ class Urddata(object):
         return self.data[args]
 
     @classmethod
-    def read(cls, fitsfile, excludebki=True):
+    def read(cls, fitsfile, excludebki=True, photpackages=False, usehkgti=True):
         urdn = fitsfile["EVENTS"].header["URDN"]
         d = np.unique(Table(fitsfile["EVENTS"].data).as_array())
         filters = IndependentFilters.from_fits(fitsfile)
-        filters["TIME"] = get_gti(fitsfile, usehkgti=True, excludebki=excludebki)
+        g0 = Intervals(d["TIME"][[0, -1]])
+        g1 = get_gti(fitsfile, usehkgti=usehkgti, excludebki=excludebki, photpackages=photpackages)
+        filters["TIME"] = g0 & ~(g0 & (~g1 & Intervals(g1.arr[[0, -1], [0, 1]]))) #get_gti(fitsfile, usehkgti=True, excludebki=excludebki)
         return cls(d, urdn, filters)
 
     @property
@@ -70,14 +74,16 @@ class Urddata(object):
         """
         pass
 
-def read_urdfiles(urdflist, filterslist={}):
+def read_urdfiles(urdflist, filterslist=defaultdict(lambda :IndependentFilters({})), photpackages=False, usehkgti=True):
     urddata = {}
     urdhk = {}
-    for urdfile in urdflist:
+    info = tqdm.tqdm(urdflist, total=len(urdflist))
+    for urdfile in info:
+        info.set_description("reading:", urdfile)
         ffile = fits.open(urdfile)
-        udata = Urddata.read(ffile)
-        urdhk[udata.urdn] = urdhk.get(udata.urdn, []) + [np.copy(ffile["HK"].data),]
-        gti = Intervals([]) if udata.urdn not in urddata else reduce(lambda a, b: a | b, [f.filters["TIME"] for f in urddata[udata.urdn]])
+        udata = Urddata.read(ffile, photpackages=photpackages, usehkgti=usehkgti)
+        urdhk[udata.urdn] = urdhk.get(udata.urdn, []) + [np.copy(ffile["HK"].data[(filterslist[udata.urdn]["TIME"] + [-30, 30]).apply(ffile["HK"].data["TIME"])]) if "TIME" in filterslist[udata.urdn] else np.copy(ffile["HK"].data),]
+        gti = Intervals([]) if udata.urdn not in urddata else Intervals.merge_or([f.filters["TIME"] for f in urddata[udata.urdn]])
         udata = udata.apply_filters(IndependentFilters({"TIME": ~gti}))
         udata = udata.apply_filters(filterslist.get(udata.urdn, IndependentFilters({})))
         urddata[udata.urdn] = urddata.get(udata.urdn, []) + [udata,]
